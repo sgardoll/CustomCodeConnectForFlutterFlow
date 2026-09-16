@@ -461,7 +461,7 @@ export function getCustomClassFileNameError(fileName, code) {
  * @param {string} name - Dart identifier, e.g. "initQAAnalytics"
  * @returns {string} File stem, e.g. "init_q_a_analytics"
  */
-function identifierToFlutterFlowFileStem(name) {
+export function identifierToFlutterFlowFileStem(name) {
   return String(name || "")
     .replace(/([A-Z])/g, "_$1")
     .toLowerCase()

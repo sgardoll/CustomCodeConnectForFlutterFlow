@@ -23,6 +23,13 @@ import {
   findMissingCodeFiles,
 } from "./src/flutterFlowCodeFileProvisioning.js";
 import { buildReviewPresentation } from "./src/reviewPresentation.js";
+import {
+  expectedWidgetClassFromFileName,
+  findUnbalancedBracketError,
+  getDeclaredWidgetClasses,
+  sanitizeGeneratedDart,
+  widgetFileNameForClass,
+} from "./src/flutterFlowCodeSanitizer.js";
 import { formatFlutterFlowFileError } from "./src/flutterFlowFileErrors.js";
 import { extractPackageImports } from "./src/dartPackageImports.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
@@ -1449,6 +1456,12 @@ function getCurrentArtifactMetadata() {
   return {
     artifactType: artifact.artifactType || "CustomWidget",
     artifactName: artifact.artifactName || "GeneratedWidget",
+    // Single-file deploys must name the committed file after the artifact's
+    // own validated fileName (FF naively snake_cases the declared class), not
+    // a fresh name derived from artifactName. The bundle planner already uses
+    // artifact.fileName; the single-file path was dropping it, so FF saw a
+    // file named after the artifact name and found no matching widget class.
+    fileName: artifact.fileName || "",
   };
 }
 
@@ -1499,6 +1512,24 @@ const FF_API_ENDPOINTS = {
   production: "https://api.flutterflow.io/v2/",
   staging: "https://api.flutterflow.io/v2-staging/",
 };
+
+/**
+ * Builds the actionable error shown when listing projects is denied. Both
+ * callers surface this text verbatim in their dropdowns, and re-entering a key
+ * in API Keys settings is the app's re-auth path for static FlutterFlow keys.
+ * @param {number} status - HTTP status from listProjects
+ * @param {string} errorText - Server-provided detail, truncated for display
+ * @returns {string} User-facing message naming the fix
+ */
+function buildListProjectsAuthError(status, errorText) {
+  const detail = errorText?.trim()
+    ? ` (${errorText.trim().slice(0, 200)})`
+    : "";
+  if (status === 401) {
+    return `Your FlutterFlow API key was rejected (401 Unauthorized)${detail}. Re-enter a current key under API Keys settings, then try again.`;
+  }
+  return `Listing FlutterFlow projects was denied (403)${detail}. The key may be scoped to sync a single project without list permission - verify the key's access in FlutterFlow, re-enter it under API Keys settings, then retry.`;
+}
 
 /**
  * Client for interacting with the FlutterFlow API.
@@ -1746,72 +1777,88 @@ class FlutterFlowApiClient {
   }
 
   /**
-   * Lists projects accessible with the current API key.
-   * @param {Object} [options] - Optional parameters
-   * @param {number} [options.page] - Page number for pagination
-   * @param {number} [options.limit] - Maximum number of projects per page
-   * @returns {Promise<Array<Object>>} Array of project objects with id and name
+   * Parses a successful listProjects payload. Handles FlutterFlow's wrapper
+   * format ({ success: true, value: "<stringified json>" }) plus looser
+   * shapes older deployments return.
+   * @param {Object} data - Parsed JSON body
+   * @returns {Array<Object>} Projects as { id, name }
    */
-  async listProjects(options = {}) {
-    const { page = 1, limit = 100 } = options;
-    console.log(`Listing projects for API key via V2 endpoint`);
+  parseProjectsResponse(data) {
+    if (data?.success && typeof data.value === "string") {
+      try {
+        const parsedValue = JSON.parse(data.value);
+        if (parsedValue && Array.isArray(parsedValue.entries)) {
+          return parsedValue.entries.map((entry) => ({
+            id: entry.id,
+            name: entry.project?.name || entry.id,
+          }));
+        }
+      } catch (parseError) {
+        console.error("Failed to parse stringified project value:", parseError);
+      }
+    }
 
-    try {
-      const response = await fetch(
-        "https://api.flutterflow.io/v2/l/listProjects",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${this.apiKey}`,
-          },
-          body: JSON.stringify({
-            project_type: "ALL",
-            deserialize_response: true,
-          }),
+    const projects =
+      data?.projects || data?.items || data?.entries
+      || (Array.isArray(data) ? data : []);
+    return Array.isArray(projects) ? projects : [];
+  }
+
+  async listProjects() {
+    console.log("Listing projects for API key");
+
+    // Every other call in this client targets `${baseUrl}<method>`; this one
+    // alone hardcoded a legacy `/v2/l/` path that the gateway rejects with
+    // 401/403 before the key is evaluated, surfacing as "List projects failed:
+    // 403 Unauthorized" while sync calls with the same key worked. The
+    // convention path goes first; the legacy path is retried once on 404 only,
+    // so an auth rejection is never masked by a retry.
+    const attemptUrls = [
+      `${this.baseUrl}listProjects`,
+      "https://api.flutterflow.io/v2/l/listProjects",
+    ];
+    let lastStatus = 0;
+    let lastErrorText = "";
+
+    for (const url of attemptUrls) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
         },
+        body: JSON.stringify({
+          project_type: "ALL",
+          deserialize_response: true,
+        }),
+      });
+
+      if (response.ok) {
+        if (url !== attemptUrls[0]) {
+          console.log(`listProjects answered on legacy path ${url}`);
+        }
+        return this.parseProjectsResponse(await response.json());
+      }
+
+      lastStatus = response.status;
+      lastErrorText = await response.text();
+      console.warn(
+        `listProjects via ${url} returned ${lastStatus}: ${lastErrorText}`,
       );
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(
-          `List projects failed: ${response.status} - ${errorText}`,
-        );
+      // 401 means the key itself is invalid/expired; 403 usually means the key
+      // is valid but scoped to sync a single project without list permission.
+      // Either way the user must act in API Keys settings, so fail with that
+      // instruction instead of a raw status line.
+      if (response.status === 401 || response.status === 403) {
+        throw new Error(buildListProjectsAuthError(response.status, lastErrorText));
       }
-
-      const data = await response.json();
-
-      // Handle the specific FlutterFlow API wrapper format:
-      // { success: true, value: "{\"entries\": [...]}" }
-      if (data.success && typeof data.value === "string") {
-        try {
-          const parsedValue = JSON.parse(data.value);
-          if (parsedValue && Array.isArray(parsedValue.entries)) {
-            // Map to standard format: { id, name }
-            return parsedValue.entries.map((entry) => ({
-              id: entry.id,
-              name: entry.project?.name || entry.id,
-            }));
-          }
-        } catch (parseError) {
-          console.error(
-            "Failed to parse stringified project value:",
-            parseError,
-          );
-        }
+      if (response.status !== 404) {
+        throw new Error(`List projects failed: ${response.status} - ${lastErrorText}`);
       }
-
-      // Fallback for other potential formats
-      const projects =
-        data.projects ||
-        data.items ||
-        data.entries ||
-        (Array.isArray(data) ? data : []);
-      return Array.isArray(projects) ? projects : [];
-    } catch (error) {
-      console.error("Error listing projects:", error);
-      throw error;
     }
+
+    throw new Error(`List projects failed: ${lastStatus} - ${lastErrorText}`);
   }
 }
 
@@ -2228,6 +2275,37 @@ function runPreCommitChecks(codeInfo) {
     );
   }
 
+  // FlutterFlow formats every pushed file with dart_style, which fails on
+  // unbalanced brackets with the opaque "Custom widget code is not
+  // formattable". Catch it here, where the message can say exactly what and
+  // where is wrong, instead of after a round-trip to FF.
+  const unbalancedBrackets = findUnbalancedBracketError(codeInfo.content);
+  if (unbalancedBrackets) {
+    issues.push(
+      `FlutterFlow cannot format this code - ${unbalancedBrackets}. Fix or regenerate before committing.`,
+    );
+  }
+
+  // A CustomWidget is committed under a file name FlutterFlow reads the widget
+  // identity back out of. If the code declares no public widget class, or the
+  // declared class cannot be recovered from the file name, FlutterFlow rejects
+  // the push with "Custom widget code is not formattable" / "No widget <name>
+  // found". Catch that here instead of after a round-trip to FF.
+  if (codeInfo.codeType === CodeType.WIDGET) {
+    const declared = getDeclaredWidgetClasses(codeInfo.content);
+    const expectedFromFile = expectedWidgetClassFromFileName(codeInfo.fileName);
+    if (declared.length === 0) {
+      issues.push(
+        "No public widget class found (must extend StatelessWidget or StatefulWidget).",
+      );
+    } else if (!declared.includes(expectedFromFile)) {
+      const expected = `${widgetFileNameForClass(declared[0])}`;
+      issues.push(
+        `Widget class name "${declared[0]}" does not match the file name "${codeInfo.fileName}". FlutterFlow derives the widget from the file name, so it will report "No widget ${expectedFromFile} found". Rename the file to "${expected}" or the class to match before committing.`,
+      );
+    }
+  }
+
   return {
     canProceed: issues.length === 0,
     issues,
@@ -2246,26 +2324,41 @@ function runPreCommitChecks(codeInfo) {
  * @returns {Object} Prepared code info { content: string, fileName: string, codeType: string }
  */
 function prepareCodeForCommit(rawCode, options = {}) {
-  const { artifactType = "CustomWidget", artifactName = "GeneratedCode" } =
-    options;
+  const {
+    artifactType = "CustomWidget",
+    artifactName = "GeneratedCode",
+    fileName: providedFileName,
+  } = options;
 
-  // Clean up the code
-  let cleanedCode = rawCode.trim();
+  // Strip BOM, markdown code fences, and blank padding. LLM responses arrive
+  // wrapped in fences often enough that leaving them in guarantees FlutterFlow
+  // rejects the push as "not formattable".
+  const cleanedCode = sanitizeGeneratedDart(rawCode);
 
-  // Remove markdown code fences if present
-  if (cleanedCode.startsWith("```dart")) {
-    cleanedCode = cleanedCode.replace(/^```dart\n/, "");
-  } else if (cleanedCode.startsWith("```")) {
-    cleanedCode = cleanedCode.replace(/^```\n/, "");
-  }
-
-  if (cleanedCode.endsWith("```")) {
-    cleanedCode = cleanedCode.replace(/\n```$/, "");
-  }
-
-  // Ensure proper class/function naming
-  let fileName = artifactName;
-  if (!fileName.endsWith(".dart")) {
+  // FF derives a widget's identity from the committed file name, so a widget
+  // must land under the FF naive snake_case of the class the code actually
+  // declares - not under the artifact's display name ("Liquid Glass Orbs"
+  // becomes a file FF cannot resolve to any widget). Any other name - even one
+  // that merely capitalizes differently - makes FF report "No widget <name>
+  // found", so a declared class always wins and the file is renamed (and
+  // logged) to match. CustomFunction always lands in custom_functions.dart.
+  let fileName = providedFileName || artifactName;
+  if (artifactType === "CustomFunction") {
+    fileName = "custom_functions.dart";
+  } else if (artifactType === "CustomWidget") {
+    const declaredClass = getDeclaredWidgetClasses(cleanedCode)[0];
+    const canonicalName = declaredClass
+      ? widgetFileNameForClass(declaredClass)
+      : null;
+    if (canonicalName && fileName !== canonicalName) {
+      console.warn(
+        `Commit file name "${fileName}" does not match declared widget class "${declaredClass}"; renaming to "${canonicalName}" so FlutterFlow can find the widget.`,
+      );
+      fileName = canonicalName;
+    } else if (!fileName.endsWith(".dart")) {
+      fileName += ".dart";
+    }
+  } else if (!fileName.endsWith(".dart")) {
     fileName += ".dart";
   }
 
@@ -2280,7 +2373,6 @@ function prepareCodeForCommit(rawCode, options = {}) {
       break;
     case "CustomFunction":
       codeType = CodeType.FUNCTION;
-      fileName = "custom_functions.dart";
       break;
     case "CustomClass":
     case "CodeFile":
@@ -2778,14 +2870,14 @@ async function createZipFromFileMap(fileMap) {
 }
 
 async function executeCommit(code, options = {}) {
-  const { artifactType, artifactName, pipelineResult } = options;
+  const { artifactType, artifactName, fileName, pipelineResult } = options;
 
   console.log(`Starting commit for ${artifactName} (${artifactType})`);
 
   try {
     // Step 1: Prepare the code
     commitState.setState(CommitState.PREPARING);
-    const codeInfo = prepareCodeForCommit(code, { artifactType, artifactName });
+    const codeInfo = prepareCodeForCommit(code, { artifactType, artifactName, fileName });
 
     // Step 2: Extract dependencies
     const deps = extractDependencies(codeInfo.content);
@@ -3753,9 +3845,9 @@ async function initiateCommitToFlutterFlow() {
     return;
   }
 
-  const { artifactType, artifactName } = getCurrentArtifactMetadata();
+  const { artifactType, artifactName, fileName } = getCurrentArtifactMetadata();
 
-  const codeInfo = prepareCodeForCommit(code, { artifactType, artifactName });
+  const codeInfo = prepareCodeForCommit(code, { artifactType, artifactName, fileName });
 
   const checks = runPreCommitChecks(codeInfo);
 
@@ -5499,11 +5591,12 @@ async function confirmCommitToFlutterFlow() {
 
   const { codeInfo } = commitData;
 
-  const { artifactType, artifactName } = getCurrentArtifactMetadata();
+  const { artifactType, artifactName, fileName } = getCurrentArtifactMetadata();
 
   const result = await executeCommit(codeInfo.content, {
     artifactType,
     artifactName,
+    fileName,
     pipelineResult: {
       step1Result: pipelineState.step1Result,
       selectedModel: document.getElementById("code-generator-model")?.value,
