@@ -259,6 +259,32 @@ test("STU-148: an unterminated triple-quoted string names its opening line", () 
   assert.match(error, /unclosed triple-quoted string starting on line 3 was never closed/);
 });
 
+test("STU-148: a trailing line comment cannot conceal an unclosed bracket", () => {
+  // A line comment ends at end-of-input by definition, so the scanner used to
+  // report no problem whenever one sat on top of the frame stack - even with
+  // an opener still unclosed beneath it. The gate passed malformed Dart that
+  // FlutterFlow then rejected as "not formattable".
+  assert.match(
+    findUnbalancedBracketError("void main() { // trailing"),
+    /"\{" opened on line 1 is never closed/,
+  );
+  assert.match(
+    findUnbalancedBracketError("foo( // trailing"),
+    /"\(" opened on line 1 is never closed/,
+  );
+});
+
+test("STU-148: a trailing line comment over balanced code still passes", () => {
+  assert.equal(findUnbalancedBracketError("void main() {} // done"), null);
+  assert.equal(findUnbalancedBracketError("// only a comment"), null);
+});
+
+test("STU-148: a trailing comment cannot conceal an unclosed interpolation", () => {
+  const error = findUnbalancedBracketError('final s = "${x // trailing');
+
+  assert.match(error, /unclosed "\$\{" expression/);
+});
+
 test("STU-147: nested block comments stay protected until the real close", () => {
   // Dart nests block comments: the inner */ must not terminate the outer
   // comment, or every later line-leading ``` inside the still-open region is

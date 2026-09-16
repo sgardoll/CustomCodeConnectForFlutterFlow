@@ -1915,8 +1915,20 @@ async function parsePushCodeResponse(response) {
     };
   }
 
-  // Success response
-  const valueObject = jsonResult.value ? JSON.parse(jsonResult.value) : {};
+  // Success response. The value payload carries per-file warnings; a malformed
+  // or non-string value must not fail the whole commit - the push itself
+  // already succeeded (HTTP ok), so degrade to "no warnings" instead.
+  let valueObject = {};
+  if (jsonResult.value) {
+    try {
+      valueObject =
+        typeof jsonResult.value === "string"
+          ? JSON.parse(jsonResult.value)
+          : jsonResult.value;
+    } catch (parseError) {
+      console.warn("Ignoring malformed push response value:", parseError);
+    }
+  }
   return {
     success: true,
     responseCode: response.status,
@@ -2850,23 +2862,21 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
  */
 
 async function createZipFromFileMap(fileMap) {
-  try {
-    const zip = new JSZip();
+  // No error swallowing here: a failed zip used to return "" and the push
+  // would send an empty archive, turning a local packaging bug into an opaque
+  // FlutterFlow rejection. Every caller already runs inside a try/catch that
+  // surfaces the failure, so let the error propagate with its real cause.
+  const zip = new JSZip();
 
-    for (const [name, info] of fileMap.entries()) {
-      zip.file(name, info.content);
-    }
-
-    const zipBuffer = await zip.generateAsync({
-      type: "base64",
-      compression: "DEFLATE",
-      compressionOptions: { level: 6 },
-    });
-    return zipBuffer;
-  } catch (error) {
-    console.error("Error creating zip:", error);
-    return "";
+  for (const [name, info] of fileMap.entries()) {
+    zip.file(name, info.content);
   }
+
+  return zip.generateAsync({
+    type: "base64",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 },
+  });
 }
 
 async function executeCommit(code, options = {}) {
@@ -5564,7 +5574,11 @@ async function confirmCommitToFlutterFlow() {
     return;
   }
 
+  // Null the pending data before any await: it is only cleared at the end of
+  // this function otherwise, so a second confirm click landing mid-commit
+  // would read the same data and push twice concurrently.
   const commitData = pendingCommitData;
+  pendingCommitData = null;
   commitTargetProjectId = readCommitTargetProjectId();
   closeCommitConfirmModal();
   showCommitProgress({ withProvisioning: commitNeedsProvisioning(commitData) });
@@ -5611,8 +5625,6 @@ async function confirmCommitToFlutterFlow() {
   } else {
     showCommitFailureModal(result);
   }
-
-  pendingCommitData = null;
 }
 
 // Global exports
