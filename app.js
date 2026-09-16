@@ -4576,7 +4576,7 @@ async function fetchSubscription(options = {}) {
     const res = await fetch(`${BUILDSHIP_BASE_URL}/stripe/get-subscription`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionToken: authState.sessionToken, email: authState.email, user_id: identityState.userId })
+      body: JSON.stringify({ sessionToken: authState.sessionToken, user_id: identityState.userId })
     })
 
     const data = await res.json()
