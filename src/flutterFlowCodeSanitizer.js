@@ -409,16 +409,23 @@ function scanDartSource(src) {
 
   closeOpenTokenSpans();
 
+  // A line comment ends at end-of-input by definition, so one sitting on top
+  // of the stack is not itself a defect - but it can hide an unclosed bracket
+  // opened beneath it. Skip trailing line-comment frames and judge the frame
+  // they were opened inside, or malformed code passes the gate (STU-148).
+  let remainingIndex = frames.length - 1;
+  while (remainingIndex > 0 && frames[remainingIndex].kind === "line-comment") {
+    remainingIndex--;
+  }
+
   let error = firstError;
   if (!error) {
-    const remaining = frames[frames.length - 1];
+    const remaining = frames[remainingIndex];
     if (!(remaining.kind === "code" && !remaining.opener && !remaining.interpolation)) {
       if (remaining.kind === "string") {
         error = `unclosed ${remaining.triple ? "triple-quoted " : ""}string starting on line ${remaining.openedLine} was never closed`;
       } else if (remaining.kind === "block-comment") {
         error = `unterminated /* comment starting on line ${remaining.openedLine}`;
-      } else if (remaining.kind === "line-comment") {
-        error = null; // Ends at end-of-input by definition.
       } else if (remaining.interpolation) {
         const openerFrame = frames.findLast((f) => f.opener);
         const where = openerFrame ? ` opened on line ${openerFrame.openedLine}` : "";
