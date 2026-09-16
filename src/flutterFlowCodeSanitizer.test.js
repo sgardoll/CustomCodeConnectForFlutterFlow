@@ -285,6 +285,32 @@ test("STU-148: a trailing comment cannot conceal an unclosed interpolation", () 
   assert.match(error, /unclosed "\$\{" expression/);
 });
 
+test("STU-148: CR is a line terminator for trailing comments too", () => {
+  // Dart ends line comments at LF, CRLF, or a lone CR. A CR-only file whose
+  // trailing comment was swallowed to EOF made the revealed opener look
+  // unclosed - a false rejection of valid Dart (STU-148 follow-up).
+  assert.equal(findUnbalancedBracketError("void main() { // c\r}\r"), null);
+  assert.equal(
+    findUnbalancedBracketError("void foo(int x) {}\rvoid main() {\r  foo( // c\r  1);\r}\r"),
+    null,
+  );
+  assert.match(
+    findUnbalancedBracketError("void main() { // c\r"),
+    /"\{" opened on line 1 is never closed/,
+  );
+});
+
+test("STU-148: CR-only Dart keeps literal fence lines through sanitization", () => {
+  // With the scanner falsely erroring on CR-only source, the fence-less
+  // whole-file branch is skipped and backtick lines inside comments or
+  // strings get paired as markdown fences, mangling valid Dart.
+  const commented = "/*\n```\n*/\nvoid main() { // c\r}\r";
+  assert.equal(sanitizeGeneratedDart(commented), commented);
+
+  const inString = "final s = '''\n```\n''';\nvoid main() { // c\r}\r";
+  assert.equal(sanitizeGeneratedDart(inString), inString);
+});
+
 test("STU-147: nested block comments stay protected until the real close", () => {
   // Dart nests block comments: the inner */ must not terminate the outer
   // comment, or every later line-leading ``` inside the still-open region is

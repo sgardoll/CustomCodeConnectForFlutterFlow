@@ -278,7 +278,10 @@ function scanDartSource(src) {
     const frame = frames[frames.length - 1];
 
     if (frame.kind === "line-comment") {
-      if (ch === "\n") {
+      // Dart ends a line comment at any line terminator - LF, CRLF, or a lone
+      // CR - so CR-only source must not have its comment swallow the code
+      // that follows (STU-148).
+      if (ch === "\n" || ch === "\r") {
         commentAndStringRanges.push({ start: frame.startIndex, end: i });
         frames.pop();
       } else i++;
