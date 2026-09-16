@@ -253,6 +253,14 @@ function scanDartSource(src) {
   let line = 1;
   let i = 0;
 
+  // Dart line terminators are LF, CRLF, and lone CR. Count each break exactly
+  // once: a CR that begins a CRLF is not counted on its own - the LF it is
+  // paired with is - so CR-only and CRLF files both advance one line per
+  // break (STU-148).
+  const countLineBreak = (ch, next) => {
+    if (ch === "\n" || (ch === "\r" && next !== "\n")) line++;
+  };
+
   // First problem found that does not halt the scan (an unterminated ordinary
   // string broken by a newline). The scan keeps walking so ranges and later
   // bracket attribution stay correct, but this error still blocks the gate.
@@ -278,7 +286,10 @@ function scanDartSource(src) {
     const frame = frames[frames.length - 1];
 
     if (frame.kind === "line-comment") {
-      if (ch === "\n") {
+      // Dart ends a line comment at any line terminator - LF, CRLF, or a lone
+      // CR - so CR-only source must not have its comment swallow the code
+      // that follows (STU-148).
+      if (ch === "\n" || ch === "\r") {
         commentAndStringRanges.push({ start: frame.startIndex, end: i });
         frames.pop();
       } else i++;
@@ -301,7 +312,7 @@ function scanDartSource(src) {
         frame.depth++;
         i += 2;
       } else {
-        if (ch === "\n") line++;
+        countLineBreak(ch, src[i + 1]);
         i++;
       }
       continue;
@@ -320,8 +331,9 @@ function scanDartSource(src) {
         continue;
       }
       if (!frame.raw && ch === "\\") {
-        // An escaped newline is a line continuation - keep the line count true.
-        if (src[i + 1] === "\n") line++;
+        // An escaped line terminator is a line continuation - keep the count
+        // true for lone CR too.
+        countLineBreak(src[i + 1] ?? "", src[i + 2] ?? "");
         i += 2;
         continue;
       }
@@ -343,7 +355,7 @@ function scanDartSource(src) {
         i += closerLength;
         continue;
       }
-      if (ch === "\n") line++;
+      countLineBreak(ch, src[i + 1]);
       i++;
       continue;
     }
@@ -403,7 +415,7 @@ function scanDartSource(src) {
         commentAndStringRanges,
       };
     }
-    if (ch === "\n") line++;
+    countLineBreak(ch, src[i + 1]);
     i++;
   }
 
