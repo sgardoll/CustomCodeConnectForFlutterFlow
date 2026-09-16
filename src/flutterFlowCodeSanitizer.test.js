@@ -311,6 +311,22 @@ test("STU-148: CR-only Dart keeps literal fence lines through sanitization", () 
   assert.equal(sanitizeGeneratedDart(inString), inString);
 });
 
+test("STU-148: CR-only source reports the true line of a later error", () => {
+  // Line counting must advance on lone CR, or diagnostics for CR-only files
+  // point at line 1. CRLF must count one line per break, not two.
+  const crOnly = "void main() {\r  foo();\r  bar(\r}\r";
+  assert.match(
+    findUnbalancedBracketError(crOnly),
+    /line 4: "\}" closes nothing - "\(" opened on line 3/,
+  );
+
+  const crlf = "void main() {\r\n  bar(\r\n}\r\n";
+  assert.match(
+    findUnbalancedBracketError(crlf),
+    /line 3: "\}" closes nothing - "\(" opened on line 2/,
+  );
+});
+
 test("STU-147: nested block comments stay protected until the real close", () => {
   // Dart nests block comments: the inner */ must not terminate the outer
   // comment, or every later line-leading ``` inside the still-open region is
