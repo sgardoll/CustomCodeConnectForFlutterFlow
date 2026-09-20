@@ -1692,9 +1692,31 @@ class FlutterFlowApiClient {
       }),
     );
 
+    // Every Dart file the project generates under lib/, keyed relative to
+    // lib/. This is the pool the compile check resolves a generated class's
+    // FlutterFlow imports against - `/backend/schema/structs/index.dart` and
+    // friends - so a class that uses project scaffolding can be compiled
+    // instead of being deployed unchecked.
+    const dartFiles = new Map();
+    const dartPaths = Object.keys(zip.files).filter(
+      (archivePath) =>
+        !zip.files[archivePath].dir &&
+        archivePath.startsWith(`${rootPrefix}lib/`) &&
+        archivePath.endsWith(".dart"),
+    );
+    await Promise.all(
+      dartPaths.map(async (archivePath) => {
+        dartFiles.set(
+          archivePath.slice(`${rootPrefix}lib/`.length),
+          await zip.files[archivePath].async("string"),
+        );
+      }),
+    );
+
     return {
       pubspecYaml: await zip.files[pubspecPath].async("string"),
       files,
+      dartFiles,
     };
   }
 
@@ -2110,6 +2132,7 @@ async function provisionMissingCodeFiles(
   remoteFiles,
   commitMessage,
   pubspecYaml = "",
+  projectDartFiles = new Map(),
 ) {
   const missingCodeFiles = findMissingCodeFiles(fileMap, remoteFiles);
   if (missingCodeFiles.length === 0) {
@@ -2123,12 +2146,24 @@ async function provisionMissingCodeFiles(
   const verificationPlan = planCustomCodeVerification(
     missingCodeFiles,
     pubspecYaml,
+    projectDartFiles,
   );
+
+  // A class nothing can compile is not deployed. Showing a warning after the
+  // fact does not undo a broken custom class, and every widget or action that
+  // imports it fails to build until someone notices.
+  if (verificationPlan.skipped.length > 0) {
+    throw new Error(
+      `Deploy stopped: ${verificationPlan.skipped.length} custom class(es) could not be compiled, and nothing is deployed that has not been verified.\n\n` +
+        verificationPlan.skipped.map((entry) => `• ${entry.reason}`).join("\n"),
+    );
+  }
   // Names and constraints, not pubspec.yaml text: the runner builds the
   // manifest itself, so a caller cannot point `pub get` at a git or path source.
   const verification = {
     ...verificationPlan.manifest,
     sources: verificationPlan.sources,
+    context: verificationPlan.context,
   };
 
   console.log(
@@ -2258,6 +2293,8 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
     overridden: overrides.overridden,
     warnings: plan.warnings,
     remoteFiles: projectSource.files,
+    // The project's generated Dart, for the compile check's import resolution.
+    dartFiles: projectSource.dartFiles,
   };
 }
 
@@ -2809,6 +2846,7 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       pubspecMerge.remoteFiles,
       `Provision ${artifactName} custom class`,
       serializedYaml,
+      pubspecMerge.dartFiles,
     );
 
     const syncMetadata = await buildApiSyncMetadata(
@@ -2988,6 +3026,7 @@ async function executeCommit(code, options = {}) {
       pubspecMerge.remoteFiles,
       `Provision ${artifactName} custom class`,
       serializedYaml,
+      pubspecMerge.dartFiles,
     );
 
     const syncMetadata = await buildApiSyncMetadata(
@@ -3149,6 +3188,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       pubspecMerge.remoteFiles,
       `Provision ${bundlePlan.title} custom classes`,
       serializedYaml,
+      pubspecMerge.dartFiles,
     );
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,

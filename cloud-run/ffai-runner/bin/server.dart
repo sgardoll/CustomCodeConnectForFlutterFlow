@@ -5,6 +5,8 @@ import 'dart:io';
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
 const maxDependenciesPerRequest = 200;
+const maxContextFiles = 300;
+const maxContextBytes = 4000000;
 
 const analysisPackageName = 'ccc_custom_code_analysis';
 const defaultSdkConstraint = '>=3.0.0 <4.0.0';
@@ -18,6 +20,10 @@ final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
 // `path:`, a nested `hosted:` mapping, and comment injection are all
 // unrepresentable rather than merely discouraged.
 final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
+
+// A project file path relative to lib/: no leading slash, no `..` segment, and
+// Dart source only, so a context entry cannot become an escape from lib/.
+final _contextPathPattern = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_./-]*\.dart$');
 
 // The packages the Flutter SDK supplies, i.e. the only valid `sdk: flutter`
 // entries besides `flutter` itself.
@@ -499,7 +505,45 @@ _VerificationRequest? _normalizeVerification(Object? value) {
     ),
     sdkPackages: _normalizeSdkPackages(value['sdkPackages']),
     sources: sources,
+    context: _normalizeContext(value['context']),
   );
+}
+
+/// Reads the project files a generated class imports.
+///
+/// FlutterFlow writes those imports against the package root -
+/// `/backend/schema/structs/index.dart` - so the classes cannot be compiled
+/// without them. They are placed under the scratch package's `lib/`, which is
+/// what that leading slash resolves to.
+List<_ContextFile> _normalizeContext(Object? value) {
+  if (value == null) return const <_ContextFile>[];
+  if (value is! List) {
+    throw const FormatException('verification.context must be an array.');
+  }
+  if (value.length > maxContextFiles) {
+    throw const FormatException('Too many files in verification.context.');
+  }
+
+  final files = <_ContextFile>[];
+  var totalBytes = 0;
+  for (final raw in value) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('verification.context entries must be objects.');
+    }
+    final path = _stringField(raw, 'path', maxLength: 400);
+    // The path becomes a location under lib/, so anything that could climb out
+    // of it, name a directory, or escape the package is rejected outright.
+    if (!_contextPathPattern.hasMatch(path) || path.contains('..')) {
+      throw FormatException('Invalid verification context path: $path.');
+    }
+    final content = _stringField(raw, 'content', maxLength: maxCodeBytes);
+    totalBytes += content.length;
+    if (totalBytes > maxContextBytes) {
+      throw const FormatException('verification.context is too large.');
+    }
+    files.add(_ContextFile(path: path, content: content));
+  }
+  return files;
 }
 
 /// Reads a `{name: version-constraint}` map, rejecting anything that could
@@ -643,9 +687,24 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
 
   await File('${packageDir.path}/pubspec.yaml')
       .writeAsString(verification.toPubspec());
+
+  // A custom class lives at lib/custom_code/ in FlutterFlow, and a relative
+  // import inside it resolves from there, so it is written to the same place.
+  final sourceDir = Directory('${libDir.path}/custom_code');
+  await sourceDir.create(recursive: true);
+  final sourcePaths = <String>[];
   for (final source in verification.sources) {
-    await File('${libDir.path}/${source.fileName}')
-        .writeAsString(source.content);
+    final file = File('${sourceDir.path}/${source.fileName}');
+    await file.writeAsString(source.content);
+    sourcePaths.add(file.path);
+  }
+
+  // The project's own generated Dart, so the scaffolding those classes import
+  // resolves instead of failing as a missing URI.
+  for (final context in verification.context) {
+    final file = File('${libDir.path}/${context.path}');
+    await file.parent.create(recursive: true);
+    await file.writeAsString(context.content);
   }
 
   final pubGet = await _runProcess(
@@ -661,9 +720,15 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
     );
   }
 
+  // Scoped to the classes being deployed rather than the whole package: the
+  // project files shipped alongside them exist to resolve imports, and an
+  // error inside that scaffolding is the project's own business, not proof the
+  // generated class is broken. `--no-fatal-warnings` because `dart analyze`
+  // treats warnings as fatal by default, so a warning-only class would
+  // otherwise be refused even though it compiles.
   final analyze = await _runProcess(
-    'flutter',
-    ['analyze', '--no-pub', '--no-fatal-infos', '--no-fatal-warnings'],
+    'dart',
+    ['analyze', '--no-fatal-warnings', ...sourcePaths],
     workingDirectory: packageDir.path,
     timeout: const Duration(minutes: 4),
   );
@@ -942,6 +1007,14 @@ final class _VerificationSource {
   final String content;
 }
 
+final class _ContextFile {
+  const _ContextFile({required this.path, required this.content});
+
+  /// Path relative to the scratch package's lib/.
+  final String path;
+  final String content;
+}
+
 final class _VerificationRequest {
   const _VerificationRequest({
     required this.sdkConstraint,
@@ -949,6 +1022,7 @@ final class _VerificationRequest {
     required this.overrides,
     required this.sdkPackages,
     required this.sources,
+    required this.context,
   }) : unavailableReason = null;
 
   /// A request the runner will not compile, carrying why.
@@ -957,7 +1031,8 @@ final class _VerificationRequest {
         dependencies = const <String, String>{},
         overrides = const <String, String>{},
         sdkPackages = const <String>[],
-        sources = const <_VerificationSource>[];
+        sources = const <_VerificationSource>[],
+        context = const <_ContextFile>[];
 
   /// Why this request cannot be compiled, or null when it can.
   final String? unavailableReason;
@@ -967,6 +1042,7 @@ final class _VerificationRequest {
   final Map<String, String> overrides;
   final List<String> sdkPackages;
   final List<_VerificationSource> sources;
+  final List<_ContextFile> context;
 
   /// Builds the pubspec the scratch package is compiled from.
   ///

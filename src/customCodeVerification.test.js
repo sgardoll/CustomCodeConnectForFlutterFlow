@@ -3,8 +3,23 @@ import test from "node:test";
 import {
   buildAnalysisManifest,
   classifyCustomClassImports,
+  collectVerificationContext,
   planCustomCodeVerification,
+  resolveProjectImport,
 } from "./customCodeVerification.js";
+
+// A miniature FlutterFlow project: the schema barrel the generated classes
+// import, and the theme that barrel pulls in behind it.
+const PROJECT_LIB = new Map([
+  [
+    "backend/schema/structs/index.dart",
+    "export 'user_struct.dart';\nexport 'order_struct.dart';\n",
+  ],
+  ["backend/schema/structs/user_struct.dart", "class UserStruct {}\n"],
+  ["backend/schema/structs/order_struct.dart", "class OrderStruct {}\n"],
+  ["flutter_flow/flutter_flow_theme.dart", "class FlutterFlowTheme {}\n"],
+  ["flutter_flow/lat_lng.dart", "class LatLng {}\n"],
+]);
 
 const PROJECT_PUBSPEC = `name: my_app
 description: A FlutterFlow project.
@@ -206,5 +221,115 @@ test("compiles the verifiable classes even when a sibling cannot be verified", (
     plan.sources.map((source) => source.fileName),
     ["background_downloader_service.dart"],
   );
+  assert.equal(plan.skipped.length, 1);
+});
+
+test("a leading slash resolves against the package root, a relative path against the file", () => {
+  assert.equal(
+    resolveProjectImport("/backend/schema/structs/index.dart", "custom_code/x.dart"),
+    "backend/schema/structs/index.dart",
+  );
+  assert.equal(
+    resolveProjectImport("../flutter_flow/lat_lng.dart", "custom_code/x.dart"),
+    "flutter_flow/lat_lng.dart",
+  );
+  assert.equal(
+    resolveProjectImport("package:flutter/material.dart", "custom_code/x.dart"),
+    null,
+  );
+});
+
+test("gathers the scaffolding a class imports, transitively", () => {
+  const roots = [
+    {
+      libPath: "custom_code/model_bundle.dart",
+      content:
+        "import '/backend/schema/structs/index.dart';\nclass ModelBundle {}\n",
+    },
+  ];
+
+  const { files, missing } = collectVerificationContext(roots, PROJECT_LIB);
+  const paths = files.map((file) => file.path).sort();
+
+  // index.dart re-exports two struct files, so the closure must follow it.
+  assert.deepEqual(paths, [
+    "backend/schema/structs/index.dart",
+    "backend/schema/structs/order_struct.dart",
+    "backend/schema/structs/user_struct.dart",
+  ]);
+  assert.deepEqual(missing, []);
+});
+
+test("reports an import the project does not contain instead of ignoring it", () => {
+  const roots = [
+    {
+      libPath: "custom_code/x.dart",
+      content: "import '/backend/nope.dart';\nclass X {}\n",
+    },
+  ];
+
+  assert.deepEqual(collectVerificationContext(roots, PROJECT_LIB).missing, [
+    "/backend/nope.dart",
+  ]);
+});
+
+test("a scaffolding-importing class is verified when the project files are available", () => {
+  const plan = planCustomCodeVerification(
+    [
+      {
+        className: "ModelBundle",
+        content:
+          "import '/backend/schema/structs/index.dart';\nclass ModelBundle {}\n",
+      },
+    ],
+    REPRESENTABLE_PUBSPEC,
+    PROJECT_LIB,
+  );
+
+  assert.deepEqual(plan.skipped, []);
+  assert.deepEqual(
+    plan.sources.map((source) => source.fileName),
+    ["model_bundle.dart"],
+  );
+  assert.deepEqual(
+    plan.context.map((file) => file.path).sort(),
+    [
+      "backend/schema/structs/index.dart",
+      "backend/schema/structs/order_struct.dart",
+      "backend/schema/structs/user_struct.dart",
+    ],
+  );
+});
+
+test("a scaffolding import the project lacks is still reported, never silently deployed", () => {
+  const plan = planCustomCodeVerification(
+    [
+      {
+        className: "ModelBundle",
+        content: "import '/backend/absent.dart';\nclass ModelBundle {}\n",
+      },
+    ],
+    REPRESENTABLE_PUBSPEC,
+    PROJECT_LIB,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /absent\.dart/);
+});
+
+test("without the project's files a scaffolding import is still reported", () => {
+  const plan = planCustomCodeVerification(
+    [
+      {
+        className: "ModelBundle",
+        content:
+          "import '/backend/schema/structs/index.dart';\nclass ModelBundle {}\n",
+      },
+    ],
+    REPRESENTABLE_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
   assert.equal(plan.skipped.length, 1);
 });
