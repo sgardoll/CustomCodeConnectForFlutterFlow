@@ -100,7 +100,7 @@ Or: `validateDartFile` can be kept as a stub that checks the review result's `co
 - [x] Gap 2: CustomAction return type client-side duplicate removed (`app.js` — `getCustomActionReturnTypeError` call deleted)
 - [x] Gap 3: CustomAction file name client-side duplicate removed (`app.js` — `getCustomActionFileNameError` call deleted)
 - [x] Gap 4 client-side: Forbidden patterns + import validation removed from `app.js`
-- [x] Gap 4 server-side: `REVIEW_SYSTEM` on BuildShip `service-runpipeline-THIN` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` (verified 2026-09-20; the deployed value is byte-identical). Note these prompts are node inputs, not workflow code: they are pasted into the BuildShip editor by hand, and a workflow push over the MCP does not carry them — see [DEPLOYMENT.md](DEPLOYMENT.md)
+- [x] Gap 4 server-side: `REVIEW_SYSTEM` on BuildShip `service-runpipeline-THIN` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` (checked 2026-09-20 against the BuildShip checkout's recorded value). The prompts are node inputs, not workflow code: they are pasted into the BuildShip editor by hand, a workflow push over the MCP does not carry them, and they are deliberately untracked in this public repository — their source of truth is the private BuildShip workflow. See [DEPLOYMENT.md](DEPLOYMENT.md)
 - [x] Gap 5: MANUAL_STEP_KEYS narrowed to `["manualActions"]` in `reviewPresentation.js`
 - [x] Gap 6: Surgical server-side code fixes — review stage returns `fixedSource` for mechanical issues; deploy planner prefers `fixedCode` over `code`
 
@@ -131,13 +131,13 @@ All code-level validation (widget params, return types, file names, forbidden pa
 1. **Gap 5** — DONE
 2. **Gaps 1-4 client-side** — DONE
 3. **Gap 6** (surgical fixes) — DONE
-4. **Gap 4 server-side** — DONE: `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` and BuildShip `service-runpipeline-THIN` node `d32928b7` (REVIEW_SYSTEM) are byte-identical (verified 2026-09-20). Reminder: this prompt is a node input pasted in the BuildShip editor, not workflow code — the MCP push does not deploy it
+4. **Gap 4 server-side** — DONE: `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` matches BuildShip `service-runpipeline-THIN` node `d32928b7` (REVIEW_SYSTEM) as recorded in the BuildShip checkout (checked 2026-09-20). Reminder: this prompt is a node input pasted in the BuildShip editor, not workflow code — the MCP push does not deploy it, and it is intentionally untracked here (public repo)
 5. **No final cleanup needed** — `validateDartFile` is now minimal (one structural check)
 
 ## Verification
 
 - `npm test` — 205 tests pass, 0 fail
 - `npm run build` — bundle compiles (392.23 KB)
-- BuildShip `REVIEW_SYSTEM` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` (verified 2026-09-20). Deployment targets are listed in [DEPLOYMENT.md](DEPLOYMENT.md) — the three step prompts (Architect, Generator, Review) are updated by hand in the BuildShip editor
+- BuildShip `REVIEW_SYSTEM` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` as recorded in the BuildShip checkout (checked 2026-09-20). Deployment targets are listed in [DEPLOYMENT.md](DEPLOYMENT.md) — the three step prompts (Architect, Generator, Review) are updated by hand in the BuildShip editor and are deliberately not tracked in this public repository
 - `reviewPresentation.js` — tests pass, no regressions
 - `bundleDeployPlanner.js` — `fixedCode` preference tests pass

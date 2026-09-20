@@ -51,7 +51,7 @@ Four surfaces — three automated, one manual. Full detail in [DEPLOYMENT.md](DE
 - **Web app** — `python3 scripts/deploy_ftp.py` mirrors `dist/` to the FTP root.
 - **FlutterFlow custom-class runner** — `./scripts/deploy_cloud_run_ffai.sh` builds and ships `cloud-run/ffai-runner` to Cloud Run.
 - **BuildShip workflow** `service-runpipeline-THIN` — pushed over the BuildShip MCP, against the workflow graph in the BuildShip repo.
-- **BuildShip step system prompts** (Architect, Generator, Review) — **manual**. They are node inputs, not workflow code, so a workflow push does not carry them; they are pasted into the BuildShip editor, and that paste is the deploy.
+- **BuildShip step system prompts** (Architect, Generator, Review) — **manual**. They are node inputs, not workflow code, so a workflow push does not carry them; they are pasted into the BuildShip editor, and that paste is the deploy. They are deliberately **not** tracked in this repository: it is public, and their source of truth is the private BuildShip workflow.
 
 ## Multi-Model
 
