@@ -45,12 +45,12 @@ NOW.md
 __pycache__/
 *.pyc
 
-# The pipeline's step system prompts are deliberately NOT tracked here. This
-# repository is public and the prompts are product logic, so their source of
-# truth is the private BuildShip workflow `service-runpipeline-THIN`, where
-# ARCHITECT_SYSTEM / GENERATOR_SYSTEM / REVIEW_SYSTEM are node inputs. Copies
-# in this directory are local working files only and may lag the workflow.
-# This is the intended arrangement - not an oversight to be corrected.
+# The Architect and Generator step prompts are deliberately NOT tracked here.
+# This repository is public and the prompts are product logic, so their source
+# of truth is the private BuildShip workflow `service-runpipeline-THIN`, where
+# ARCHITECT_SYSTEM / GENERATOR_SYSTEM / REVIEW_SYSTEM are node inputs. The .txt
+# copies in this directory are local working files only and may lag the
+# workflow. This is the intended arrangement - not an oversight to be corrected.
 BUILDSHIP_ARCHITECT_SYSTEM_PROMPT_UPDATED.txt
 BUILDSHIP_GENERATOR_SYSTEM_PROMPT_UPDATED.txt
 /graphify-out

@@ -156,13 +156,13 @@ deploy:
 
 ### Where the prompts live, and why not here
 
-**The prompts are deliberately not tracked in this repository.** It is public,
-and the prompts are product logic, so their source of truth is the **private
-BuildShip workflow** `service-runpipeline-THIN`, where all three live as node
-inputs. The `.txt` files listed above are local working copies only: they are
-not the deployed value, they can lag it, and the architect and generator ones
-are gitignored on purpose (see the note in `.gitignore`). Their being untracked
-is the intended arrangement, not something to correct.
+**The prompts' source of truth is the private BuildShip workflow, not this
+repository** - this repository is public and the prompts are product logic.
+`service-runpipeline-THIN` holds all three as node inputs. The `.txt` files
+listed above are local working copies only: they are not the deployed value,
+they can lag it, and the architect and generator ones are gitignored on
+purpose (see the note in `.gitignore`). Keeping them out of version control
+here is the intended arrangement, not something to correct.
 
 The BuildShip editor is authoritative for prompt content. The prompt text also
 appears in the workflow's `schema.json` under `nodeValues`, but the editor owns
