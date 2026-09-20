@@ -183,7 +183,7 @@ export function parseEnvironmentConstraints(yamlContent) {
 // YAML would misread a plain scalar that opens with an indicator character, and
 // `>=1.0.0 <2.0.0` — an ordinary pub range constraint — is a parse error rather
 // than a string. Quote anything that isn't unambiguously plain.
-function formatConstraint(constraint) {
+export function formatConstraint(constraint) {
   if (/^[A-Za-z0-9^~][A-Za-z0-9^~+._-]*$/.test(constraint)) return constraint;
   return `'${constraint.replace(/'/g, "''")}'`;
 }

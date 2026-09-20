@@ -54,6 +54,45 @@ test("Cloud Run upserts custom classes in one authoritative write", () => {
   );
 });
 
+test("Cloud Run gives every custom class a .dart file name FlutterFlow can import", () => {
+  // FlutterFlow stores a Code File's identifier WITH the extension, but
+  // addCustomClass writes it without one and codegen builds the path from it
+  // verbatim - so an extensionless name emits a file no import can resolve.
+  assert.match(
+    runnerSource,
+    /_ensureDartFileName\(project, \$name\);/,
+    "the generated DSL must repair the Code File name after every upsert",
+  );
+  assert.match(
+    runnerSource,
+    /if \(current\.endsWith\('\.dart'\)\) return;/,
+    "a name already ending in .dart must be left alone, so a re-deploy is a no-op",
+  );
+});
+
+test("Cloud Run compiles generated custom code before pushing it", () => {
+  assert.match(
+    dockerfile,
+    /git clone --depth 1 --branch "\$FLUTTER_CHANNEL"/,
+    "analyzing code that imports package:flutter needs the Flutter SDK in the image",
+  );
+  assert.match(
+    runnerSource,
+    /'analyze',\s*'--no-pub'/,
+    "the runner must run flutter analyze, not just the DSL's formattable check",
+  );
+  assert.match(
+    runnerSource,
+    /if \(analysis != null && analysis\.hasErrors\)[\s\S]*?HttpStatus\.unprocessableEntity/,
+    "analyzer errors must stop the deploy before the project is written to",
+  );
+  assert.match(
+    runnerSource,
+    /_AnalysisOutcome\.skipped\(/,
+    "a check that cannot run must report itself skipped rather than as errors",
+  );
+});
+
 test("Cloud Run deployment reserves enough memory and serializes provisioning", () => {
   assert.match(deployScript, /MEMORY="\$\{MEMORY:-4Gi\}"/);
   assert.match(deployScript, /CONCURRENCY="\$\{CONCURRENCY:-1\}"/);

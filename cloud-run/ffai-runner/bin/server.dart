@@ -46,6 +46,7 @@ Future<void> _handle(HttpRequest request) async {
     );
     final dryRun = payload['dryRun'] == true;
     final classes = _normalizeClasses(payload['customClasses']);
+    final verification = _normalizeVerification(payload['verification']);
 
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
@@ -66,6 +67,23 @@ Future<void> _handle(HttpRequest request) async {
             : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
+      });
+      return;
+    }
+
+    // Compile the generated classes before anything is written to the project.
+    // FlutterFlow's own DSL only checks that the code is formattable, which
+    // accepts a call to a named argument the package never declared - exactly
+    // the class of error that otherwise lands in the project and breaks every
+    // custom widget or action importing it.
+    final analysis = await _verifyCustomCode(workspace, verification, channel);
+    if (analysis != null && analysis.hasErrors) {
+      await channel.result(HttpStatus.unprocessableEntity, {
+        'success': false,
+        'error': 'The generated custom code does not compile, so nothing was '
+            'deployed to FlutterFlow.',
+        'details': analysis.report,
+        'analyzerErrors': analysis.errors,
       });
       return;
     }
@@ -137,6 +155,8 @@ Future<void> _handle(HttpRequest request) async {
               })
           .toList(),
       'dryRun': dryRun,
+      'verified': analysis?.verifiedFiles ?? const <String>[],
+      'verificationSkipped': analysis?.skippedReason,
     });
   } on FormatException catch (error) {
     await channel.result(HttpStatus.badRequest, {
@@ -394,6 +414,44 @@ String _stringField(
   return trimmed;
 }
 
+/// Reads the optional compile-check payload. Absent means the caller is an
+/// older client that predates verification; its deploys keep working and are
+/// reported as unverified rather than refused.
+_VerificationRequest? _normalizeVerification(Object? value) {
+  if (value == null) return null;
+  if (value is! Map<String, dynamic>) {
+    throw const FormatException('verification must be an object.');
+  }
+
+  final pubspec = _stringField(value, 'pubspec', maxLength: 100000);
+  final rawSources = value['sources'];
+  if (rawSources is! List) {
+    throw const FormatException('verification.sources must be an array.');
+  }
+  if (rawSources.length > maxClassesPerRequest) {
+    throw const FormatException('Too many sources to verify in one request.');
+  }
+
+  final sources = rawSources.indexed.map((item) {
+    final raw = item.$2;
+    if (raw is! Map<String, dynamic>) {
+      throw FormatException('verification.sources[${item.$1}] must be an object.');
+    }
+    final fileName = _stringField(raw, 'fileName', maxLength: 200);
+    // The name becomes a path inside the scratch package, so anything that
+    // could climb out of it is a request to write somewhere else.
+    if (!RegExp(r'^[a-z0-9_]+\.dart$').hasMatch(fileName)) {
+      throw FormatException('Invalid verification file name: $fileName.');
+    }
+    return _VerificationSource(
+      fileName: fileName,
+      content: _stringField(raw, 'content', maxLength: maxCodeBytes),
+    );
+  }).toList();
+
+  return _VerificationRequest(pubspec: pubspec, sources: sources);
+}
+
 List<CustomClassEntry> _normalizeClasses(Object? value) {
   if (value is! List) {
     throw const FormatException('customClasses must be an array.');
@@ -426,6 +484,129 @@ List<CustomClassEntry> _normalizeClasses(Object? value) {
   }).toList();
 }
 
+/// Compiles the generated classes in a throwaway Flutter package before they
+/// are pushed, so an error the FlutterFlow DSL would wave through is caught
+/// while the project is still untouched.
+///
+/// Returns null when the caller sent nothing to compile. A run that cannot be
+/// performed at all - no Flutter SDK on PATH, `pub get` unable to reach
+/// pub.dev - reports itself as skipped rather than as errors: refusing a
+/// deploy because the checker itself broke would block correct code, and the
+/// caller states plainly what went unverified.
+Future<_AnalysisOutcome?> _verifyCustomCode(
+  Directory workspace,
+  _VerificationRequest? verification,
+  _ResponseChannel channel,
+) async {
+  if (verification == null || verification.sources.isEmpty) return null;
+
+  channel.phase('verifying', 'Compiling your custom code...');
+
+  final packageDir = Directory('${workspace.parent.path}/custom_code_analysis');
+  final libDir = Directory('${packageDir.path}/lib');
+  // Sources from an earlier request would otherwise be analysed alongside this
+  // one and report errors against code the caller never sent.
+  if (libDir.existsSync()) libDir.deleteSync(recursive: true);
+  await libDir.create(recursive: true);
+
+  await File('${packageDir.path}/pubspec.yaml')
+      .writeAsString(verification.pubspec);
+  for (final source in verification.sources) {
+    await File('${libDir.path}/${source.fileName}')
+        .writeAsString(source.content);
+  }
+
+  final pubGet = await _runProcess(
+    'flutter',
+    ['pub', 'get'],
+    workingDirectory: packageDir.path,
+    timeout: const Duration(minutes: 4),
+  );
+  if (pubGet.exitCode != 0) {
+    return _AnalysisOutcome.skipped(
+      'The packages your code imports could not be resolved, so it was not '
+      'compiled before deploying: ${_trimOutput(pubGet.output)}',
+    );
+  }
+
+  final analyze = await _runProcess(
+    'flutter',
+    ['analyze', '--no-pub', '--no-fatal-infos', '--no-fatal-warnings'],
+    workingDirectory: packageDir.path,
+    timeout: const Duration(minutes: 4),
+  );
+
+  final errors = _analyzerErrors(analyze.output);
+  if (errors.isEmpty && analyze.exitCode != 0 && analyze.timedOut) {
+    return _AnalysisOutcome.skipped(
+      'Compiling your custom code timed out, so it was not verified before '
+      'deploying.',
+    );
+  }
+
+  return _AnalysisOutcome(
+    errors: errors,
+    report: _trimOutput(analyze.output),
+    verifiedFiles:
+        verification.sources.map((source) => source.fileName).toList(),
+  );
+}
+
+/// Pulls the `error` diagnostics out of `flutter analyze` output.
+///
+/// Lines look like:
+///   error - The named parameter 'group' isn't defined - lib/x.dart:28:9 - ...
+/// with the separator rendered as a bullet. Warnings and infos are left out:
+/// they are style advice from whatever lint set the scratch package inherits,
+/// not proof the code is broken, and blocking on them would refuse code that
+/// compiles.
+List<String> _analyzerErrors(String output) {
+  final errors = <String>[];
+  for (final line in const LineSplitter().convert(output)) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith('error ')) errors.add(trimmed);
+  }
+  return errors;
+}
+
+Future<_RunOutcome> _runProcess(
+  String executable,
+  List<String> args, {
+  required String workingDirectory,
+  required Duration timeout,
+}) async {
+  final buffer = StringBuffer();
+  try {
+    final process = await Process.start(
+      executable,
+      args,
+      workingDirectory: workingDirectory,
+      runInShell: false,
+    );
+    final drained = Future.wait([
+      process.stdout.transform(utf8.decoder).forEach(buffer.write),
+      process.stderr.transform(utf8.decoder).forEach(buffer.write),
+    ]);
+
+    final exitCode = await process.exitCode.timeout(timeout, onTimeout: () {
+      process.kill(ProcessSignal.sigkill);
+      return -1;
+    });
+    await drained;
+    return _RunOutcome(
+      exitCode: exitCode,
+      output: buffer.toString(),
+      timedOut: exitCode == -1,
+    );
+  } on ProcessException catch (error) {
+    return _RunOutcome(
+      exitCode: -1,
+      output: '$executable could not be started: ${error.message}',
+      timedOut: false,
+    );
+  }
+}
+
 Future<File> _writeDeployScript(
   Directory workspace,
   List<CustomClassEntry> classes,
@@ -448,6 +629,7 @@ Future<File> _writeDeployScript(
               code: $code,
             );
           }
+          _ensureDartFileName(project, $name);
 ''';
   }).join('\n');
 
@@ -483,6 +665,51 @@ $calls          _phase('uploading', 'Saving the changes to FlutterFlow...');
 
 void _phase(String phase, String message) {
   stdout.writeln('$phaseMarkerPrefix:\$phase:\$message');
+}
+
+/// Gives the Code File holding [className] a name FlutterFlow can resolve.
+///
+/// `addCustomClass` names the containing `FFCustomCodeFile` `_snakeCase(name)`
+/// with no extension, but FlutterFlow stores Code Files created in its own
+/// editor WITH the extension (`groq_model_registry.dart`, verified by SDK
+/// readback) and codegen builds `lib/custom_code/<identifier.name>` from it
+/// verbatim. An extensionless name therefore emits a file no `import` can
+/// resolve, so every custom widget or action that imports the class fails to
+/// compile. Appending the extension here is the only lever the runner has -
+/// the SDK helper exposes no file-name parameter.
+///
+/// Idempotent and non-destructive: a name that already ends in `.dart` is left
+/// exactly as it is, so a file the author renamed in the FlutterFlow editor
+/// survives a re-deploy untouched.
+void _ensureDartFileName(FFProject project, String className) {
+  for (final file in project.customCode.customCodeFiles.customCodeFiles) {
+    final holdsClass = file.customCodeEntities.any(
+      (entity) =>
+          entity.hasInterface() &&
+          entity.interface.identifier.name == className,
+    );
+    if (!holdsClass) continue;
+
+    final current = file.identifier.name;
+    if (current.endsWith('.dart')) return;
+    file.identifier.name =
+        current.isEmpty ? '\${_snakeCase(className)}.dart' : '\$current.dart';
+    return;
+  }
+}
+
+/// FlutterFlow's naive snake_case: an underscore before every capital, all
+/// lowercased. Matches the SDK's own derivation so the repaired name is the
+/// one FlutterFlow would have produced.
+String _snakeCase(String name) {
+  final buffer = StringBuffer();
+  for (var i = 0; i < name.length; i++) {
+    final char = name[i];
+    final lower = char.toLowerCase();
+    if (char != lower && i > 0) buffer.write('_');
+    buffer.write(lower);
+  }
+  return buffer.toString();
 }
 
 final class _CliOptions {
@@ -564,6 +791,43 @@ String _trimOutput(Object value) {
   final text = '$value'.trim();
   if (text.length <= 4000) return text;
   return '${text.substring(0, 4000)}...';
+}
+
+final class _VerificationSource {
+  const _VerificationSource({required this.fileName, required this.content});
+
+  final String fileName;
+  final String content;
+}
+
+final class _VerificationRequest {
+  const _VerificationRequest({required this.pubspec, required this.sources});
+
+  final String pubspec;
+  final List<_VerificationSource> sources;
+}
+
+final class _AnalysisOutcome {
+  const _AnalysisOutcome({
+    required this.errors,
+    required this.report,
+    required this.verifiedFiles,
+  }) : skippedReason = null;
+
+  const _AnalysisOutcome.skipped(String reason)
+      : errors = const <String>[],
+        report = '',
+        verifiedFiles = const <String>[],
+        skippedReason = reason;
+
+  final List<String> errors;
+  final String report;
+  final List<String> verifiedFiles;
+
+  /// Why the compile check could not run, or null when it did run.
+  final String? skippedReason;
+
+  bool get hasErrors => errors.isNotEmpty;
 }
 
 final class CustomClassEntry {
