@@ -138,6 +138,6 @@ All code-level validation (widget params, return types, file names, forbidden pa
 
 - `npm test` — 205 tests pass, 0 fail
 - `npm run build` — bundle compiles (392.23 KB)
-- BuildShip `REVIEW_SYSTEM` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` as recorded in the BuildShip checkout (checked 2026-09-20). Deployment targets are listed in [DEPLOYMENT.md](DEPLOYMENT.md) — the three step prompts (Architect, Generator, Review) are updated by hand in the BuildShip editor, and their source of truth is the private BuildShip workflow rather than this public repository (the Architect and Generator working copies are gitignored on purpose)
+- BuildShip `REVIEW_SYSTEM` matches `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` as recorded in the BuildShip checkout (checked 2026-09-20). Deployment targets are listed in [DEPLOYMENT.md](DEPLOYMENT.md) — the three step prompts (Architect, Generator, Review) are updated by hand in the BuildShip editor, and their source of truth is the private BuildShip workflow rather than this public repository (the working copies are gitignored on purpose)
 - `reviewPresentation.js` — tests pass, no regressions
 - `bundleDeployPlanner.js` — `fixedCode` preference tests pass

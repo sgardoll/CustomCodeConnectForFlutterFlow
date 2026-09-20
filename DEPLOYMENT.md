@@ -160,8 +160,8 @@ deploy:
 repository** - this repository is public and the prompts are product logic.
 `service-runpipeline-THIN` holds all three as node inputs. The `.txt` files
 listed above are local working copies only: they are not the deployed value,
-they can lag it, and the architect and generator ones are gitignored on
-purpose (see the note in `.gitignore`). Keeping them out of version control
+they can lag it, and all three are gitignored on purpose (see the note in
+`.gitignore`). Keeping them out of version control
 here is the intended arrangement, not something to correct.
 
 The BuildShip editor is authoritative for prompt content. The prompt text also
