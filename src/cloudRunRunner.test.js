@@ -78,18 +78,8 @@ test("Cloud Run compiles generated custom code before pushing it", () => {
   );
   assert.match(
     runnerSource,
-    /'analyze',\s*'--no-fatal-warnings',\s*\.\.\.sourcePaths/,
-    "the analyzer must run, scoped to the deployed classes, with warnings non-fatal",
-  );
-  assert.match(
-    runnerSource,
-    /\/custom_code/,
-    "a class must be written where FlutterFlow files it, so its relative imports resolve",
-  );
-  assert.match(
-    runnerSource,
-    /for \(final context in verification\.context\)/,
-    "the project's own Dart must be written so scaffolding imports resolve",
+    /'analyze',\s*'--no-pub'/,
+    "the runner must run flutter analyze, not just the DSL's formattable check",
   );
   assert.match(
     runnerSource,

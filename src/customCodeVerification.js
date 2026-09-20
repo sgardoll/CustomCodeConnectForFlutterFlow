@@ -140,108 +140,6 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   };
 }
 
-// Bounds on the scaffolding closure. FlutterFlow projects keep these imports
-// narrow - a schema barrel, the theme, a lat/lng helper - so a closure past
-// these bounds means something unexpected, and compiling a huge slice of the
-// app would cost more than the check is worth.
-const MAX_CONTEXT_FILES = 300;
-const MAX_CONTEXT_BYTES = 4_000_000;
-
-/**
- * Collapses `.` and `..` segments so a resolved import can be looked up.
- * @param {string} path - Slash-separated path
- * @returns {string} Normalised path
- */
-export function normalizeProjectPath(path) {
-  const parts = [];
-  for (const segment of String(path || "").split("/")) {
-    if (segment === "" || segment === ".") continue;
-    if (segment === "..") {
-      parts.pop();
-      continue;
-    }
-    parts.push(segment);
-  }
-  return parts.join("/");
-}
-
-/**
- * Resolves a non-package import to a path inside the project's `lib/`.
- *
- * FlutterFlow writes its own imports in two forms. A leading slash is the
- * package root, so `/backend/schema/structs/index.dart` is
- * `lib/backend/schema/structs/index.dart` - the form every generated file uses
- * for scaffolding. A relative import resolves against the importing file's own
- * directory, which is why the caller is placed at `lib/custom_code/<stem>.dart`,
- * the same location FlutterFlow gives a custom class.
- *
- * @param {string} uri - The raw import URI
- * @param {string} fromLibPath - Importing file's path relative to `lib/`
- * @returns {string|null} Path relative to `lib/`, or null when not project-relative
- */
-export function resolveProjectImport(uri, fromLibPath) {
-  if (uri.startsWith("package:") || uri.startsWith("dart:")) return null;
-  if (uri.startsWith("/")) return normalizeProjectPath(uri.slice(1));
-  const directory = String(fromLibPath || "")
-    .split("/")
-    .slice(0, -1)
-    .join("/");
-  return normalizeProjectPath(directory ? `${directory}/${uri}` : uri);
-}
-
-/**
- * Walks the imports of the classes being deployed and gathers the project
- * files they need, so a class that imports FlutterFlow scaffolding can be
- * compiled instead of being waved through unchecked.
- *
- * Only the transitive closure is gathered, never the whole app: the payload
- * stays small and the analyzer stays fast. Anything the project does not
- * contain is reported in `missing`, which is what tells the caller a class
- * genuinely cannot be compiled.
- *
- * @param {Array<{libPath: string, content: string}>} roots - The classes to verify
- * @param {Map<string, string>} pool - Every `lib/**\/*.dart` in the project
- * @returns {{files: Array<{path: string, content: string}>, missing: string[], exceeded: boolean}}
- */
-export function collectVerificationContext(roots, pool) {
-  const files = new Map();
-  const missing = [];
-  const visited = new Set(roots.map((root) => root.libPath));
-  const queue = [...roots];
-  let bytes = 0;
-  let exceeded = false;
-
-  while (queue.length > 0) {
-    const current = queue.pop();
-    for (const uri of extractImportUris(current.content)) {
-      const resolved = resolveProjectImport(uri, current.libPath);
-      if (resolved === null || visited.has(resolved)) continue;
-
-      const content = pool.get(resolved);
-      if (content === undefined) {
-        missing.push(uri);
-        continue;
-      }
-
-      visited.add(resolved);
-      bytes += content.length;
-      if (files.size >= MAX_CONTEXT_FILES || bytes > MAX_CONTEXT_BYTES) {
-        exceeded = true;
-        queue.length = 0;
-        break;
-      }
-      files.set(resolved, content);
-      queue.push({ libPath: resolved, content });
-    }
-  }
-
-  return {
-    files: [...files].map(([path, content]) => ({ path, content })),
-    missing: [...new Set(missing)].sort(),
-    exceeded,
-  };
-}
-
 function skipReason(className, unresolvableImports, missingPackages) {
   if (unresolvableImports.length > 0) {
     return `${className} imports ${unresolvableImports.join(", ")}, which FlutterFlow only generates once the app is built, so it could not be compiled before the deploy.`;
@@ -264,22 +162,11 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * versions is worse than no check, because it reports a result that does not
  * describe the code that actually ships.
  *
- * A class that imports FlutterFlow scaffolding is verified against the
- * project's own files, gathered transitively, so it is checked rather than
- * waved through. Only a class whose imports genuinely cannot be resolved - a
- * package the project does not declare, or a project file the export does not
- * contain - is skipped, and the caller refuses the deploy on any skip.
- *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @param {Map<string, string>} [projectDartFiles] - Every `lib/**\/*.dart` in the project
- * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, context: Array<{path: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
  */
-export function planCustomCodeVerification(
-  classes,
-  projectPubspecYaml,
-  projectDartFiles = new Map(),
-) {
+export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
     sdkConstraint,
     dependencies,
@@ -304,71 +191,24 @@ export function planCustomCodeVerification(
       continue;
     }
 
+    const { unresolvableImports } = classifyCustomClassImports(content);
     const missingPackages = extractPackageImports(content).filter(
       (name) => !availablePackages.has(name),
     );
 
-    if (missingPackages.length > 0) {
+    if (unresolvableImports.length > 0 || missingPackages.length > 0) {
       skipped.push({
         className,
-        reason: skipReason(className, [], missingPackages),
+        reason: skipReason(className, unresolvableImports, missingPackages),
       });
       continue;
     }
 
-    const fileName = `${identifierToFlutterFlowFileStem(className)}.dart`;
     sources.push({
-      className,
-      fileName,
-      // FlutterFlow files a custom class under lib/custom_code/, and a relative
-      // import inside it resolves from there - so the class is placed there
-      // too, and its imports resolve exactly as they will in the project.
-      libPath: `custom_code/${fileName}`,
+      fileName: `${identifierToFlutterFlowFileStem(className)}.dart`,
       content,
     });
   }
 
-  if (sources.length === 0) {
-    return { manifest, sources: [], context: [], skipped };
-  }
-
-  const bag = collectVerificationContext(
-    sources.map(({ libPath, content }) => ({ libPath, content })),
-    projectDartFiles,
-  );
-
-  if (bag.exceeded) {
-    for (const source of sources) {
-      skipped.push({
-        className: source.className,
-        reason: `${source.className} was not compiled before deploying: the FlutterFlow files it imports pull in more of the project than the check can reproduce.`,
-      });
-    }
-    return { manifest, sources: [], context: [], skipped };
-  }
-
-  // A class whose scaffolding the export does not contain cannot be compiled,
-  // so it is reported rather than deployed unchecked.
-  const missingByClass = new Map();
-  for (const source of sources) {
-    const missing = collectVerificationContext(
-      [{ libPath: source.libPath, content: source.content }],
-      projectDartFiles,
-    ).missing;
-    if (missing.length > 0) missingByClass.set(source.className, missing);
-  }
-
-  const compilable = sources.filter(
-    (source) => !missingByClass.has(source.className),
-  );
-  for (const [className, missing] of missingByClass) {
-    skipped.push({ className, reason: skipReason(className, missing, []) });
-  }
-
-  return {
-    manifest,
-    sources: compilable.map(({ fileName, content }) => ({ fileName, content })),
-    context: bag.files,
-    skipped,
-  };
+  return { manifest, sources, skipped };
 }
