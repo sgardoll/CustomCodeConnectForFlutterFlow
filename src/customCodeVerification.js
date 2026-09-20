@@ -3,33 +3,40 @@ import {
   extractPackageImports,
 } from "./dartPackageImports.js";
 import {
-  formatConstraint,
+  parseDependencyBlock,
   parseEnvironmentConstraints,
   parseExistingDependencies,
 } from "./pubspecSync.js";
 import { identifierToFlutterFlowFileStem } from "./flutterFlowArtifactValidation.js";
-
-// Throwaway package name for the scratch package the deploy runner compiles
-// the generated classes in. Never reaches FlutterFlow.
-const ANALYSIS_PACKAGE_NAME = "ccc_custom_code_analysis";
 
 // The Dart SDK range to analyse against when the project's pubspec.yaml does
 // not declare one. FlutterFlow always writes an `environment:` block, so this
 // only guards a malformed manifest.
 const FALLBACK_SDK_CONSTRAINT = ">=3.0.0 <4.0.0";
 
-// Packages the Flutter SDK supplies. They are declared as `sdk: flutter`
-// rather than with a pub version, so they never need a version lookup.
+// Packages the Flutter SDK supplies, declared as `sdk: flutter` rather than
+// with a pub version. This mirrors the allowlist the deploy runner enforces,
+// so anything named here can be reproduced in the scratch package.
 const SDK_DEPENDENCIES = new Set([
   "flutter",
   "flutter_test",
+  "flutter_driver",
   "flutter_localizations",
+  "integration_test",
 ]);
+
+// Why the verification manifest is sent as structured data rather than as
+// pubspec.yaml text: the deploy runner writes the manifest to disk and runs
+// `flutter pub get` against it, on a publicly reachable route. A caller-supplied
+// YAML document can name a git or path source and make the runner fetch from an
+// attacker-chosen host. Sending names and version constraints instead means the
+// runner can build the document itself and emit nothing but `name: constraint`
+// lines, so no source directive can be expressed at all.
 
 // Constraints are read back out of the project's pubspec.yaml exactly as
 // written, quotes included - `sdk: '>=3.0.0 <4.0.0'` yields `'>=3.0.0 <4.0.0'`.
-// Re-quoting that would emit `'''>=3.0.0 <4.0.0'''`, which is not the same
-// constraint, so the quoting is undone before formatConstraint reapplies it.
+// The runner re-quotes whatever it is given, so the quoting is undone here to
+// avoid emitting `'''>=3.0.0 <4.0.0'''`.
 function unquoteConstraint(constraint) {
   const text = String(constraint || "").trim();
   const quote = text[0];
@@ -61,45 +68,76 @@ export function classifyCustomClassImports(code = "") {
   };
 }
 
+function collect(declared, into, sdkPackages) {
+  const unrepresentable = [];
+  for (const [name, info] of declared) {
+    if (SDK_DEPENDENCIES.has(name) && !info.isScalar) {
+      sdkPackages.add(name);
+      continue;
+    }
+    if (!info.isScalar) {
+      // `git:`, `path:`, a nested `hosted:` block - none can be reproduced
+      // outside the project, and none can be expressed in the manifest.
+      unrepresentable.push(name);
+      continue;
+    }
+    into[name] = unquoteConstraint(info.constraint);
+  }
+  return unrepresentable;
+}
+
 /**
- * Builds the pubspec.yaml for the scratch package the classes are compiled in.
+ * Builds the dependency manifest the deploy runner compiles against.
  *
- * Every scalar dependency the project declares is carried over at the
- * project's own constraint, so the analyzer sees the same package versions the
- * built app will. A dependency declared in block form (`sdk:`, `git:`,
- * `path:`) cannot be reproduced outside the project, so it is left out and the
- * classes that import it are reported as unverifiable rather than analysed
- * against a version that is not the project's.
+ * Carries the project's own version constraints, its `dependency_overrides`,
+ * and its Dart SDK constraint, so the scratch package resolves the same
+ * versions the built app will. Dropping overrides in particular would let the
+ * scratch `pub get` resolve a different version than the real project, which
+ * makes the gate approve code the project rejects - or reject code it accepts.
  *
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{yaml: string, availablePackages: Set<string>}}
+ * @returns {{
+ *   sdkConstraint: string,
+ *   dependencies: Object<string, string>,
+ *   overrides: Object<string, string>,
+ *   sdkPackages: string[],
+ *   availablePackages: Set<string>,
+ *   unrepresentable: string[],
+ * }}
  */
-export function buildAnalysisPubspec(projectPubspecYaml) {
-  const declared = parseExistingDependencies(projectPubspecYaml);
+export function buildAnalysisManifest(projectPubspecYaml) {
+  const sdkPackages = new Set();
+  const dependencies = {};
+  const overrides = {};
+
+  const unrepresentable = collect(
+    parseExistingDependencies(projectPubspecYaml),
+    dependencies,
+    sdkPackages,
+  );
+  unrepresentable.push(
+    ...collect(
+      parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
+      overrides,
+      sdkPackages,
+    ),
+  );
+
+  const availablePackages = new Set([
+    ...Object.keys(dependencies),
+    ...sdkPackages,
+  ]);
+
   const { sdk } = parseEnvironmentConstraints(projectPubspecYaml);
-  const availablePackages = new Set(SDK_DEPENDENCIES);
 
-  const lines = [
-    `name: ${ANALYSIS_PACKAGE_NAME}`,
-    "description: Throwaway package used to compile generated custom code.",
-    "publish_to: none",
-    "version: 0.0.1",
-    "",
-    "environment:",
-    `  sdk: ${formatConstraint(unquoteConstraint(sdk) || FALLBACK_SDK_CONSTRAINT)}`,
-    "",
-    "dependencies:",
-    "  flutter:",
-    "    sdk: flutter",
-  ];
-
-  for (const [name, info] of declared) {
-    if (SDK_DEPENDENCIES.has(name) || !info.isScalar) continue;
-    lines.push(`  ${name}: ${formatConstraint(unquoteConstraint(info.constraint))}`);
-    availablePackages.add(name);
-  }
-
-  return { yaml: `${lines.join("\n")}\n`, availablePackages };
+  return {
+    sdkConstraint: unquoteConstraint(sdk) || FALLBACK_SDK_CONSTRAINT,
+    dependencies,
+    overrides,
+    sdkPackages: [...sdkPackages].sort(),
+    availablePackages,
+    unrepresentable,
+  };
 }
 
 function skipReason(className, unresolvableImports, missingPackages) {
@@ -118,17 +156,41 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * FlutterFlow. Classes that depend on the generated app are reported in
  * `skipped` so the deploy can say plainly what it did not verify.
  *
+ * When the project declares a dependency that cannot be reproduced outside it
+ * (a `git:` or `path:` source), nothing is verified: the scratch package would
+ * resolve packages differently from the project, and a check against different
+ * versions is worse than no check, because it reports a result that does not
+ * describe the code that actually ships.
+ *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{pubspec: string, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
-  const { yaml, availablePackages } = buildAnalysisPubspec(projectPubspecYaml);
+  const {
+    sdkConstraint,
+    dependencies,
+    overrides,
+    sdkPackages,
+    availablePackages,
+    unrepresentable,
+  } = buildAnalysisManifest(projectPubspecYaml);
+
+  const manifest = { sdkConstraint, dependencies, overrides, sdkPackages };
   const sources = [];
   const skipped = [];
 
   for (const entry of classes) {
     const { className, content } = entry;
+
+    if (unrepresentable.length > 0) {
+      skipped.push({
+        className,
+        reason: `${className} was not compiled before deploying: your project declares ${unrepresentable.join(", ")} from a source that cannot be reproduced outside the project, so package resolution could not be matched exactly.`,
+      });
+      continue;
+    }
+
     const { unresolvableImports } = classifyCustomClassImports(content);
     const missingPackages = extractPackageImports(content).filter(
       (name) => !availablePackages.has(name),
@@ -148,5 +210,5 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     });
   }
 
-  return { pubspec: yaml, sources, skipped };
+  return { manifest, sources, skipped };
 }

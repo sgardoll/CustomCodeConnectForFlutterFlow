@@ -93,6 +93,66 @@ test("Cloud Run compiles generated custom code before pushing it", () => {
   );
 });
 
+test("Cloud Run never reports an incomplete analyzer run as verified", () => {
+  // `flutter analyze` exits non-zero both when it reports errors and when it
+  // cannot run, so only a clean exit is a clean bill of health. Treating any
+  // other non-zero exit as verified would let a deploy claim the code had been
+  // compiled when nothing compiled it.
+  assert.match(
+    runnerSource,
+    /if \(errors\.isEmpty && analyze\.exitCode != 0\)/,
+    "a non-zero analyzer exit with nothing parsed must be treated as unverified",
+  );
+  assert.match(
+    runnerSource,
+    /Only a clean exit is treated as a clean bill of health/,
+  );
+});
+
+test("Cloud Run builds the analysis manifest itself rather than running caller-supplied YAML", () => {
+  // The runner writes this manifest and runs `pub get` against it on a public
+  // route, so a caller-supplied document could name a git or path source and
+  // redirect the fetch. Names and constraints only, validated, emitted here.
+  assert.match(
+    runnerSource,
+    /String toPubspec\(\)/,
+    "the manifest must be constructed server-side",
+  );
+  assert.doesNotMatch(
+    runnerSource,
+    /_stringField\(value, 'pubspec'/,
+    "no raw pubspec text may be accepted from the caller",
+  );
+  assert.match(
+    runnerSource,
+    /_constraintPattern = RegExp/,
+    "constraints must be restricted to a pub version range charset",
+  );
+  assert.match(
+    runnerSource,
+    /_packageNamePattern = RegExp/,
+    "package names must match the whole string, so no YAML structure can hide in a key",
+  );
+  assert.match(
+    runnerSource,
+    /dependency_overrides:/,
+    "the project's overrides must be reproduced, or resolution differs",
+  );
+  // The previous wire format sent pubspec text. It must degrade to
+  // "unavailable" rather than being executed, so a cached client neither keeps
+  // the vulnerability open nor has its deploys rejected mid-rollout.
+  assert.match(
+    runnerSource,
+    /value\.containsKey\('pubspec'\) && !value\.containsKey\('dependencies'\)/,
+    "a legacy manifest must be recognized and skipped, not executed",
+  );
+  assert.match(
+    runnerSource,
+    /_VerificationRequest\.unavailable\(/,
+    "the legacy path must report itself unavailable",
+  );
+});
+
 test("Cloud Run deployment reserves enough memory and serializes provisioning", () => {
   assert.match(deployScript, /MEMORY="\$\{MEMORY:-4Gi\}"/);
   assert.match(deployScript, /CONCURRENCY="\$\{CONCURRENCY:-1\}"/);

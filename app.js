@@ -2120,7 +2120,16 @@ async function provisionMissingCodeFiles(
   // before it writes anything, so an API the generated code invented - a named
   // argument the package never declared - stops the deploy instead of landing
   // in the project and breaking every widget that imports the class.
-  const verification = planCustomCodeVerification(missingCodeFiles, pubspecYaml);
+  const verificationPlan = planCustomCodeVerification(
+    missingCodeFiles,
+    pubspecYaml,
+  );
+  // Names and constraints, not pubspec.yaml text: the runner builds the
+  // manifest itself, so a caller cannot point `pub get` at a git or path source.
+  const verification = {
+    ...verificationPlan.manifest,
+    sources: verificationPlan.sources,
+  };
 
   console.log(
     `Provisioning ${missingCodeFiles.length} new FlutterFlow custom code file(s) before sync.`,
@@ -2158,7 +2167,7 @@ async function provisionMissingCodeFiles(
   // runner could not build in isolation still deploys, but silently calling it
   // verified would be the same false assurance this check exists to end.
   const unverified = [
-    ...verification.skipped.map((entry) => entry.reason),
+    ...verificationPlan.skipped.map((entry) => entry.reason),
     ...(result.verificationSkipped ? [result.verificationSkipped] : []),
   ];
   unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));

@@ -4,6 +4,30 @@ import 'dart:io';
 
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
+const maxDependenciesPerRequest = 200;
+
+const analysisPackageName = 'ccc_custom_code_analysis';
+const defaultSdkConstraint = '>=3.0.0 <4.0.0';
+
+// Pub package names are lower-case identifiers. Matching the whole string is
+// what keeps a caller from smuggling YAML structure in through a key.
+final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
+
+// A pub version constraint, and nothing else. The allowed characters exclude
+// `:`, `#`, `{`, `}`, `/` and whitespace beyond single spaces, so `git:`,
+// `path:`, a nested `hosted:` mapping, and comment injection are all
+// unrepresentable rather than merely discouraged.
+final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
+
+// The packages the Flutter SDK supplies, i.e. the only valid `sdk: flutter`
+// entries besides `flutter` itself.
+const allowedSdkPackages = <String>{
+  'flutter',
+  'flutter_test',
+  'flutter_driver',
+  'flutter_localizations',
+  'integration_test',
+};
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -423,7 +447,20 @@ _VerificationRequest? _normalizeVerification(Object? value) {
     throw const FormatException('verification must be an object.');
   }
 
-  final pubspec = _stringField(value, 'pubspec', maxLength: 100000);
+  // Clients deployed before the manifest became structured sent pubspec.yaml
+  // text. Running it would reintroduce the caller-controlled-source problem, so
+  // it is never executed - but rejecting the request outright would break every
+  // deploy from a still-cached client during the rollout window. The deploy
+  // goes ahead with the check reported as unavailable, which is exactly what
+  // the deploy did before this feature existed, and the caller is told.
+  if (value.containsKey('pubspec') && !value.containsKey('dependencies')) {
+    return _VerificationRequest.unavailable(
+      'The compile check was skipped: this client sent a package manifest in '
+      'the older format, which the runner no longer executes. Reload the app '
+      'to pick up the current version.',
+    );
+  }
+
   final rawSources = value['sources'];
   if (rawSources is! List) {
     throw const FormatException('verification.sources must be an array.');
@@ -449,7 +486,98 @@ _VerificationRequest? _normalizeVerification(Object? value) {
     );
   }).toList();
 
-  return _VerificationRequest(pubspec: pubspec, sources: sources);
+  return _VerificationRequest(
+    sdkConstraint: _validateConstraint(
+      'verification.sdkConstraint',
+      _stringField(value, 'sdkConstraint', maxLength: 200, required: false),
+      fallback: defaultSdkConstraint,
+    ),
+    dependencies: _normalizeDependencyMap(value['dependencies'], 'dependencies'),
+    overrides: _normalizeDependencyMap(
+      value['dependencyOverrides'],
+      'dependencyOverrides',
+    ),
+    sdkPackages: _normalizeSdkPackages(value['sdkPackages']),
+    sources: sources,
+  );
+}
+
+/// Reads a `{name: version-constraint}` map, rejecting anything that could
+/// express more than a published package at a version.
+///
+/// This is the whole reason the manifest is sent as data rather than as
+/// pubspec.yaml text. The runner writes this manifest to disk and runs
+/// `flutter pub get` against it on a publicly reachable route, so a
+/// caller-supplied document could otherwise name a `git:` or `path:` source and
+/// have the runner fetch from a host of the caller's choosing. Only bare
+/// `name: version` entries can be expressed here, and the runner emits those
+/// lines itself, so no source directive can survive into the manifest.
+Map<String, String> _normalizeDependencyMap(Object? value, String field) {
+  if (value == null) return const <String, String>{};
+  if (value is! Map) {
+    throw FormatException('verification.$field must be an object.');
+  }
+  if (value.length > maxDependenciesPerRequest) {
+    throw FormatException('Too many entries in verification.$field.');
+  }
+
+  final result = <String, String>{};
+  for (final entry in value.entries) {
+    final name = '${entry.key}';
+    if (!_packageNamePattern.hasMatch(name)) {
+      throw FormatException('Invalid package name in verification.$field: $name.');
+    }
+    final constraint = '${entry.value}'.trim();
+    if (!_constraintPattern.hasMatch(constraint)) {
+      throw FormatException(
+        'Invalid version constraint for $name in verification.$field: $constraint.',
+      );
+    }
+    result[name] = constraint;
+  }
+  return result;
+}
+
+/// Reads the SDK-supplied package names. Restricted to the packages the Flutter
+/// SDK actually provides, so a caller cannot request an arbitrary `sdk:` value.
+List<String> _normalizeSdkPackages(Object? value) {
+  if (value == null) return const <String>[];
+  if (value is! List) {
+    throw const FormatException('verification.sdkPackages must be an array.');
+  }
+
+  final result = <String>[];
+  for (final raw in value) {
+    final name = '$raw';
+    if (!allowedSdkPackages.contains(name)) {
+      throw FormatException('Unsupported SDK package: $name.');
+    }
+    if (!result.contains(name)) result.add(name);
+  }
+  return result;
+}
+
+String _validateConstraint(
+  String field,
+  String value, {
+  required String fallback,
+}) {
+  final constraint = value.trim();
+  if (constraint.isEmpty) return fallback;
+  if (!_constraintPattern.hasMatch(constraint)) {
+    throw FormatException('Invalid $field: $constraint.');
+  }
+  return constraint;
+}
+
+/// Quotes a value for YAML when a plain scalar would be misread.
+///
+/// `>=1.0.0 <2.0.0` is an ordinary pub range, but it opens with an indicator
+/// character and YAML would reject it as a plain scalar - the same reason
+/// pubspecSync's `formatConstraint` quotes on the client side.
+String _yamlScalar(String value) {
+  if (RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+-]*$').hasMatch(value)) return value;
+  return "'${value.replaceAll("'", "''")}'";
 }
 
 List<CustomClassEntry> _normalizeClasses(Object? value) {
@@ -498,7 +626,11 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   _VerificationRequest? verification,
   _ResponseChannel channel,
 ) async {
-  if (verification == null || verification.sources.isEmpty) return null;
+  if (verification == null) return null;
+  if (verification.unavailableReason != null) {
+    return _AnalysisOutcome.skipped(verification.unavailableReason!);
+  }
+  if (verification.sources.isEmpty) return null;
 
   channel.phase('verifying', 'Compiling your custom code...');
 
@@ -510,7 +642,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   await libDir.create(recursive: true);
 
   await File('${packageDir.path}/pubspec.yaml')
-      .writeAsString(verification.pubspec);
+      .writeAsString(verification.toPubspec());
   for (final source in verification.sources) {
     await File('${libDir.path}/${source.fileName}')
         .writeAsString(source.content);
@@ -537,10 +669,20 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   );
 
   final errors = _analyzerErrors(analyze.output);
-  if (errors.isEmpty && analyze.exitCode != 0 && analyze.timedOut) {
+
+  // `flutter analyze` exits non-zero both when it reports errors and when it
+  // fails to run at all - a missing toolchain, an unresolvable manifest, a
+  // crash. A non-zero exit with nothing parsed therefore means the check did
+  // not complete, and reporting that as verified would be a false assurance:
+  // worse than no gate, because the deploy would claim the code had been
+  // compiled. Only a clean exit is treated as a clean bill of health.
+  if (errors.isEmpty && analyze.exitCode != 0) {
     return _AnalysisOutcome.skipped(
-      'Compiling your custom code timed out, so it was not verified before '
-      'deploying.',
+      analyze.timedOut
+          ? 'Compiling your custom code timed out, so it was not verified '
+              'before deploying.'
+          : 'The Dart analyzer did not complete, so your custom code was not '
+              'verified before deploying: ${_trimOutput(analyze.output)}',
     );
   }
 
@@ -801,10 +943,76 @@ final class _VerificationSource {
 }
 
 final class _VerificationRequest {
-  const _VerificationRequest({required this.pubspec, required this.sources});
+  const _VerificationRequest({
+    required this.sdkConstraint,
+    required this.dependencies,
+    required this.overrides,
+    required this.sdkPackages,
+    required this.sources,
+  }) : unavailableReason = null;
 
-  final String pubspec;
+  /// A request the runner will not compile, carrying why.
+  const _VerificationRequest.unavailable(this.unavailableReason)
+      : sdkConstraint = '',
+        dependencies = const <String, String>{},
+        overrides = const <String, String>{},
+        sdkPackages = const <String>[],
+        sources = const <_VerificationSource>[];
+
+  /// Why this request cannot be compiled, or null when it can.
+  final String? unavailableReason;
+
+  final String sdkConstraint;
+  final Map<String, String> dependencies;
+  final Map<String, String> overrides;
+  final List<String> sdkPackages;
   final List<_VerificationSource> sources;
+
+  /// Builds the pubspec the scratch package is compiled from.
+  ///
+  /// Emitted here rather than accepted from the caller: every line below is
+  /// either a fixed literal or a value already matched against
+  /// `_packageNamePattern` / `_constraintPattern`, so nothing a caller sends
+  /// can introduce a new YAML key, a nested mapping, or a comment.
+  String toPubspec() {
+    final lines = <String>[
+      'name: $analysisPackageName',
+      'description: Throwaway package used to compile generated custom code.',
+      'publish_to: none',
+      'version: 0.0.1',
+      '',
+      'environment:',
+      '  sdk: ${_yamlScalar(sdkConstraint)}',
+      '',
+      'dependencies:',
+      '  flutter:',
+      '    sdk: flutter',
+    ];
+
+    // `flutter` is always present above; any other SDK package the project
+    // declares is reproduced the same way.
+    for (final name in sdkPackages) {
+      if (name == 'flutter') continue;
+      lines
+        ..add('  $name:')
+        ..add('    sdk: flutter');
+    }
+
+    for (final name in dependencies.keys.toList()..sort()) {
+      lines.add('  $name: ${_yamlScalar(dependencies[name]!)}');
+    }
+
+    if (overrides.isNotEmpty) {
+      lines
+        ..add('')
+        ..add('dependency_overrides:');
+      for (final name in overrides.keys.toList()..sort()) {
+        lines.add('  $name: ${_yamlScalar(overrides[name]!)}');
+      }
+    }
+
+    return '${lines.join('\n')}\n';
+  }
 }
 
 final class _AnalysisOutcome {

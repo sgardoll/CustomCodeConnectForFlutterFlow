@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildAnalysisPubspec,
+  buildAnalysisManifest,
   classifyCustomClassImports,
   planCustomCodeVerification,
 } from "./customCodeVerification.js";
@@ -15,11 +15,28 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   background_downloader: ^8.5.0
   intl: 0.20.2
   private_thing:
     git:
       url: https://example.invalid/private.git
+
+dependency_overrides:
+  intl: 0.20.1
+`;
+
+const REPRESENTABLE_PUBSPEC = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  background_downloader: ^8.5.0
+  intl: 0.20.2
 `;
 
 const SELF_CONTAINED = `import 'package:flutter/foundation.dart';
@@ -62,28 +79,63 @@ class Plain {}
   assert.equal(classifyCustomClassImports(code).selfContained, true);
 });
 
-test("analysis pubspec carries the project's own package versions", () => {
-  const { yaml, availablePackages } = buildAnalysisPubspec(PROJECT_PUBSPEC);
+test("the manifest carries the project's own constraints and SDK range", () => {
+  const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
 
-  assert.match(yaml, /^name: ccc_custom_code_analysis$/m);
-  assert.match(yaml, /^ {2}sdk: '>=3\.0\.0 <4\.0\.0'$/m);
-  assert.match(yaml, /^ {2}flutter:\n {4}sdk: flutter$/m);
-  assert.match(yaml, /^ {2}background_downloader: \^8\.5\.0$/m);
-  assert.match(yaml, /^ {2}intl: 0\.20\.2$/m);
-  assert.ok(availablePackages.has("background_downloader"));
+  assert.equal(manifest.sdkConstraint, ">=3.0.0 <4.0.0");
+  assert.equal(manifest.dependencies.background_downloader, "^8.5.0");
+  assert.equal(manifest.dependencies.intl, "0.20.2");
+  assert.ok(manifest.availablePackages.has("background_downloader"));
 });
 
-test("a dependency declared in block form is left out rather than guessed at", () => {
-  const { yaml, availablePackages } = buildAnalysisPubspec(PROJECT_PUBSPEC);
+test("the manifest carries dependency_overrides, which change resolved APIs", () => {
+  const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
 
-  assert.doesNotMatch(yaml, /private_thing/);
-  assert.equal(availablePackages.has("private_thing"), false);
+  assert.deepEqual(manifest.overrides, { intl: "0.20.1" });
+});
+
+test("the manifest is structured data, never pubspec.yaml text", () => {
+  const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
+
+  // The runner builds the document, so a caller cannot express a git or path
+  // source and point `pub get` at a host of its choosing.
+  assert.equal("pubspec" in manifest, false);
+  assert.equal(typeof manifest.dependencies, "object");
+});
+
+test("an SDK package declared in block form is reproduced, not called unrepresentable", () => {
+  const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
+
+  assert.deepEqual(manifest.sdkPackages, ["flutter", "flutter_localizations"]);
+  assert.equal(
+    manifest.unrepresentable.includes("flutter_localizations"),
+    false,
+  );
+});
+
+test("a dependency from a git or path source is reported unrepresentable", () => {
+  const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
+
+  assert.deepEqual(manifest.unrepresentable, ["private_thing"]);
+});
+
+test("nothing is verified when package resolution cannot be matched exactly", () => {
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    PROJECT_PUBSPEC,
+  );
+
+  // Compiling against different versions than the project resolves would report
+  // a result that does not describe the code that ships.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /private_thing/);
 });
 
 test("plans a real compile for a class whose imports all resolve", () => {
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
-    PROJECT_PUBSPEC,
+    REPRESENTABLE_PUBSPEC,
   );
 
   assert.deepEqual(plan.sources, [
@@ -93,45 +145,48 @@ test("plans a real compile for a class whose imports all resolve", () => {
     },
   ]);
   assert.deepEqual(plan.skipped, []);
+  assert.deepEqual(plan.manifest.overrides, {});
 });
 
 test("names the file the way FlutterFlow would, an underscore before every capital", () => {
   const plan = planCustomCodeVerification(
     [{ className: "QAService", content: "class QAService {}" }],
-    PROJECT_PUBSPEC,
+    "dependencies:\n  flutter:\n    sdk: flutter\n",
   );
 
   assert.equal(plan.sources[0].fileName, "q_a_service.dart");
 });
 
 test("reports a scaffolding-dependent class as unverified instead of compiling it", () => {
-  const content = `import '/backend/schema/structs/index.dart';
-
-class ModelBundle {}
-`;
   const plan = planCustomCodeVerification(
-    [{ className: "ModelBundle", content }],
-    PROJECT_PUBSPEC,
+    [
+      {
+        className: "ModelBundle",
+        content:
+          "import '/backend/schema/structs/index.dart';\nclass ModelBundle {}",
+      },
+    ],
+    "dependencies:\n  flutter:\n    sdk: flutter\n",
   );
 
   assert.deepEqual(plan.sources, []);
   assert.equal(plan.skipped.length, 1);
-  assert.match(plan.skipped[0].reason, /ModelBundle/);
   assert.match(plan.skipped[0].reason, /backend\/schema\/structs\/index\.dart/);
 });
 
-test("reports a class needing a package the project pins in block form", () => {
-  const content = `import 'package:private_thing/private_thing.dart';
-
-class UsesPrivate {}
-`;
+test("reports a class needing a package the project does not declare", () => {
   const plan = planCustomCodeVerification(
-    [{ className: "UsesPrivate", content }],
-    PROJECT_PUBSPEC,
+    [
+      {
+        className: "UsesMissing",
+        content: "import 'package:nope/nope.dart';\nclass UsesMissing {}",
+      },
+    ],
+    "dependencies:\n  flutter:\n    sdk: flutter\n",
   );
 
   assert.deepEqual(plan.sources, []);
-  assert.match(plan.skipped[0].reason, /private_thing/);
+  assert.match(plan.skipped[0].reason, /nope/);
 });
 
 test("compiles the verifiable classes even when a sibling cannot be verified", () => {
@@ -144,7 +199,7 @@ test("compiles the verifiable classes even when a sibling cannot be verified", (
           "import '/backend/schema/structs/index.dart';\nclass ModelBundle {}",
       },
     ],
-    PROJECT_PUBSPEC,
+    REPRESENTABLE_PUBSPEC,
   );
 
   assert.deepEqual(
