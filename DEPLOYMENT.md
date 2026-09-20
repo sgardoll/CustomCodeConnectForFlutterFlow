@@ -1,5 +1,22 @@
 # Deployment
 
+## Deployment targets
+
+There are four surfaces. Two are automated, one goes out over the BuildShip
+MCP, and one can only be changed by hand. A change is not deployed until every
+surface it touches has been updated — pushing the web app does not deploy a
+BuildShip prompt, and vice versa.
+
+| Target | Updated by | Automated |
+| --- | --- | --- |
+| Web app (`dist/`) | `python3 scripts/deploy_ftp.py` | yes |
+| FlutterFlow custom-class runner (`cloud-run/ffai-runner`) | `./scripts/deploy_cloud_run_ffai.sh` | yes |
+| BuildShip workflow `service-runpipeline-THIN` | BuildShip MCP, against the workflow graph in the BuildShip repo | via MCP |
+| BuildShip step system prompts (`ARCHITECT_SYSTEM`, `GENERATOR_SYSTEM`, `REVIEW_SYSTEM`) | **pasted into the BuildShip editor by hand** | **no** |
+
+The last row is the one that gets missed. See "BuildShip workflow and step
+prompts" below.
+
 ## Web FTP target
 
 - Host: `ftp.connectio.com.au`
@@ -112,6 +129,56 @@ Deploy the runner with:
 ```bash
 PROJECT_ID=low-code-connect REGION=us-west1 ./scripts/deploy_cloud_run_ffai.sh
 ```
+
+## BuildShip workflow and step prompts
+
+The generation pipeline (Architect → Generator → Review) runs on BuildShip, and
+it is a second deployment target with two separately-updated parts.
+
+**Endpoint:** `https://4tgke4.buildship.run/service/runpipeline-image`
+
+**The workflow** `service-runpipeline-THIN` is the graph — nodes, triggers,
+input/output schema. It is version-controlled in the BuildShip repo at
+`workflows/service-runpipeline-THIN` (a sibling checkout, not this repository)
+and pushed with the BuildShip MCP. `npm run verify:buildship-mcp` checks that
+the MCP server exposes the tools that does need.
+
+**The step prompts are not part of that push.** Each step's system prompt is a
+node *input* on the workflow, and updating the workflow does not update it.
+They must be pasted into the BuildShip editor by hand, and that paste **is** the
+deploy:
+
+| Step (editor label) | Node name | Node key | Repo mirror |
+| --- | --- | --- | --- |
+| Architect | `ARCHITECT_SYSTEM` | `a4bb0c85-effe-4339-b732-c270e129db59` | `BUILDSHIP_ARCHITECT_SYSTEM_PROMPT_UPDATED.txt` |
+| Generator | `GENERATOR_SYSTEM` | `54b162ac-fa03-4614-96f0-5b831162182c` | `BUILDSHIP_GENERATOR_SYSTEM_PROMPT_UPDATED.txt` |
+| Review | `REVIEW_SYSTEM` | `d32928b7-5ec4-46f6-9eff-25ea281e4ed2` | `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` |
+
+The prompt text also appears in the workflow's `schema.json` under
+`nodeValues`, but that field is owned by the BuildShip editor and is rewritten
+on editor saves, so editing it in the repo is not a dependable way to deploy a
+prompt. The editor is authoritative.
+
+**The mirrors drift, and two of them are not tracked.** `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt`
+and `REVIEW_SCHEMA.txt` are committed. The architect and generator mirrors are
+gitignored, so for those two steps the deployed prompt has no source of truth
+in this repository — the BuildShip editor is it. Compare a mirror against the
+live workflow before trusting it:
+
+```bash
+python3 - <<'PY'
+import json
+nv = json.load(open("/path/to/buildship/workflows/service-runpipeline-THIN/schema.json"))["nodeValues"]
+print(nv["d32928b7-5ec4-46f6-9eff-25ea281e4ed2"]["value"])
+PY
+```
+
+**Why it matters.** Code-level validation of generated artifacts lives in the
+`REVIEW_SYSTEM` prompt, not in `app.js` — widget parameters, return types, file
+names, forbidden patterns and imports are all enforced there. A prompt change
+that never reaches BuildShip therefore leaves the client and the pipeline
+disagreeing about what is acceptable, with nothing in this repository to signal
+it.
 
 ## pubspec.yaml dependency sync
 

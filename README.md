@@ -44,6 +44,15 @@ The pipeline knows the difference between a Custom Function, Custom Action, Cust
 
 Connect your FlutterFlow API key and skip the copy-paste workflow entirely. The tool validates the code, extracts dependencies for `pubspec.yaml`, packages everything into a zip, and pushes to your project. Production and staging endpoints supported.
 
+## Deploying This Project
+
+Four surfaces — three automated, one manual. Full detail in [DEPLOYMENT.md](DEPLOYMENT.md).
+
+- **Web app** — `python3 scripts/deploy_ftp.py` mirrors `dist/` to the FTP root.
+- **FlutterFlow custom-class runner** — `./scripts/deploy_cloud_run_ffai.sh` builds and ships `cloud-run/ffai-runner` to Cloud Run.
+- **BuildShip workflow** `service-runpipeline-THIN` — pushed over the BuildShip MCP, against the workflow graph in the BuildShip repo.
+- **BuildShip step system prompts** (Architect, Generator, Review) — **manual**. They are node inputs, not workflow code, so a workflow push does not carry them; they are pasted into the BuildShip editor, and that paste is the deploy.
+
 ## Multi-Model
 
 Gemini (primary), Claude, GPT, OpenRouter. Switch anytime. Each gets prompts tuned to its strengths. Gemini Flash as automatic fallback if the primary fails.
