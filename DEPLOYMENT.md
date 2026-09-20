@@ -52,6 +52,26 @@ That class file is then excluded from the extension-style sync; the remaining
 bundle files and dependency changes still use `syncCustomCodeChanges`. Existing
 code files that appear in project exports use the normal sync path directly.
 
+FlutterFlow stores a Code File's identifier with its extension
+(`groq_model_registry.dart`) and builds `lib/custom_code/<identifier>` from it
+verbatim, but `addCustomClass` names the file `snake_case(ClassName)` with no
+extension. A class pushed that way emits a file no `import` can resolve, so
+every custom widget or action importing it fails to compile. The generated DSL
+therefore appends `.dart` after each upsert, leaving a name that already ends
+in `.dart` untouched so a re-deploy is a no-op and an editor rename survives.
+
+Before writing anything to the project the runner compiles the generated
+classes in a throwaway Flutter package built from the project's own dependency
+versions, and refuses the deploy (HTTP 422) if `flutter analyze` reports an
+error. The FlutterFlow DSL only checks that code is formattable, which accepts
+a call to a named argument the package never declared. This needs the Flutter
+SDK in the image, so the runner takes longer to build and to cold-start, and
+the deploy script raises Cloud Run's request timeout to 900s. A class that
+imports FlutterFlow scaffolding (`/backend/schema/structs/index.dart`) cannot
+be compiled before the app exists; it still deploys and is reported in
+`verificationSkipped`, which the web app shows as "Not verified before
+deploying".
+
 The runner streams its progress. When the request body sets `"stream": true`
 the response is NDJSON — one `{"event":"phase"|"log"|"result"}` object per
 line — so the deploy overlay can report the step the runner is really on and

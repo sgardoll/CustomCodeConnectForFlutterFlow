@@ -147,6 +147,49 @@ export function parseExistingDependencies(yamlContent) {
  * @param {string} yamlContent - Raw pubspec.yaml content
  * @returns {string[]} Declared dependency names, in file order
  */
+/**
+ * Reads a top-level dependency block by name, e.g. `dependency_overrides`.
+ *
+ * Same shape as parseExistingDependencies, which is hard-wired to
+ * `dependencies:`. Anything reproducing how a project actually resolves
+ * packages has to carry overrides too: an override pinning a different version
+ * changes the API the code is compiled against, so a manifest that drops it
+ * can approve code the real project rejects (or the reverse).
+ *
+ * @param {string} yamlContent - Raw pubspec.yaml content
+ * @param {string} blockName - Top-level key, e.g. "dependency_overrides"
+ * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean}>}
+ */
+export function parseDependencyBlock(yamlContent, blockName) {
+  const lines = String(yamlContent || "").split("\n");
+  const headerPattern = new RegExp(
+    `^${blockName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:\\s*(?:#.*)?$`,
+  );
+  const block = findBlock(lines, headerPattern);
+  const declared = new Map();
+  if (!block) return declared;
+
+  for (let i = block.headerIndex + 1; i < block.endIndex; i += 1) {
+    const line = lines[i];
+    if (isBlankOrComment(line)) continue;
+    if (indentOf(line) !== block.childIndent.length) continue;
+    const trimmed = line.trim();
+    const name = parseDependencyName(trimmed);
+    if (!name) continue;
+
+    const { value, comment } = splitValueAndComment(
+      trimmed.slice(trimmed.indexOf(":") + 1),
+    );
+    declared.set(name, {
+      constraint: value,
+      comment,
+      lineIndex: i,
+      isScalar: value !== "",
+    });
+  }
+  return declared;
+}
+
 export function parseExistingDependencyNames(yamlContent) {
   return [...parseExistingDependencies(yamlContent).keys()];
 }
@@ -183,7 +226,7 @@ export function parseEnvironmentConstraints(yamlContent) {
 // YAML would misread a plain scalar that opens with an indicator character, and
 // `>=1.0.0 <2.0.0` — an ordinary pub range constraint — is a parse error rather
 // than a string. Quote anything that isn't unambiguously plain.
-function formatConstraint(constraint) {
+export function formatConstraint(constraint) {
   if (/^[A-Za-z0-9^~][A-Za-z0-9^~+._-]*$/.test(constraint)) return constraint;
   return `'${constraint.replace(/'/g, "''")}'`;
 }

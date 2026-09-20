@@ -4,6 +4,36 @@ import 'dart:io';
 
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
+const maxDependenciesPerRequest = 200;
+const maxContextFiles = 300;
+const maxContextBytes = 4000000;
+
+const analysisPackageName = 'ccc_custom_code_analysis';
+const defaultSdkConstraint = '>=3.0.0 <4.0.0';
+
+// Pub package names are lower-case identifiers. Matching the whole string is
+// what keeps a caller from smuggling YAML structure in through a key.
+final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
+
+// A pub version constraint, and nothing else. The allowed characters exclude
+// `:`, `#`, `{`, `}`, `/` and whitespace beyond single spaces, so `git:`,
+// `path:`, a nested `hosted:` mapping, and comment injection are all
+// unrepresentable rather than merely discouraged.
+final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
+
+// A project file path relative to lib/: no leading slash, no `..` segment, and
+// Dart source only, so a context entry cannot become an escape from lib/.
+final _contextPathPattern = RegExp(r'^[A-Za-z0-9_][A-Za-z0-9_./-]*\.dart$');
+
+// The packages the Flutter SDK supplies, i.e. the only valid `sdk: flutter`
+// entries besides `flutter` itself.
+const allowedSdkPackages = <String>{
+  'flutter',
+  'flutter_test',
+  'flutter_driver',
+  'flutter_localizations',
+  'integration_test',
+};
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -46,6 +76,7 @@ Future<void> _handle(HttpRequest request) async {
     );
     final dryRun = payload['dryRun'] == true;
     final classes = _normalizeClasses(payload['customClasses']);
+    final verification = _normalizeVerification(payload['verification']);
 
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
@@ -66,6 +97,23 @@ Future<void> _handle(HttpRequest request) async {
             : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
+      });
+      return;
+    }
+
+    // Compile the generated classes before anything is written to the project.
+    // FlutterFlow's own DSL only checks that the code is formattable, which
+    // accepts a call to a named argument the package never declared - exactly
+    // the class of error that otherwise lands in the project and breaks every
+    // custom widget or action importing it.
+    final analysis = await _verifyCustomCode(workspace, verification, channel);
+    if (analysis != null && analysis.hasErrors) {
+      await channel.result(HttpStatus.unprocessableEntity, {
+        'success': false,
+        'error': 'The generated custom code does not compile, so nothing was '
+            'deployed to FlutterFlow.',
+        'details': analysis.report,
+        'analyzerErrors': analysis.errors,
       });
       return;
     }
@@ -137,6 +185,8 @@ Future<void> _handle(HttpRequest request) async {
               })
           .toList(),
       'dryRun': dryRun,
+      'verified': analysis?.verifiedFiles ?? const <String>[],
+      'verificationSkipped': analysis?.skippedReason,
     });
   } on FormatException catch (error) {
     await channel.result(HttpStatus.badRequest, {
@@ -394,6 +444,186 @@ String _stringField(
   return trimmed;
 }
 
+/// Reads the optional compile-check payload. Absent means the caller is an
+/// older client that predates verification; its deploys keep working and are
+/// reported as unverified rather than refused.
+_VerificationRequest? _normalizeVerification(Object? value) {
+  if (value == null) return null;
+  if (value is! Map<String, dynamic>) {
+    throw const FormatException('verification must be an object.');
+  }
+
+  // Clients deployed before the manifest became structured sent pubspec.yaml
+  // text. Running it would reintroduce the caller-controlled-source problem, so
+  // it is never executed - but rejecting the request outright would break every
+  // deploy from a still-cached client during the rollout window. The deploy
+  // goes ahead with the check reported as unavailable, which is exactly what
+  // the deploy did before this feature existed, and the caller is told.
+  if (value.containsKey('pubspec') && !value.containsKey('dependencies')) {
+    return _VerificationRequest.unavailable(
+      'The compile check was skipped: this client sent a package manifest in '
+      'the older format, which the runner no longer executes. Reload the app '
+      'to pick up the current version.',
+    );
+  }
+
+  final rawSources = value['sources'];
+  if (rawSources is! List) {
+    throw const FormatException('verification.sources must be an array.');
+  }
+  if (rawSources.length > maxClassesPerRequest) {
+    throw const FormatException('Too many sources to verify in one request.');
+  }
+
+  final sources = rawSources.indexed.map((item) {
+    final raw = item.$2;
+    if (raw is! Map<String, dynamic>) {
+      throw FormatException('verification.sources[${item.$1}] must be an object.');
+    }
+    final fileName = _stringField(raw, 'fileName', maxLength: 200);
+    // The name becomes a path inside the scratch package, so anything that
+    // could climb out of it is a request to write somewhere else.
+    if (!RegExp(r'^[a-z0-9_]+\.dart$').hasMatch(fileName)) {
+      throw FormatException('Invalid verification file name: $fileName.');
+    }
+    return _VerificationSource(
+      fileName: fileName,
+      content: _stringField(raw, 'content', maxLength: maxCodeBytes),
+    );
+  }).toList();
+
+  return _VerificationRequest(
+    sdkConstraint: _validateConstraint(
+      'verification.sdkConstraint',
+      _stringField(value, 'sdkConstraint', maxLength: 200, required: false),
+      fallback: defaultSdkConstraint,
+    ),
+    dependencies: _normalizeDependencyMap(value['dependencies'], 'dependencies'),
+    overrides: _normalizeDependencyMap(
+      value['dependencyOverrides'],
+      'dependencyOverrides',
+    ),
+    sdkPackages: _normalizeSdkPackages(value['sdkPackages']),
+    sources: sources,
+    context: _normalizeContext(value['context']),
+  );
+}
+
+/// Reads the project files a generated class imports.
+///
+/// FlutterFlow writes those imports against the package root -
+/// `/backend/schema/structs/index.dart` - so the classes cannot be compiled
+/// without them. They are placed under the scratch package's `lib/`, which is
+/// what that leading slash resolves to.
+List<_ContextFile> _normalizeContext(Object? value) {
+  if (value == null) return const <_ContextFile>[];
+  if (value is! List) {
+    throw const FormatException('verification.context must be an array.');
+  }
+  if (value.length > maxContextFiles) {
+    throw const FormatException('Too many files in verification.context.');
+  }
+
+  final files = <_ContextFile>[];
+  var totalBytes = 0;
+  for (final raw in value) {
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('verification.context entries must be objects.');
+    }
+    final path = _stringField(raw, 'path', maxLength: 400);
+    // The path becomes a location under lib/, so anything that could climb out
+    // of it, name a directory, or escape the package is rejected outright.
+    if (!_contextPathPattern.hasMatch(path) || path.contains('..')) {
+      throw FormatException('Invalid verification context path: $path.');
+    }
+    final content = _stringField(raw, 'content', maxLength: maxCodeBytes);
+    totalBytes += content.length;
+    if (totalBytes > maxContextBytes) {
+      throw const FormatException('verification.context is too large.');
+    }
+    files.add(_ContextFile(path: path, content: content));
+  }
+  return files;
+}
+
+/// Reads a `{name: version-constraint}` map, rejecting anything that could
+/// express more than a published package at a version.
+///
+/// This is the whole reason the manifest is sent as data rather than as
+/// pubspec.yaml text. The runner writes this manifest to disk and runs
+/// `flutter pub get` against it on a publicly reachable route, so a
+/// caller-supplied document could otherwise name a `git:` or `path:` source and
+/// have the runner fetch from a host of the caller's choosing. Only bare
+/// `name: version` entries can be expressed here, and the runner emits those
+/// lines itself, so no source directive can survive into the manifest.
+Map<String, String> _normalizeDependencyMap(Object? value, String field) {
+  if (value == null) return const <String, String>{};
+  if (value is! Map) {
+    throw FormatException('verification.$field must be an object.');
+  }
+  if (value.length > maxDependenciesPerRequest) {
+    throw FormatException('Too many entries in verification.$field.');
+  }
+
+  final result = <String, String>{};
+  for (final entry in value.entries) {
+    final name = '${entry.key}';
+    if (!_packageNamePattern.hasMatch(name)) {
+      throw FormatException('Invalid package name in verification.$field: $name.');
+    }
+    final constraint = '${entry.value}'.trim();
+    if (!_constraintPattern.hasMatch(constraint)) {
+      throw FormatException(
+        'Invalid version constraint for $name in verification.$field: $constraint.',
+      );
+    }
+    result[name] = constraint;
+  }
+  return result;
+}
+
+/// Reads the SDK-supplied package names. Restricted to the packages the Flutter
+/// SDK actually provides, so a caller cannot request an arbitrary `sdk:` value.
+List<String> _normalizeSdkPackages(Object? value) {
+  if (value == null) return const <String>[];
+  if (value is! List) {
+    throw const FormatException('verification.sdkPackages must be an array.');
+  }
+
+  final result = <String>[];
+  for (final raw in value) {
+    final name = '$raw';
+    if (!allowedSdkPackages.contains(name)) {
+      throw FormatException('Unsupported SDK package: $name.');
+    }
+    if (!result.contains(name)) result.add(name);
+  }
+  return result;
+}
+
+String _validateConstraint(
+  String field,
+  String value, {
+  required String fallback,
+}) {
+  final constraint = value.trim();
+  if (constraint.isEmpty) return fallback;
+  if (!_constraintPattern.hasMatch(constraint)) {
+    throw FormatException('Invalid $field: $constraint.');
+  }
+  return constraint;
+}
+
+/// Quotes a value for YAML when a plain scalar would be misread.
+///
+/// `>=1.0.0 <2.0.0` is an ordinary pub range, but it opens with an indicator
+/// character and YAML would reject it as a plain scalar - the same reason
+/// pubspecSync's `formatConstraint` quotes on the client side.
+String _yamlScalar(String value) {
+  if (RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+-]*$').hasMatch(value)) return value;
+  return "'${value.replaceAll("'", "''")}'";
+}
+
 List<CustomClassEntry> _normalizeClasses(Object? value) {
   if (value is! List) {
     throw const FormatException('customClasses must be an array.');
@@ -426,6 +656,164 @@ List<CustomClassEntry> _normalizeClasses(Object? value) {
   }).toList();
 }
 
+/// Compiles the generated classes in a throwaway Flutter package before they
+/// are pushed, so an error the FlutterFlow DSL would wave through is caught
+/// while the project is still untouched.
+///
+/// Returns null when the caller sent nothing to compile. A run that cannot be
+/// performed at all - no Flutter SDK on PATH, `pub get` unable to reach
+/// pub.dev - reports itself as skipped rather than as errors: refusing a
+/// deploy because the checker itself broke would block correct code, and the
+/// caller states plainly what went unverified.
+Future<_AnalysisOutcome?> _verifyCustomCode(
+  Directory workspace,
+  _VerificationRequest? verification,
+  _ResponseChannel channel,
+) async {
+  if (verification == null) return null;
+  if (verification.unavailableReason != null) {
+    return _AnalysisOutcome.skipped(verification.unavailableReason!);
+  }
+  if (verification.sources.isEmpty) return null;
+
+  channel.phase('verifying', 'Compiling your custom code...');
+
+  final packageDir = Directory('${workspace.parent.path}/custom_code_analysis');
+  final libDir = Directory('${packageDir.path}/lib');
+  // Sources from an earlier request would otherwise be analysed alongside this
+  // one and report errors against code the caller never sent.
+  if (libDir.existsSync()) libDir.deleteSync(recursive: true);
+  await libDir.create(recursive: true);
+
+  await File('${packageDir.path}/pubspec.yaml')
+      .writeAsString(verification.toPubspec());
+
+  // A custom class lives at lib/custom_code/ in FlutterFlow, and a relative
+  // import inside it resolves from there, so it is written to the same place.
+  final sourceDir = Directory('${libDir.path}/custom_code');
+  await sourceDir.create(recursive: true);
+  final sourcePaths = <String>[];
+  for (final source in verification.sources) {
+    final file = File('${sourceDir.path}/${source.fileName}');
+    await file.writeAsString(source.content);
+    sourcePaths.add(file.path);
+  }
+
+  // The project's own generated Dart, so the scaffolding those classes import
+  // resolves instead of failing as a missing URI.
+  for (final context in verification.context) {
+    final file = File('${libDir.path}/${context.path}');
+    await file.parent.create(recursive: true);
+    await file.writeAsString(context.content);
+  }
+
+  final pubGet = await _runProcess(
+    'flutter',
+    ['pub', 'get'],
+    workingDirectory: packageDir.path,
+    timeout: const Duration(minutes: 4),
+  );
+  if (pubGet.exitCode != 0) {
+    return _AnalysisOutcome.skipped(
+      'The packages your code imports could not be resolved, so it was not '
+      'compiled before deploying: ${_trimOutput(pubGet.output)}',
+    );
+  }
+
+  // Scoped to the classes being deployed rather than the whole package: the
+  // project files shipped alongside them exist to resolve imports, and an
+  // error inside that scaffolding is the project's own business, not proof the
+  // generated class is broken. `--no-fatal-warnings` because `dart analyze`
+  // treats warnings as fatal by default, so a warning-only class would
+  // otherwise be refused even though it compiles.
+  final analyze = await _runProcess(
+    'dart',
+    ['analyze', '--no-fatal-warnings', ...sourcePaths],
+    workingDirectory: packageDir.path,
+    timeout: const Duration(minutes: 4),
+  );
+
+  final errors = _analyzerErrors(analyze.output);
+
+  // `flutter analyze` exits non-zero both when it reports errors and when it
+  // fails to run at all - a missing toolchain, an unresolvable manifest, a
+  // crash. A non-zero exit with nothing parsed therefore means the check did
+  // not complete, and reporting that as verified would be a false assurance:
+  // worse than no gate, because the deploy would claim the code had been
+  // compiled. Only a clean exit is treated as a clean bill of health.
+  if (errors.isEmpty && analyze.exitCode != 0) {
+    return _AnalysisOutcome.skipped(
+      analyze.timedOut
+          ? 'Compiling your custom code timed out, so it was not verified '
+              'before deploying.'
+          : 'The Dart analyzer did not complete, so your custom code was not '
+              'verified before deploying: ${_trimOutput(analyze.output)}',
+    );
+  }
+
+  return _AnalysisOutcome(
+    errors: errors,
+    report: _trimOutput(analyze.output),
+    verifiedFiles:
+        verification.sources.map((source) => source.fileName).toList(),
+  );
+}
+
+/// Pulls the `error` diagnostics out of `flutter analyze` output.
+///
+/// Lines look like:
+///   error - The named parameter 'group' isn't defined - lib/x.dart:28:9 - ...
+/// with the separator rendered as a bullet. Warnings and infos are left out:
+/// they are style advice from whatever lint set the scratch package inherits,
+/// not proof the code is broken, and blocking on them would refuse code that
+/// compiles.
+List<String> _analyzerErrors(String output) {
+  final errors = <String>[];
+  for (final line in const LineSplitter().convert(output)) {
+    final trimmed = line.trim();
+    if (trimmed.startsWith('error ')) errors.add(trimmed);
+  }
+  return errors;
+}
+
+Future<_RunOutcome> _runProcess(
+  String executable,
+  List<String> args, {
+  required String workingDirectory,
+  required Duration timeout,
+}) async {
+  final buffer = StringBuffer();
+  try {
+    final process = await Process.start(
+      executable,
+      args,
+      workingDirectory: workingDirectory,
+      runInShell: false,
+    );
+    final drained = Future.wait([
+      process.stdout.transform(utf8.decoder).forEach(buffer.write),
+      process.stderr.transform(utf8.decoder).forEach(buffer.write),
+    ]);
+
+    final exitCode = await process.exitCode.timeout(timeout, onTimeout: () {
+      process.kill(ProcessSignal.sigkill);
+      return -1;
+    });
+    await drained;
+    return _RunOutcome(
+      exitCode: exitCode,
+      output: buffer.toString(),
+      timedOut: exitCode == -1,
+    );
+  } on ProcessException catch (error) {
+    return _RunOutcome(
+      exitCode: -1,
+      output: '$executable could not be started: ${error.message}',
+      timedOut: false,
+    );
+  }
+}
+
 Future<File> _writeDeployScript(
   Directory workspace,
   List<CustomClassEntry> classes,
@@ -448,6 +836,7 @@ Future<File> _writeDeployScript(
               code: $code,
             );
           }
+          _ensureDartFileName(project, $name);
 ''';
   }).join('\n');
 
@@ -483,6 +872,51 @@ $calls          _phase('uploading', 'Saving the changes to FlutterFlow...');
 
 void _phase(String phase, String message) {
   stdout.writeln('$phaseMarkerPrefix:\$phase:\$message');
+}
+
+/// Gives the Code File holding [className] a name FlutterFlow can resolve.
+///
+/// `addCustomClass` names the containing `FFCustomCodeFile` `_snakeCase(name)`
+/// with no extension, but FlutterFlow stores Code Files created in its own
+/// editor WITH the extension (`groq_model_registry.dart`, verified by SDK
+/// readback) and codegen builds `lib/custom_code/<identifier.name>` from it
+/// verbatim. An extensionless name therefore emits a file no `import` can
+/// resolve, so every custom widget or action that imports the class fails to
+/// compile. Appending the extension here is the only lever the runner has -
+/// the SDK helper exposes no file-name parameter.
+///
+/// Idempotent and non-destructive: a name that already ends in `.dart` is left
+/// exactly as it is, so a file the author renamed in the FlutterFlow editor
+/// survives a re-deploy untouched.
+void _ensureDartFileName(FFProject project, String className) {
+  for (final file in project.customCode.customCodeFiles.customCodeFiles) {
+    final holdsClass = file.customCodeEntities.any(
+      (entity) =>
+          entity.hasInterface() &&
+          entity.interface.identifier.name == className,
+    );
+    if (!holdsClass) continue;
+
+    final current = file.identifier.name;
+    if (current.endsWith('.dart')) return;
+    file.identifier.name =
+        current.isEmpty ? '\${_snakeCase(className)}.dart' : '\$current.dart';
+    return;
+  }
+}
+
+/// FlutterFlow's naive snake_case: an underscore before every capital, all
+/// lowercased. Matches the SDK's own derivation so the repaired name is the
+/// one FlutterFlow would have produced.
+String _snakeCase(String name) {
+  final buffer = StringBuffer();
+  for (var i = 0; i < name.length; i++) {
+    final char = name[i];
+    final lower = char.toLowerCase();
+    if (char != lower && i > 0) buffer.write('_');
+    buffer.write(lower);
+  }
+  return buffer.toString();
 }
 
 final class _CliOptions {
@@ -564,6 +998,120 @@ String _trimOutput(Object value) {
   final text = '$value'.trim();
   if (text.length <= 4000) return text;
   return '${text.substring(0, 4000)}...';
+}
+
+final class _VerificationSource {
+  const _VerificationSource({required this.fileName, required this.content});
+
+  final String fileName;
+  final String content;
+}
+
+final class _ContextFile {
+  const _ContextFile({required this.path, required this.content});
+
+  /// Path relative to the scratch package's lib/.
+  final String path;
+  final String content;
+}
+
+final class _VerificationRequest {
+  const _VerificationRequest({
+    required this.sdkConstraint,
+    required this.dependencies,
+    required this.overrides,
+    required this.sdkPackages,
+    required this.sources,
+    required this.context,
+  }) : unavailableReason = null;
+
+  /// A request the runner will not compile, carrying why.
+  const _VerificationRequest.unavailable(this.unavailableReason)
+      : sdkConstraint = '',
+        dependencies = const <String, String>{},
+        overrides = const <String, String>{},
+        sdkPackages = const <String>[],
+        sources = const <_VerificationSource>[],
+        context = const <_ContextFile>[];
+
+  /// Why this request cannot be compiled, or null when it can.
+  final String? unavailableReason;
+
+  final String sdkConstraint;
+  final Map<String, String> dependencies;
+  final Map<String, String> overrides;
+  final List<String> sdkPackages;
+  final List<_VerificationSource> sources;
+  final List<_ContextFile> context;
+
+  /// Builds the pubspec the scratch package is compiled from.
+  ///
+  /// Emitted here rather than accepted from the caller: every line below is
+  /// either a fixed literal or a value already matched against
+  /// `_packageNamePattern` / `_constraintPattern`, so nothing a caller sends
+  /// can introduce a new YAML key, a nested mapping, or a comment.
+  String toPubspec() {
+    final lines = <String>[
+      'name: $analysisPackageName',
+      'description: Throwaway package used to compile generated custom code.',
+      'publish_to: none',
+      'version: 0.0.1',
+      '',
+      'environment:',
+      '  sdk: ${_yamlScalar(sdkConstraint)}',
+      '',
+      'dependencies:',
+      '  flutter:',
+      '    sdk: flutter',
+    ];
+
+    // `flutter` is always present above; any other SDK package the project
+    // declares is reproduced the same way.
+    for (final name in sdkPackages) {
+      if (name == 'flutter') continue;
+      lines
+        ..add('  $name:')
+        ..add('    sdk: flutter');
+    }
+
+    for (final name in dependencies.keys.toList()..sort()) {
+      lines.add('  $name: ${_yamlScalar(dependencies[name]!)}');
+    }
+
+    if (overrides.isNotEmpty) {
+      lines
+        ..add('')
+        ..add('dependency_overrides:');
+      for (final name in overrides.keys.toList()..sort()) {
+        lines.add('  $name: ${_yamlScalar(overrides[name]!)}');
+      }
+    }
+
+    return '${lines.join('\n')}\n';
+  }
+}
+
+final class _AnalysisOutcome {
+  const _AnalysisOutcome({
+    required this.errors,
+    required this.report,
+    required this.verifiedFiles,
+  }) : skippedReason = null;
+
+  const _AnalysisOutcome.skipped(String reason)
+      : errors = const <String>[],
+        report = '',
+        verifiedFiles = const <String>[],
+        skippedReason = reason;
+
+  final List<String> errors;
+  final String report;
+  final List<String> verifiedFiles;
+
+  /// Why the compile check could not run, or null when it did run.
+  final String? skippedReason;
+
+  bool get hasErrors => errors.isNotEmpty;
 }
 
 final class CustomClassEntry {

@@ -32,6 +32,7 @@ import {
 } from "./src/flutterFlowCodeSanitizer.js";
 import { formatFlutterFlowFileError } from "./src/flutterFlowFileErrors.js";
 import { extractPackageImports } from "./src/dartPackageImports.js";
+import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
 import {
@@ -1691,9 +1692,31 @@ class FlutterFlowApiClient {
       }),
     );
 
+    // Every Dart file the project generates under lib/, keyed relative to
+    // lib/. This is the pool the compile check resolves a generated class's
+    // FlutterFlow imports against - `/backend/schema/structs/index.dart` and
+    // friends - so a class that uses project scaffolding can be compiled
+    // instead of being deployed unchecked.
+    const dartFiles = new Map();
+    const dartPaths = Object.keys(zip.files).filter(
+      (archivePath) =>
+        !zip.files[archivePath].dir &&
+        archivePath.startsWith(`${rootPrefix}lib/`) &&
+        archivePath.endsWith(".dart"),
+    );
+    await Promise.all(
+      dartPaths.map(async (archivePath) => {
+        dartFiles.set(
+          archivePath.slice(`${rootPrefix}lib/`.length),
+          await zip.files[archivePath].async("string"),
+        );
+      }),
+    );
+
     return {
       pubspecYaml: await zip.files[pubspecPath].async("string"),
       files,
+      dartFiles,
     };
   }
 
@@ -2108,11 +2131,40 @@ async function provisionMissingCodeFiles(
   fileMap,
   remoteFiles,
   commitMessage,
+  pubspecYaml = "",
+  projectDartFiles = new Map(),
 ) {
   const missingCodeFiles = findMissingCodeFiles(fileMap, remoteFiles);
   if (missingCodeFiles.length === 0) {
-    return { remoteFiles, syncFileMap: fileMap };
+    return { remoteFiles, syncFileMap: fileMap, unverified: [] };
   }
+
+  // The runner compiles these against the project's own package versions
+  // before it writes anything, so an API the generated code invented - a named
+  // argument the package never declared - stops the deploy instead of landing
+  // in the project and breaking every widget that imports the class.
+  const verificationPlan = planCustomCodeVerification(
+    missingCodeFiles,
+    pubspecYaml,
+    projectDartFiles,
+  );
+
+  // A class nothing can compile is not deployed. Showing a warning after the
+  // fact does not undo a broken custom class, and every widget or action that
+  // imports it fails to build until someone notices.
+  if (verificationPlan.skipped.length > 0) {
+    throw new Error(
+      `Deploy stopped: ${verificationPlan.skipped.length} custom class(es) could not be compiled, and nothing is deployed that has not been verified.\n\n` +
+        verificationPlan.skipped.map((entry) => `• ${entry.reason}`).join("\n"),
+    );
+  }
+  // Names and constraints, not pubspec.yaml text: the runner builds the
+  // manifest itself, so a caller cannot point `pub get` at a git or path source.
+  const verification = {
+    ...verificationPlan.manifest,
+    sources: verificationPlan.sources,
+    context: verificationPlan.context,
+  };
 
   console.log(
     `Provisioning ${missingCodeFiles.length} new FlutterFlow custom code file(s) before sync.`,
@@ -2127,6 +2179,7 @@ async function provisionMissingCodeFiles(
       baseUrl: apiClient.baseUrl,
       commitMessage,
       customClasses: missingCodeFiles,
+      verification,
       stream: true,
     }),
   });
@@ -2144,9 +2197,20 @@ async function provisionMissingCodeFiles(
   }
 
   invalidateProjectSourceCache(apiClient);
+
+  // Say plainly what was pushed without being compiled first: a class the
+  // runner could not build in isolation still deploys, but silently calling it
+  // verified would be the same false assurance this check exists to end.
+  const unverified = [
+    ...verificationPlan.skipped.map((entry) => entry.reason),
+    ...(result.verificationSkipped ? [result.verificationSkipped] : []),
+  ];
+  unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));
+
   return {
     remoteFiles,
     syncFileMap: excludeProvisionedCodeFiles(fileMap, missingCodeFiles),
+    unverified,
   };
 }
 
@@ -2229,6 +2293,8 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
     overridden: overrides.overridden,
     warnings: plan.warnings,
     remoteFiles: projectSource.files,
+    // The project's generated Dart, for the compile check's import resolution.
+    dartFiles: projectSource.dartFiles,
   };
 }
 
@@ -2779,6 +2845,8 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       fileMap,
       pubspecMerge.remoteFiles,
       `Provision ${artifactName} custom class`,
+      serializedYaml,
+      pubspecMerge.dartFiles,
     );
 
     const syncMetadata = await buildApiSyncMetadata(
@@ -2837,6 +2905,7 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       success: true,
       message: `Successfully committed ${fileName} to FlutterFlow project ${projectId}`,
       addedDependencies: pubspecMerge.added,
+      unverified: provisioning.unverified,
       warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
     };
   } catch (error) {
@@ -2956,6 +3025,8 @@ async function executeCommit(code, options = {}) {
       fileMap,
       pubspecMerge.remoteFiles,
       `Provision ${artifactName} custom class`,
+      serializedYaml,
+      pubspecMerge.dartFiles,
     );
 
     const syncMetadata = await buildApiSyncMetadata(
@@ -3008,6 +3079,7 @@ async function executeCommit(code, options = {}) {
         message: `Successfully committed ${codeInfo.fileName} to FlutterFlow`,
         metadata,
         addedDependencies: pubspecMerge.added,
+        unverified: provisioning.unverified,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
         elapsedTime: commitState.getElapsedTime(),
       };
@@ -3115,6 +3187,8 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       fileMap,
       pubspecMerge.remoteFiles,
       `Provision ${bundlePlan.title} custom classes`,
+      serializedYaml,
+      pubspecMerge.dartFiles,
     );
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
@@ -3170,6 +3244,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
         message: `Successfully committed ${bundlePlan.fileEntries.length} artifacts to FlutterFlow`,
         metadata,
         addedDependencies: pubspecMerge.added,
+        unverified: provisioning.unverified,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
         elapsedTime: commitState.getElapsedTime(),
       };
@@ -5309,10 +5384,19 @@ function showCommitSuccessModal(result) {
 
   const warningsSection = document.getElementById("success-warnings-section");
   const warningsList = document.getElementById("success-warnings-list");
-  if (result.warnings && result.warnings.length > 0 && warningsSection && warningsList) {
-    warningsList.innerHTML = result.warnings.map(([file, errs]) =>
-      `<li><span class="font-medium">${escapeHtml(file)}:</span> ${escapeHtml(String(errs))}</li>`
-    ).join("");
+  // A class that could not be compiled before the push is reported here rather
+  // than left implicit, so "deployed" never reads as "checked".
+  const unverified = result.unverified || [];
+  const fileWarnings = result.warnings || [];
+  if ((fileWarnings.length > 0 || unverified.length > 0) && warningsSection && warningsList) {
+    warningsList.innerHTML = [
+      ...unverified.map((reason) =>
+        `<li><span class="font-medium">Not verified before deploying:</span> ${escapeHtml(String(reason))}</li>`
+      ),
+      ...fileWarnings.map(([file, errs]) =>
+        `<li><span class="font-medium">${escapeHtml(file)}:</span> ${escapeHtml(String(errs))}</li>`
+      ),
+    ].join("");
     warningsSection.classList.remove("hidden");
   }
 

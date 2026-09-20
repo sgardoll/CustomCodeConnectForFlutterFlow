@@ -69,6 +69,34 @@ function stripComments(code) {
  * @param {string} code - Dart source
  * @returns {string[]} Package names, deduplicated
  */
+/**
+ * Returns every URI the source imports or exports, in first-seen order.
+ *
+ * Unlike extractPackageImports this keeps `dart:` URIs and FlutterFlow's own
+ * project-relative ones (`/backend/schema/structs/index.dart`), because what
+ * decides whether generated code can be compiled in isolation is precisely the
+ * URIs a standalone package cannot resolve.
+ *
+ * @param {string} code - Dart source
+ * @returns {string[]} Imported/exported URIs, deduplicated
+ */
+export function extractImportUris(code = "") {
+  const uris = [];
+  const seen = new Set();
+  const directiveRegex = /\b(?:import|export)\s+(['"])([^'"\n]+)\1/g;
+  const stripped = stripComments(code);
+  let match;
+
+  while ((match = directiveRegex.exec(stripped)) !== null) {
+    const uri = match[2];
+    if (seen.has(uri)) continue;
+    seen.add(uri);
+    uris.push(uri);
+  }
+
+  return uris;
+}
+
 export function extractPackageImports(code = "") {
   const names = [];
   const seen = new Set();
