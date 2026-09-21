@@ -14,16 +14,16 @@ import { identifierToFlutterFlowFileStem } from "./flutterFlowArtifactValidation
 // only guards a malformed manifest.
 const FALLBACK_SDK_CONSTRAINT = ">=3.0.0 <4.0.0";
 
-// Packages the Flutter SDK supplies, declared as `sdk: flutter` rather than
-// with a pub version. This mirrors the allowlist the deploy runner enforces,
-// so anything named here can be reproduced in the scratch package.
-const SDK_DEPENDENCIES = new Set([
-  "flutter",
-  "flutter_test",
-  "flutter_driver",
-  "flutter_localizations",
-  "integration_test",
-]);
+// Which packages the Flutter SDK supplies is read from the project's own
+// pubspec, never from a list kept here. A block-form entry whose first own-key
+// is `sdk:` is an SDK package by definition, so the classification cannot fall
+// behind the SDK: when Flutter ships a new package, a project declaring it
+// classifies correctly with no change to this file.
+//
+// The list this replaced could not do that. It omitted `flutter_web_plugins`,
+// which turned every project declaring it - every project with web support and
+// a plugin - into one whose dependencies could not be reproduced, and refused
+// the whole deploy for a package most of its classes never imported.
 
 // Why the verification manifest is sent as structured data rather than as
 // pubspec.yaml text: the deploy runner writes the manifest to disk and runs
@@ -71,17 +71,28 @@ export function classifyCustomClassImports(code = "") {
 function collect(declared, into, sdkPackages) {
   const unrepresentable = [];
   for (const [name, info] of declared) {
-    if (SDK_DEPENDENCIES.has(name) && !info.isScalar) {
+    if (info.isScalar) {
+      into[name] = unquoteConstraint(info.constraint);
+      continue;
+    }
+
+    // A block-form entry's first own-key says where the package comes from.
+    // `sdk:` is the Flutter SDK, which the runner reproduces from the name
+    // alone as `name: {sdk: flutter}`. A nested `version:` is simply a
+    // constraint written on its own line.
+    if (info.sourceKey === "sdk") {
       sdkPackages.add(name);
       continue;
     }
-    if (!info.isScalar) {
-      // `git:`, `path:`, a nested `hosted:` block - none can be reproduced
-      // outside the project, and none can be expressed in the manifest.
-      unrepresentable.push(name);
+    if (info.sourceKey === "version") {
+      into[name] = unquoteConstraint(info.sourceValue);
       continue;
     }
-    into[name] = unquoteConstraint(info.constraint);
+
+    // `git:`, `path:`, a nested `hosted:` block - none can be reproduced
+    // outside the project, and none can be expressed in a manifest that
+    // carries names and constraints only.
+    unrepresentable.push(name);
   }
   return unrepresentable;
 }
@@ -156,11 +167,18 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * FlutterFlow. Classes that depend on the generated app are reported in
  * `skipped` so the deploy can say plainly what it did not verify.
  *
- * When the project declares a dependency that cannot be reproduced outside it
- * (a `git:` or `path:` source), nothing is verified: the scratch package would
- * resolve packages differently from the project, and a check against different
- * versions is worse than no check, because it reports a result that does not
- * describe the code that actually ships.
+ * A dependency that cannot be reproduced outside the project - a `git:` or
+ * `path:` source - stops only a class that imports it. For that class the
+ * scratch package would resolve different code from the project, and a check
+ * against the wrong versions reports a result that does not describe what
+ * ships, so it is left out of `sources` and named in `skipped`. A class that
+ * does not import it resolves everything it uses to the same versions the
+ * project will, so it is verified normally.
+ *
+ * That scoping is the point. Deciding it once for the whole project meant a
+ * single `git:` entry - or a package the SDK supplied but a hand-kept name list
+ * had not heard of - left every class in the deploy uncompiled, including the
+ * ones that never touched it.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
@@ -183,16 +201,25 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   for (const entry of classes) {
     const { className, content } = entry;
 
-    if (unrepresentable.length > 0) {
+    const importedPackages = extractPackageImports(content);
+
+    // Scoped to this class's own imports. A dependency the project declares
+    // from a source the manifest cannot express is only a problem for a class
+    // that actually imports it.
+    const unresolvablePackages = importedPackages.filter((name) =>
+      unrepresentable.includes(name),
+    );
+
+    if (unresolvablePackages.length > 0) {
       skipped.push({
         className,
-        reason: `${className} was not compiled before deploying: your project declares ${unrepresentable.join(", ")} from a source that cannot be reproduced outside the project, so package resolution could not be matched exactly.`,
+        reason: `${className} was not compiled before deploying: it imports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`,
       });
       continue;
     }
 
     const { unresolvableImports } = classifyCustomClassImports(content);
-    const missingPackages = extractPackageImports(content).filter(
+    const missingPackages = importedPackages.filter(
       (name) => !availablePackages.has(name),
     );
 
