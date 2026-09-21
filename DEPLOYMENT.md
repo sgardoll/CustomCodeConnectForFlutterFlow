@@ -148,29 +148,35 @@ node *input* on the workflow, and updating the workflow does not update it.
 They must be pasted into the BuildShip editor by hand, and that paste **is** the
 deploy:
 
-| Step (editor label) | Node name | Node key | Local working copy |
-| --- | --- | --- | --- |
-| Architect | `ARCHITECT_SYSTEM` | `a4bb0c85-effe-4339-b732-c270e129db59` | `BUILDSHIP_ARCHITECT_SYSTEM_PROMPT_UPDATED.txt` |
-| Generator | `GENERATOR_SYSTEM` | `54b162ac-fa03-4614-96f0-5b831162182c` | `BUILDSHIP_GENERATOR_SYSTEM_PROMPT_UPDATED.txt` |
-| Review | `REVIEW_SYSTEM` | `d32928b7-5ec4-46f6-9eff-25ea281e4ed2` | `BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt` |
+| Step (editor label) | Node name | Node key |
+| --- | --- | --- |
+| Architect | `ARCHITECT_SYSTEM` | `a4bb0c85-effe-4339-b732-c270e129db59` |
+| Generator | `GENERATOR_SYSTEM` | `54b162ac-fa03-4614-96f0-5b831162182c` |
+| Review | `REVIEW_SYSTEM` | `d32928b7-5ec4-46f6-9eff-25ea281e4ed2` |
 
-### Where the prompts live, and why not here
+### Where the prompts live
 
-**The prompts' source of truth is the private BuildShip workflow, not this
-repository** - this repository is public and the prompts are product logic.
-`service-runpipeline-THIN` holds all three as node inputs. The `.txt` files
-listed above are local working copies only: they are not the deployed value,
-they can lag it, and all three are gitignored on purpose (see the note in
-`.gitignore`). Keeping them out of version control
-here is the intended arrangement, not something to correct.
+**The prompts live in the BuildShip repo, and only there.** This repository
+keeps no copy: it is public, the prompts are product logic, and a second copy is
+a stale copy waiting to be deployed over the real one.
+
+That is not hypothetical. Four `BUILDSHIP_*_SYSTEM_PROMPT*.txt` working copies
+used to sit in this directory, and on 2026-09-21 the Architect one had fallen
+**1,241 characters behind** the deployed value, while Generator and Review still
+matched. Anyone who had "deployed" the Architect prompt from that file would
+have silently rolled the live prompt backwards, and nothing here would have
+signalled it. The files are gone. The `.gitignore` rules that kept them out of
+version control remain, so a re-created copy still cannot be committed by
+accident.
 
 The BuildShip editor is authoritative for prompt content. The prompt text also
 appears in the workflow's `schema.json` under `nodeValues`, but the editor owns
-that field and rewrites it on save, so editing it in this repository's sibling
-checkout is not a dependable way to deploy a prompt.
+that field and rewrites it on save, so editing it in the sibling checkout is not
+a dependable way to deploy a prompt.
 
 To read what the workflow currently records, use the BuildShip MCP
-(`get_workflow`, folder `service-runpipeline-THIN`) rather than a local copy.
+(`get_workflow`, folder `service-runpipeline-THIN`). Do not reintroduce a local
+copy to compare against — that is how the stale one happened.
 
 **Why it matters.** Code-level validation of generated artifacts lives in the
 `REVIEW_SYSTEM` prompt, not in `app.js` — widget parameters, return types, file
