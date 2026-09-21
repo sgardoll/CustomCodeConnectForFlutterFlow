@@ -2131,6 +2131,12 @@ async function provisionMissingCodeFiles(
     sources: verificationPlan.sources,
   };
 
+  // Say plainly what is about to be pushed without being compiled first, and
+  // say it before the push: a class the runner cannot build in isolation still
+  // deploys, but the warning has to precede the mutation it describes.
+  const unverified = verificationPlan.skipped.map((entry) => entry.reason);
+  unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));
+
   console.log(
     `Provisioning ${missingCodeFiles.length} new FlutterFlow custom code file(s) before sync.`,
   );
@@ -2163,14 +2169,10 @@ async function provisionMissingCodeFiles(
 
   invalidateProjectSourceCache(apiClient);
 
-  // Say plainly what was pushed without being compiled first: a class the
-  // runner could not build in isolation still deploys, but silently calling it
-  // verified would be the same false assurance this check exists to end.
-  const unverified = [
-    ...verificationPlan.skipped.map((entry) => entry.reason),
-    ...(result.verificationSkipped ? [result.verificationSkipped] : []),
-  ];
-  unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));
+  if (result.verificationSkipped) {
+    console.warn(`[custom class deploy] ${result.verificationSkipped}`);
+    unverified.push(result.verificationSkipped);
+  }
 
   return {
     remoteFiles,
