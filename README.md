@@ -4,6 +4,8 @@ There are many AI code generators. This one actually works in FlutterFlow.
 
 [GitHub](https://github.com/sgardoll/CustomCodeConnectForFlutterFlow) · [Demo Video](https://www.youtube.com/watch?v=zRjexvW58IQ) · [Report Bug](https://github.com/sgardoll/CustomCodeConnectForFlutterFlow/issues)
 
+Requires **Node 20.19+ or 22.12+** (Vite 7's floor). `.nvmrc` holds the version this project is built and tested with — run `nvm use` first if you use nvm. `package.json` declares the same range under `engines`, so an unsupported Node warns at install time instead of failing mid-build.
+
 ```bash
 git clone https://github.com/sgardoll/CustomCodeConnectForFlutterFlow.git
 cd CustomCodeConnectForFlutterFlow
@@ -61,6 +63,8 @@ When FlutterFlow returns build errors, paste them back in. **Regenerate with Err
 
 ## Setup
 
+Node **20.19+ or 22.12+** is required — Vite 7's floor. `.nvmrc` pins the version this project is built with, and `engines` in `package.json` declares the range, so an unsupported Node warns at install instead of failing at the first `vite` invocation (`npm run build`, `npm run test:key-storage`).
+
 Create `.env` in the project root:
 
 ```env
@@ -80,7 +84,7 @@ npm run preview  # preview build
 
 ## Stack
 
-Vanilla JS + Tailwind CSS · Vite 5 · Web Crypto API (AES-GCM) · JSZip · Highlight.js
+Vanilla JS + Tailwind CSS · Vite 7 · Web Crypto API (AES-GCM) · JSZip · Highlight.js
 
 ## Philosophy
 
