@@ -45,12 +45,13 @@ NOW.md
 __pycache__/
 *.pyc
 
-# The three step system prompts are deliberately NOT tracked here. This
-# repository is public and the prompts are product logic, so their source of
-# truth is the private BuildShip workflow `service-runpipeline-THIN`, where
-# ARCHITECT_SYSTEM / GENERATOR_SYSTEM / REVIEW_SYSTEM are node inputs. The .txt
-# copies in this directory are local working files only and may lag the
-# workflow. This is the intended arrangement - not an oversight to be corrected.
+# The three step system prompts do NOT live in this repository. They are product
+# logic, this repository is public, and their home is the BuildShip repo - the
+# private workflow `service-runpipeline-THIN`, where ARCHITECT_SYSTEM /
+# GENERATOR_SYSTEM / REVIEW_SYSTEM are node inputs. No copy is kept here: a
+# local copy goes stale and can then be deployed over the live prompt, which is
+# exactly what had happened to the Architect prompt. These rules stay so that a
+# re-created copy cannot be committed by accident.
 BUILDSHIP_ARCHITECT_SYSTEM_PROMPT_UPDATED.txt
 BUILDSHIP_GENERATOR_SYSTEM_PROMPT_UPDATED.txt
 BUILDSHIP_REVIEW_SYSTEM_PROMPT.txt
