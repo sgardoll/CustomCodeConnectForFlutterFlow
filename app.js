@@ -5982,6 +5982,19 @@ function renderSummaryDetail(presentation) {
       </ul>
     `
     : "";
+  // Bundle-level warnings (deploy ordering, compatibility findings) belong on
+  // the summary surface as a distinct class of message. They are NOT
+  // per-file issues and must never leak into a selected artifact's review.
+  const bundleWarnings = presentation.warnings.length
+    ? `
+      <section class="summary-bundle-warnings" aria-label="Bundle warnings">
+        <h4>${reviewStatusIcon("warning")} Bundle</h4>
+        <ul>
+          ${presentation.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+        </ul>
+      </section>
+    `
+    : "";
   const manualSteps = presentation.manualSteps.length
     ? `
       <section class="summary-manual-callout">
@@ -6004,6 +6017,7 @@ function renderSummaryDetail(presentation) {
       <div class="review-summary-copy">
         <p class="review-summary-text">${escapeHtml(presentation.summary)}</p>
         ${findings}
+        ${bundleWarnings}
         ${manualSteps}
       </div>
       <div class="review-score-column">
@@ -6129,12 +6143,22 @@ function renderBundleControls(presentation) {
   const tabs = document.getElementById("artifact-tabs");
   const count = document.getElementById("results-file-count");
   if (summaryTab) {
-    summaryTab.classList.toggle("active", pipelineState.resultsViewMode === "summary");
+    const isSummary = pipelineState.resultsViewMode === "summary";
+    summaryTab.classList.toggle("active", isSummary);
+    summaryTab.setAttribute("role", "tab");
+    summaryTab.setAttribute("aria-selected", String(isSummary));
+    summaryTab.setAttribute("aria-controls", "results-summary-detail");
+    summaryTab.tabIndex = isSummary ? 0 : -1;
+  }
+  if (tabs) {
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Artifacts in this bundle");
   }
   if (!presentation.artifacts.length) {
     if (count) count.textContent = "0 files";
     if (strip) strip.classList.remove("visible");
     if (tabs) tabs.innerHTML = "";
+    ensureResultsTabKeyboard();
     return;
   }
 
@@ -6143,11 +6167,19 @@ function renderBundleControls(presentation) {
     count.textContent = `${fileCount} ${fileCount === 1 ? "file" : "files"}`;
   }
   if (tabs) {
-    tabs.innerHTML = presentation.artifacts.map((artifact) => `
+    tabs.innerHTML = presentation.artifacts.map((artifact) => {
+      const isSelected = pipelineState.resultsViewMode === "file"
+        && artifact.id === pipelineState.selectedArtifactId;
+      return `
       <button
         type="button"
-        class="artifact-tab${pipelineState.resultsViewMode === "file" && artifact.id === pipelineState.selectedArtifactId ? " active" : ""}"
+        id="artifact-tab-${escapeAttr(artifact.id)}"
+        role="tab"
+        aria-selected="${isSelected ? "true" : "false"}"
+        aria-controls="artifact-results-split"
+        class="artifact-tab${isSelected ? " active" : ""}"
         data-artifact-id="${escapeAttr(artifact.id)}"
+        tabindex="${isSelected ? 0 : -1}"
         title="${escapeAttr(`${reviewStatusLabel(artifact.status)} · ${artifact.fileName || artifact.artifactName}`)}"
       >
         <span class="artifact-tab-status status-${escapeAttr(artifact.status)}">${reviewStatusIcon(artifact.status)}</span>
@@ -6156,16 +6188,59 @@ function renderBundleControls(presentation) {
           <span class="artifact-tab-meta">${escapeHtml(artifact.artifactType)}</span>
         </span>
       </button>
-    `).join("");
+    `;
+    }).join("");
     tabs.onclick = (event) => {
       const tab = event.target.closest(".artifact-tab");
       if (tab?.dataset?.artifactId) {
         selectArtifact(tab.dataset.artifactId);
       }
     };
+    ensureResultsTabKeyboard();
   }
 
   if (strip) strip.classList.add("visible");
+}
+
+// WAI-ARIA tabs pattern: ArrowRight/ArrowLeft move focus through the tablist,
+// Home/End jump to the first/last tab. The selected tab is activated and focus
+// is re-applied after the render so keyboard focus survives the re-render that
+// refreshArtifactTabs performs on selection change.
+function ensureResultsTabKeyboard() {
+  const tablist = document.getElementById("bundle-strip");
+  if (!tablist || tablist.dataset.tabKeyboard === "bound") return;
+  tablist.dataset.tabKeyboard = "bound";
+  tablist.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const tabs = [
+      document.getElementById("results-summary-tab"),
+      ...Array.from(document.querySelectorAll("#artifact-tabs .artifact-tab")),
+    ].filter(Boolean);
+    if (!tabs.length || !tabs.includes(document.activeElement)) return;
+
+    let targetIndex = -1;
+    const currentIndex = tabs.indexOf(document.activeElement);
+    if (event.key === "ArrowRight") targetIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") targetIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") targetIndex = 0;
+    else if (event.key === "End") targetIndex = tabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    const target = tabs[targetIndex];
+    if (!target) return;
+    if (target.id === "results-summary-tab") {
+      selectResultsSummary();
+    } else {
+      const artifactId = target.dataset.artifactId;
+      if (artifactId) selectArtifact(artifactId);
+    }
+    // Re-apply focus to the freshly rendered tab after the selection re-render.
+    const freshTab = target.id === "results-summary-tab"
+      ? document.getElementById("results-summary-tab")
+      : document.querySelector(`#artifact-tabs .artifact-tab[data-artifact-id="${target.dataset.artifactId}"]`);
+    if (freshTab) freshTab.focus();
+  });
 }
 
 function updateSelectedArtifactPanels() {
@@ -6178,6 +6253,22 @@ function updateSelectedArtifactPanels() {
   const artifactSplit = document.getElementById("artifact-results-split");
   const presentation = getReviewPresentation();
   const selectedCode = getSelectedArtifactCode();
+
+  // Harden the summary/file tabpanel semantics for the WAI-ARIA tabs pattern.
+  if (summaryDetail) {
+    summaryDetail.setAttribute("role", "tabpanel");
+    summaryDetail.setAttribute("aria-labelledby", "results-summary-tab");
+  }
+  if (artifactSplit) {
+    artifactSplit.setAttribute("role", "tabpanel");
+    const selectedArtifact = presentation?.artifacts?.find(
+      (artifact) => artifact.id === pipelineState.selectedArtifactId,
+    );
+    artifactSplit.setAttribute(
+      "aria-labelledby",
+      selectedArtifact ? `artifact-tab-${selectedArtifact.id}` : "results-summary-tab",
+    );
+  }
 
   renderSummaryDetail(presentation);
   renderBundleControls(presentation);
@@ -6344,11 +6435,53 @@ function selectResultsSummary() {
   updateSelectedArtifactPanels();
 }
 
+// Test/diagnostic hook used by the browser suite to render an arbitrary
+// bundle + review without running paid generation. Mirrors the debug path so
+// the Results Summary / artifact inspection surfaces can be asserted in
+// isolation. Not part of the normal pipeline flow.
+function renderResultsPreview(bundle, review) {
+  const readyState = document.getElementById("ready-state");
+  if (readyState) readyState.classList.add("hidden");
+  const stageContainer = document.getElementById("main-stage-container");
+  if (stageContainer) stageContainer.classList.add("visible");
+  hidePipelineProgress?.();
+  const paywallEl = document.getElementById("paywall-exhausted");
+  if (paywallEl) paywallEl.classList.add("hidden");
+
+  pipelineState.step3Result = typeof review === "string" ? review : JSON.stringify(review);
+  pipelineState.step2Result = typeof bundle === "string" ? bundle : JSON.stringify(bundle);
+  pipelineState.artifactBundle = normalizeArtifactBundle(bundle, {
+    id: bundle?.id,
+    title: bundle?.title,
+    description: bundle?.description,
+  });
+  pipelineState.bundleSpec = pipelineState.artifactBundle;
+  updateBundleReviewFromReviewResult();
+  pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
+  showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
+}
+window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
+
 function copyResultsCode() {
   const btn = document.getElementById("btn-copy-results");
+  const statusEl = document.getElementById("results-copy-status");
   const rawCode = getSelectedArtifactCode();
+  const setStatus = (message, ok) => {
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.classList.toggle("ok", Boolean(ok));
+    statusEl.classList.toggle("fail", !ok);
+  };
+
+  if (!navigator.clipboard?.writeText) {
+    // The Clipboard API is unavailable (non-secure context or unsupported).
+    // Surface a non-blocking notice; the results view stays usable.
+    setStatus("Copying isn't supported in this browser.", false);
+    return;
+  }
 
   navigator.clipboard.writeText(rawCode).then(() => {
+    setStatus("Copied to clipboard", true);
     if (btn) {
       btn.classList.add("copied");
       const label = btn.querySelector("span");
@@ -6361,6 +6494,10 @@ function copyResultsCode() {
         }, 2000);
       }
     }
+  }).catch(() => {
+    // Permission denied or transient clipboard failure. This must never block
+    // the results view — the user can still read and select the code.
+    setStatus("Clipboard permission was denied. Select the code to copy it manually.", false);
   });
 }
 

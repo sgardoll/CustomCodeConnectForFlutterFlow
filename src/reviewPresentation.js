@@ -36,9 +36,16 @@ function parseScore(value) {
   }
 
   const direct = Number(scoreValue);
-  if (Number.isFinite(direct)) return direct;
+  if (Number.isFinite(direct)) return validScore(direct);
   const match = String(value || "").match(/\bscore\b[^\d]{0,12}(\d{1,3})(?:\s*\/\s*100)?/i);
-  return match ? Number(match[1]) : null;
+  return match ? validScore(Number(match[1])) : null;
+}
+
+// A review score is only meaningful on the 0-100 scale. Out-of-range or
+// non-numeric values (e.g. "Score: 999/100") are malformed, not extreme scores:
+// they must surface as UNKNOWN rather than fabricating a pass/fail figure.
+function validScore(score) {
+  return score >= 0 && score <= 100 ? score : null;
 }
 
 function slugify(value) {
