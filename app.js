@@ -3277,6 +3277,8 @@ async function runPromptArchitect(userInput, images = []) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    // A cancelled request is a stale run, not a stage failure.
+    if (error.isPipelineCancel) throw error
     throw new Error(`Prompt Architect failed: ${error.message}`)
   }
 }
@@ -3293,6 +3295,9 @@ async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId)
     // model would spend another request and lose the quota signal the view
     // needs to offer an upgrade.
     if (primaryError.isUsageLimit) throw primaryError
+    // A cancelled request is a stale run, not a model problem: it must not
+    // trigger a second request on the fallback model.
+    if (primaryError.isPipelineCancel) throw primaryError
     if (selectedModel !== FALLBACK_MODEL) {
       console.warn(`Code Generator failed with ${selectedModel}, retrying with fallback model:`, primaryError.message)
       // The fallback is a real service event, so the run says so while it
@@ -3303,6 +3308,10 @@ async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId)
         return result
       } catch (fallbackError) {
         if (fallbackError.isModelArmor) throw fallbackError
+        // A quota refusal on the fallback is terminal the same way it was on
+        // the primary: wrap it and the upgrade affordance is lost.
+        if (fallbackError.isUsageLimit) throw fallbackError
+        if (fallbackError.isPipelineCancel) throw fallbackError
         throw new Error(`Code Generator failed: primary (${selectedModel}): ${primaryError.message} | fallback (${FALLBACK_MODEL}): ${fallbackError.message}`)
       }
     }
@@ -3320,6 +3329,7 @@ async function runCodeReview(code, architectOutput = null) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    if (error.isPipelineCancel) throw error
     throw new Error(`Code Review failed: ${error.message}`)
   }
 }
@@ -3498,6 +3508,7 @@ async function runRefinement() {
 
   // Set running state
   pipelineState.isRunning = true;
+  const runId = startPipelineRun();
   callEndpoint('standardRegenerate', pipelineState.step2Result, pipelineState.step1Result)
   const btns = document.querySelectorAll(".btn-refine-action");
 
@@ -3519,9 +3530,8 @@ async function runRefinement() {
       userFeedback: "Fix the issues listed in the audit report.",
     });
 
-    // Show progress bar for refinement. Starting a run invalidates any older
-    // in-flight run, so a late response cannot overwrite this one.
-    const runId = startPipelineRun();
+    // Show progress bar for refinement. The run was already claimed above,
+    // so a late response from an older run cannot overwrite this one.
     showPipelineProgress({ runId });
     updatePipelineProgressStep(2, runId);
 
@@ -3529,13 +3539,17 @@ async function runRefinement() {
     selectWorkflowStep(2);
     showStepLoading(2, true);
 
-    // We use the same runCodeGenerator function but with the refinement prompt
-    pipelineState.step2Result = await runCodeGenerator(
+    // We use the same runCodeGenerator function but with the refinement
+    // prompt. Stage results commit to shared state only after the run is
+    // revalidated, so an abandoned run cannot overwrite a newer one.
+    const step2Result = await runCodeGenerator(
       refinementPrompt,
       selectedModel,
       [],
       runId,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
     completePipelineStage(2, runId);
 
@@ -3550,10 +3564,12 @@ async function runRefinement() {
     updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
     completePipelineStage(3, runId);
 
@@ -3568,15 +3584,18 @@ async function runRefinement() {
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
     console.error("Refinement failed:", error);
+    if (!isCurrentPipelineRun(runId)) return;
     hidePipelineProgress();
     showToast(getPipelineErrorMessage(error, "Refinement failed"), "error");
   } finally {
-    pipelineState.isRunning = false;
-    btns.forEach((btn) => {
-      btn.disabled = false;
-      btn.textContent = "Refine & Regenerate";
-    });
-    updateDeployButtonVisibility();
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false;
+      btns.forEach((btn) => {
+        btn.disabled = false;
+        btn.textContent = "Refine & Regenerate";
+      });
+      updateDeployButtonVisibility();
+    }
   }
 }
 
@@ -3630,6 +3649,7 @@ async function regenerateFromPastedErrors() {
 
   const selectedModel = document.getElementById("code-generator-model").value
   pipelineState.isRunning = true
+  const runId = startPipelineRun()
   callEndpoint('flutterflowError', pipelineState.step2Result, pastedErrors)
 
   const btn = document.getElementById("btn-fix-from-errors")
@@ -3649,14 +3669,15 @@ async function regenerateFromPastedErrors() {
     });
 
     hideErrorInputPanel()
-    const runId = startPipelineRun()
     showPipelineProgress({ runId })
     updatePipelineProgressStep(2, runId)
 
     selectWorkflowStep(2)
     showStepLoading(2, true)
 
-    pipelineState.step2Result = await runCodeGenerator(refinementPrompt, selectedModel, [], runId)
+    const step2Result = await runCodeGenerator(refinementPrompt, selectedModel, [], runId)
+    if (!isCurrentPipelineRun(runId)) return
+    pipelineState.step2Result = step2Result
     updateArtifactBundleFromGeneratedCode()
     completePipelineStage(2, runId)
 
@@ -3670,7 +3691,9 @@ async function regenerateFromPastedErrors() {
     updatePipelineProgressStep(3, runId)
     showStepLoading(3, true)
 
-    pipelineState.step3Result = await runCodeReview(pipelineState.step2Result, pipelineState.step1Result)
+    const step3Result = await runCodeReview(pipelineState.step2Result, pipelineState.step1Result)
+    if (!isCurrentPipelineRun(runId)) return
+    pipelineState.step3Result = step3Result
     updateBundleReviewFromReviewResult()
     completePipelineStage(3, runId)
 
@@ -3685,15 +3708,18 @@ async function regenerateFromPastedErrors() {
     if (input) input.value = ""
   } catch (error) {
     console.error("Fix from errors failed:", error)
+    if (!isCurrentPipelineRun(runId)) return
     hidePipelineProgress()
     showToast(getPipelineErrorMessage(error, "Failed to fix errors"), "error")
   } finally {
-    pipelineState.isRunning = false
-    if (btn) {
-      btn.disabled = false
-      btn.textContent = "Fix Errors & Regenerate"
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false
+      if (btn) {
+        btn.disabled = false
+        btn.textContent = "Fix Errors & Regenerate"
+      }
+      updateDeployButtonVisibility()
     }
-    updateDeployButtonVisibility()
   }
 }
 
@@ -3714,30 +3740,36 @@ async function runThinkingPipeline() {
     return;
   }
 
-  if (!(await canRunPipeline())) return;
-
-  await ensureIdentityReady();
-
-  const effectiveModel = getEffectiveModel(selectedModel);
-
-  trackEvent("Pipeline Started", { 
-    selectedModel, 
-    effectiveModel,
-    inputLength: userInput.length
-  });
-
-  // Reset state
+  // The run is claimed before the first await, so a second submission during
+  // preflight sees it already running instead of starting a concurrent run
+  // beside it.
   pipelineState.isRunning = true;
-  resetPipelineResults();
-  pipelineState.submittedPrompt = userInput;
   const runId = startPipelineRun();
 
-  setRunPipelineButtonBusy(true);
-
-  // Update model info
-  updateModelInfo(effectiveModel);
-
   try {
+    if (!(await canRunPipeline())) return;
+    if (!isCurrentPipelineRun(runId)) return;
+
+    await ensureIdentityReady();
+    if (!isCurrentPipelineRun(runId)) return;
+
+    const effectiveModel = getEffectiveModel(selectedModel);
+
+    trackEvent("Pipeline Started", { 
+      selectedModel, 
+      effectiveModel,
+      inputLength: userInput.length
+    });
+
+    // Reset state
+    resetPipelineResults();
+    pipelineState.submittedPrompt = userInput;
+
+    setRunPipelineButtonBusy(true);
+
+    // Update model info
+    updateModelInfo(effectiveModel);
+
     // Dismiss welcome video and hide ready state, show progress
     dismissWelcomeVideo();
     const readyState = document.getElementById("ready-state");
@@ -3761,13 +3793,16 @@ async function runThinkingPipeline() {
       .filter((img) => img.url)
       .map((img) => ({ url: img.url }));
 
-    pipelineState.step1Result = await runPromptArchitect(
+    // A stage result commits to shared pipeline state only after its run is
+    // revalidated: a response that lands after the user started a newer run
+    // belongs to a run nobody is watching any more, so it must not touch
+    // pipeline state or the view.
+    const step1Result = await runPromptArchitect(
       userInput,
       imagePayload,
     );
-    // A response that lands after the user started a newer run belongs to a
-    // run nobody is watching any more; it must not touch the view.
     if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step1Result = step1Result;
     updateBundleSpecFromArchitectResult();
     completePipelineStage(1, runId);
     trackEvent("Prompt Architect Completed");
@@ -3783,13 +3818,14 @@ async function runThinkingPipeline() {
     updatePipelineProgressStep(2, runId);
     showStepLoading(2, true);
 
-    pipelineState.step2Result = await runCodeGenerator(
+    const step2Result = await runCodeGenerator(
       pipelineState.step1Result,
       effectiveModel,
       imagePayload,
       runId,
     );
     if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
     completePipelineStage(2, runId);
     trackEvent("Code Generator Completed");
@@ -3805,11 +3841,12 @@ async function runThinkingPipeline() {
     updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
     if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
     completePipelineStage(3, runId);
     trackEvent("Code Review Completed");
@@ -3826,7 +3863,9 @@ async function runThinkingPipeline() {
     morphPipelineToResults();
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
-    console.error("Pipeline failed:", error);
+    // A cancelled request belongs to a run the user already abandoned; it is
+    // not a failure and the run check below discards it quietly anyway.
+    if (!error.isPipelineCancel) console.error("Pipeline failed:", error);
     // A terminated run never renders a result. The failure replaces the
     // in-flight state in the same panel and stays there until the user acts.
     if (!isCurrentPipelineRun(runId)) return;
@@ -4036,6 +4075,7 @@ async function regenerateWithErrors(originalError, errorMap) {
   const selectedModel = document.getElementById("code-generator-model").value;
 
   pipelineState.isRunning = true;
+  const runId = startPipelineRun();
 
   const btn = document.getElementById("btn-regenerate-from-error");
   if (btn) {
@@ -4066,7 +4106,6 @@ async function regenerateWithErrors(originalError, errorMap) {
       userFeedback: errorContext,
     });
 
-    const runId = startPipelineRun();
     showPipelineProgress({ runId });
     updatePipelineProgressStep(2, runId);
 
@@ -4074,13 +4113,16 @@ async function regenerateWithErrors(originalError, errorMap) {
     selectWorkflowStep(2);
     showStepLoading(2, true);
 
-    // Generate new code
-    pipelineState.step2Result = await runCodeGenerator(
+    // Generate new code. Stage results commit to shared state only after the
+    // run is revalidated, so an abandoned run cannot overwrite a newer one.
+    const step2Result = await runCodeGenerator(
       refinementPrompt,
       selectedModel,
       [],
       runId,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
     completePipelineStage(2, runId);
 
@@ -4095,10 +4137,12 @@ async function regenerateWithErrors(originalError, errorMap) {
     updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
     completePipelineStage(3, runId);
 
@@ -4112,17 +4156,20 @@ async function regenerateWithErrors(originalError, errorMap) {
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
     console.error("Regeneration failed:", error);
+    if (!isCurrentPipelineRun(runId)) return;
     hidePipelineProgress();
     showToast(getPipelineErrorMessage(error, "Regeneration failed"), "error");
   } finally {
-    pipelineState.isRunning = false;
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false;
 
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Fix Errors & Regenerate";
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "Fix Errors & Regenerate";
+      }
+
+      updateDeployButtonVisibility();
     }
-
-    updateDeployButtonVisibility();
   }
 }
 
@@ -4837,10 +4884,26 @@ async function openCustomerPortal() {
   }
 }
 
+// Every in-flight BuildShip request registers its controller here so a run
+// the user abandoned can cancel its request instead of only discarding the
+// response when it lands.
+const activeBuildShipControllers = new Set();
+
+/** Cancel every in-flight BuildShip request; the run they served is stale. */
+function abortPipelineRequests() {
+  activeBuildShipControllers.forEach((controller) => controller.abort());
+  activeBuildShipControllers.clear();
+}
+
 async function callBuildShip(step, model, prompt, context = {}, images = []) {
   const BUILDSHIP_TIMEOUT_MS = 120000
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), BUILDSHIP_TIMEOUT_MS)
+  activeBuildShipControllers.add(controller)
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, BUILDSHIP_TIMEOUT_MS)
 
   try {
     const res = await fetch(PIPELINE_ENDPOINT, {
@@ -4924,7 +4987,14 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     return output
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error(`BuildShip ${step} timed out after ${BUILDSHIP_TIMEOUT_MS / 1000}s`)
+      if (timedOut) {
+        throw new Error(`BuildShip ${step} timed out after ${BUILDSHIP_TIMEOUT_MS / 1000}s`)
+      }
+      // The run that owned this request was abandoned, so the cancellation
+      // must never read as a service outcome.
+      const cancelled = new Error(`BuildShip ${step} request cancelled`)
+      cancelled.isPipelineCancel = true
+      throw cancelled
     }
     if (error instanceof TypeError) {
       throw new Error(`BuildShip unreachable: ${error.message}`)
@@ -4932,6 +5002,7 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     throw error
   } finally {
     clearTimeout(timeoutId)
+    activeBuildShipControllers.delete(controller)
   }
 }
 
@@ -5839,6 +5910,15 @@ function isCurrentPipelineRun(runId) {
   return runId === undefined || runId === pipelineState.runId;
 }
 
+/**
+ * Abandon the current run: its captured id stops matching
+ * pipelineState.runId, so every isCurrentPipelineRun check discards whatever
+ * it still has in flight. Used when the user leaves the run mid-flight.
+ */
+function invalidatePipelineRun() {
+  pipelineState.runId += 1;
+}
+
 function pipelineStageButton(step) {
   return document.getElementById(`pdot-${step}`);
 }
@@ -6103,6 +6183,8 @@ window.addEventListener("popstate", cancelPipelineMorph);
 function showPipelineProgress(options = {}) {
   const { prompt = null, runId } = options;
   if (!isCurrentPipelineRun(runId)) return;
+  // A previous run's delayed hide must not blank this run's panel.
+  cancelPipelineHideTimer();
 
   setGenerationStageVisible(true);
   const progress = document.getElementById("pipeline-progress");
@@ -6168,6 +6250,7 @@ function showPipelineFailure(error, { stage = 1, runId } = {}) {
   if (!isCurrentPipelineRun(runId)) return;
 
   stopProgressTimer();
+  cancelPipelineHideTimer();
   cancelPipelineMorph();
   setPipelineRunState("failed");
   setGenerationStageVisible(true);
@@ -6234,10 +6317,22 @@ function showPipelineFailure(error, { stage = 1, runId } = {}) {
   if (firstAction) firstAction.focus({ preventScroll: true });
 }
 
-/** Return to the composer with the submitted prompt intact. */
+/**
+ * Return to the composer with the submitted prompt intact. Editing abandons
+ * the in-flight run: its id is invalidated so a late response is discarded,
+ * its request is cancelled, and the send control is usable again — the run
+ * can never finish behind the composer's back and reopen Results.
+ */
 function editPipelinePrompt() {
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
+  updateDeployButtonVisibility();
+  setPipelineRunState("settled");
   cancelPipelineMorph();
   stopProgressTimer();
+  cancelPipelineHideTimer();
   hidePipelineFailure();
   const progress = document.getElementById("pipeline-progress");
   if (progress) progress.classList.remove("visible");
@@ -6277,15 +6372,28 @@ function stopProgressTimer() {
   }
 }
 
+// The settled run's panel lingers 400ms before it hides; a run that starts
+// inside that window must not be blanked by the previous run's timer.
+let pipelineHideTimer = null;
+
+function cancelPipelineHideTimer() {
+  if (pipelineHideTimer) {
+    clearTimeout(pipelineHideTimer);
+    pipelineHideTimer = null;
+  }
+}
+
 function hidePipelineProgress() {
   stopProgressTimer();
+  cancelPipelineHideTimer();
   setPipelineRunState("settled");
   renderPipelineTrack();
 
   const fillEl = document.getElementById("pipeline-progress-fill");
 
   // Brief pause then hide
-  setTimeout(() => {
+  pipelineHideTimer = setTimeout(() => {
+    pipelineHideTimer = null;
     const progress = document.getElementById("pipeline-progress");
     if (progress) progress.classList.remove("visible");
     if (fillEl) fillEl.style.width = "0%";

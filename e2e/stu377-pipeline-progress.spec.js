@@ -289,6 +289,133 @@ test.describe("Recoverable failure states", () => {
     await expect(composer).toBeFocused();
     await expect(page.locator("#pipeline-failure")).toBeHidden();
   });
+
+  test("a quota refusal on the fallback model still offers an upgrade", async ({ page }) => {
+    // The fallback is only reachable on a plan that can pick a non-free model.
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "ccc_auth_session",
+        JSON.stringify({
+          email: "pro@example.com",
+          sessionToken: "test-session-token-pro",
+        }),
+      );
+    });
+    await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
+    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    let generatorCalls = 0;
+    await page.route(ENDPOINTS.pipeline, async (route) => {
+      const step = stepOf(route);
+      if (step === "generator") {
+        generatorCalls += 1;
+        // Primary fails for an ordinary provider reason; the fallback 429s.
+        await route.fulfill(generatorCalls === 1 ? providerError() : quotaExhausted());
+        return;
+      }
+      await route.fulfill(STAGE_RESPONSES[step]());
+    });
+
+    await page.locator("#hero-send").click();
+
+    // The fallback's quota signal survives: the panel reads as an allowance
+    // problem with an upgrade, not a generic failure with a useless retry.
+    await expect(failure(page)).toBeVisible();
+    await expect(failure(page)).toHaveAttribute("data-kind", "quota");
+    await expect(failure(page).locator('button[data-action="upgrade"]')).toBeVisible();
+    await expect(failure(page).locator('button[data-action="retry"]')).toHaveCount(0);
+    expect(generatorCalls).toBe(2);
+  });
+});
+
+test.describe("Stateful transitions stay isolated per run", () => {
+  test("a second submission while a run is in flight is ignored", async ({ page }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["review"] });
+
+    await page.locator("#pipeline-input").fill("A countdown ring");
+    // Two submissions land inside the same preflight window. The run is
+    // claimed before the first await, so the second call must not start a
+    // concurrent run beside the first.
+    await page.evaluate(() => {
+      window.runThinkingPipeline();
+      window.runThinkingPipeline();
+    });
+
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "done");
+    pipeline.release("review");
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+
+    // Exactly one run's worth of requests ever left the page.
+    expect(pipeline.bodies.map((body) => body.step)).toEqual([
+      "architect",
+      "generator",
+      "review",
+    ]);
+  });
+
+  test("editing mid-run abandons it: the send control is restored and the abandoned run never opens Results", async ({ page }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["generator"] });
+
+    const prompt = "A gauge that fills on drag";
+    await page.locator("#pipeline-input").fill(prompt);
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+
+    // Edit while Generator is in flight: the run is abandoned, the request
+    // cancelled, and the composer is usable again immediately.
+    await page.locator("#pipeline-edit-prompt").click();
+    await expect(page.locator("#pipeline-progress")).not.toHaveClass(/visible/);
+    await expect(page.locator("#pipeline-input")).toHaveValue(prompt);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+
+    // The abandoned run's late response can never reopen Results behind the
+    // composer's back — and it never even reaches the next stage.
+    pipeline.release("generator");
+    await page.waitForTimeout(300);
+    await expect(page.locator("#results-view")).not.toHaveClass(/visible/);
+    expect(
+      pipeline.bodies.filter((body) => body.step === "review"),
+    ).toHaveLength(0);
+
+    // Editing freed the pipeline: the same prompt runs cleanly end to end.
+    const secondRun = await routePipelineStages(page);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    expect(secondRun.bodies[0].prompt).toContain(prompt);
+  });
+
+  test("refinement re-enters at stage 2, leaves Architect skipped, and survives the hide window", async ({ page }) => {
+    await openHome(page);
+    await routePipelineStages(page);
+
+    await page.locator("#pipeline-input").fill("A progress ring");
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+
+    // The refinement's own run gets a fresh gate on Generator so the test
+    // controls exactly when its stage advances.
+    const refinement = await routePipelineStages(page, { hold: ["generator"] });
+
+    // Refining starts inside the previous run's 400ms hide window: its
+    // progress must not be blanked by the earlier run's delayed hide.
+    await page.locator("#btn-refine-header").click();
+
+    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
+    // Re-entering at stage 2 never paints the untouched Architect as done.
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+    await expect(stage(page, 3)).toHaveAttribute("data-state", "pending");
+
+    // Well past the 400ms window the refinement run is still on screen.
+    await page.waitForTimeout(700);
+    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
+
+    refinement.release("generator");
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    await expect(stage(page, 3)).toHaveAttribute("data-state", "done");
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");
+  });
 });
 
 test.describe("Motion is decorative and settles safely", () => {
