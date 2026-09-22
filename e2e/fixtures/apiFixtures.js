@@ -48,14 +48,16 @@ export const ENDPOINTS = {
 
 // Origin of the local Vite dev server that playwright.config.js boots and
 // targets (webServer.url / baseURL). Its requests are the only ones allowed
-// to reach the network.
-const VITE_ORIGIN = "http://localhost:3000";
+// to reach the network. Both read CCC_TEST_PORT so parallel worktrees can run
+// their own server without intercepting each other's traffic; absent it, both
+// fall back to the default 3000.
+const VITE_ORIGIN = `http://localhost:${process.env.CCC_TEST_PORT || 3000}`;
 
-function ok(body) {
+export function ok(body) {
   return { status: 200, body: JSON.stringify(body), contentType: "application/json" };
 }
 
-function err(status, body) {
+export function err(status, body) {
   return { status, body: typeof body === "string" ? body : JSON.stringify(body), contentType: "application/json" };
 }
 
@@ -228,6 +230,63 @@ export const manyArtifacts = () =>
     usage_count: 3,
     usage_month: new Date().toISOString().slice(0, 7),
   });
+
+/**
+ * The Architect, Generator and Review stages all POST to the same pipeline
+ * endpoint and are told apart by the `step` field in the request body. This
+ * routes each stage to its own deterministic response, so a journey can
+ * exercise the three real stage transitions - or fail exactly one of them.
+ *
+ * @param {Record<"architect"|"generator"|"review"|"default", object|Function>} byStep
+ */
+export const pipelineByStep = (byStep) => (request) => {
+  let step = "";
+  try {
+    step = JSON.parse(request?.postData?.() || "{}").step || "";
+  } catch {
+    step = "";
+  }
+  const entry = byStep[step] ?? byStep.default ?? oneArtifact();
+  return typeof entry === "function" ? entry() : entry;
+};
+
+export const reviewPassed = () =>
+  ok({
+    output: JSON.stringify({
+      status: "pass",
+      score: 96,
+      summary: "The bundle compiles and matches the requested behavior.",
+      manualActions: [],
+      findings: [],
+      artifacts: [
+        {
+          id: "custom-action-greet-user",
+          review: { status: "pass", findings: [] },
+        },
+      ],
+    }),
+  });
+
+/** HTTP 429: the monthly run allowance is exhausted. */
+export const quotaExhausted = () =>
+  err(429, {
+    message: "Monthly usage limit reached. Upgrade to continue.",
+    serverCount: 2,
+  });
+
+/** A Model Armor block - the safety screen refused the request. */
+export const safetyBlocked = () =>
+  ok({
+    sanitizationResult: {
+      filterMatchState: "MATCH_FOUND",
+      invocationResult: "SUCCESS",
+      matchedFilters: ["hate_speech"],
+    },
+  });
+
+/** An ordinary provider failure. */
+export const providerError = () =>
+  err(500, { message: "Upstream model provider returned an error" });
 
 export const missingReviewScore = () =>
   ok({
@@ -445,7 +504,11 @@ export async function applyDefaultRoutes(page, overrides = {}) {
 
     const fixture = routes[requestUrl];
     if (fixture) {
-      await route.fulfill(typeof fixture === "function" ? fixture() : fixture);
+      // A fixture may be a function of the request, so one endpoint can answer
+      // differently per request body (see pipelineByStep).
+      await route.fulfill(
+        typeof fixture === "function" ? fixture(route.request()) : fixture,
+      );
       return;
     }
 

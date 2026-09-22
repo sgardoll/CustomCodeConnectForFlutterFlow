@@ -33,6 +33,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/designTokens.css" />
     <link rel="stylesheet" href="/src/sharedControls.css" />
+    <link rel="stylesheet" href="/src/heroMarkField.css" />
     <style>
       :root {
         /* Layout constants preserved until the shell change that owns them. */
@@ -1348,6 +1349,36 @@
         line-height: 1.45;
       }
       .summary-findings .review-status-icon { margin-top: 2px; }
+      .summary-bundle-warnings {
+        margin: 16px 0 0;
+        padding: 12px 14px;
+        border: 1px solid #fcd34d;
+        border-radius: 10px;
+        background: #fffbeb;
+      }
+      .summary-bundle-warnings h4 {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #92400e;
+      }
+      .summary-bundle-warnings ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 5px;
+      }
+      .summary-bundle-warnings li {
+        color: #78350f;
+        font-size: 13.5px;
+        line-height: 1.45;
+      }
       .review-score-feedback {
         width: 100%;
         margin-top: 10px;
@@ -1434,6 +1465,19 @@
       }
       .code-copy-button:hover { color: #fff; border-color: #6b7280; background: #333544; }
       .code-copy-button.copied { color: #bbf7d0; border-color: #166534; background: #14532d; }
+      .results-copy-status {
+        position: absolute;
+        z-index: 2;
+        top: 16px;
+        left: 16px;
+        max-width: calc(100% - 140px);
+        font-size: 11.5px;
+        font-weight: 600;
+        line-height: 1.3;
+        color: #99a0b5;
+      }
+      .results-copy-status.ok { color: #4ade80; }
+      .results-copy-status.fail { color: #fca5a5; }
       body.results-fullscreen .panel-code-wrap pre { padding-top: 56px; }
       body.results-fullscreen .results-action-bar {
         display: grid;
@@ -1534,6 +1578,11 @@
         background: #fee2e2;
         color: #dc2626;
         border-color: #fca5a5;
+      }
+      .feedback-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+        pointer-events: none;
       }
 
       /* ── Pipeline Progress Bar ───────────────────────── */
@@ -1643,6 +1692,189 @@
       }
       .progress-dot.completed {
         background: #22c55e;
+      }
+
+      /* ── Pipeline: real stage, note and failure states (STU-377) ── */
+      .pipeline-progress {
+        overflow-y: auto;
+        gap: 0;
+      }
+      .pipeline-prompt-recap {
+        width: 100%;
+        max-width: 400px;
+        margin-bottom: 24px;
+        text-align: left;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md, 12px);
+        background: var(--surface);
+      }
+      .pipeline-prompt-kicker {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: var(--ls-mono);
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .pipeline-prompt-text {
+        font-size: 14px;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-prompt-edit {
+        margin-top: 8px;
+        padding: 0;
+        min-height: 44px;
+        background: none;
+        border: none;
+        color: var(--accent);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      /* A finished or failed run has nothing left to spin for. */
+      .pipeline-progress[data-run-state="failed"] .pipeline-progress-icon::after,
+      .pipeline-progress[data-run-state="settled"] .pipeline-progress-icon::after {
+        animation: none;
+        border-top-color: var(--border);
+      }
+      .pipeline-progress[data-run-state="failed"] .progress-fill {
+        animation: none;
+        background: var(--bad);
+      }
+
+      .progress-steps-dots {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 4px;
+      }
+      .progress-stage {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        min-height: 44px;
+        padding: 6px 10px;
+        background: none;
+        border: none;
+        font: inherit;
+        font-size: 11px;
+        color: var(--muted-2);
+        cursor: pointer;
+      }
+      .progress-stage:disabled {
+        cursor: default;
+      }
+      .progress-stage[data-state="active"] .progress-dot {
+        background: #6366f1;
+        box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+      }
+      .progress-stage[data-state="done"] .progress-dot {
+        background: #22c55e;
+      }
+      .progress-stage[data-state="failed"] .progress-dot {
+        background: var(--bad);
+      }
+      .progress-stage[data-state="active"] .progress-stage-label,
+      .progress-stage[data-state="done"] .progress-stage-label {
+        color: var(--fg);
+      }
+      .progress-stage[aria-pressed="true"] .progress-stage-label {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      .pipeline-note {
+        margin-top: 16px;
+        max-width: 400px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+
+      .pipeline-failure {
+        margin-top: 24px;
+        width: 100%;
+        max-width: 420px;
+        text-align: left;
+        padding: 16px;
+        border: 1px solid var(--bad);
+        border-radius: var(--radius-md, 12px);
+        background: var(--bad-soft);
+      }
+      .pipeline-failure-title {
+        font-family: var(--font-display);
+        font-size: 15px;
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        margin-bottom: 6px;
+      }
+      .pipeline-failure-message,
+      .pipeline-failure-hint {
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-failure-hint {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .pipeline-failure-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .pipeline-failure-actions button {
+        flex: 1 1 140px;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: var(--radius-md, 12px);
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13.5px;
+        font-weight: var(--fw-ui);
+        cursor: pointer;
+      }
+      .pipeline-failure-actions button[data-variant="primary"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      /* The authored coral outline that morphs the composer into the pipeline
+         panel, and the pipeline panel into the expanded Results view. */
+      /* The composer's send button carries its own busy spinner, so the shared
+         control spinner must not double it up. */
+      .send[aria-busy="true"]::after { content: none; }
+
+      /* Outline only: the destination surface is already in place underneath,
+         so the morph never hides real state while it plays. */
+      .composer-morph {
+        position: fixed;
+        z-index: 45;
+        pointer-events: none;
+        border: 2px solid var(--accent);
+        border-radius: 20px;
+        box-shadow: var(--shadow-composer);
+        background: transparent;
+      }
+
+      @media (max-width: 640px) {
+        .pipeline-progress { padding: 24px 16px 32px; justify-content: flex-start; }
+        .pipeline-progress-icon { width: 56px; height: 56px; margin-bottom: 18px; }
+        .pipeline-failure-actions button { flex: 1 1 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pipeline-progress-icon::after,
+        .progress-fill { animation: none; }
+        .composer-morph { display: none; }
       }
 
       /* ── Modals ────────────────────────────────────────── */
@@ -2897,7 +3129,190 @@
         color: var(--accent);
       }
 
+      /* Account overview — real identity, plan, usage and honest history.
+         Every number below is written by renderAccountOverview() from the same
+         metered/session/subscription state the topbar reads; nothing here is
+         illustrative, and no renewal/member date is ever fabricated. */
+      .acct-head { padding: 4px 0 22px; }
+      .acct-eyebrow {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        font-weight: 500;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 12px;
+      }
+      .acct-title {
+        font-family: var(--font-display);
+        font-size: clamp(28px, 5vw, 40px);
+        line-height: 1.06;
+        letter-spacing: -0.03em;
+        font-weight: var(--fw-bold);
+        margin: 0;
+      }
+      .acct-lead {
+        margin: 14px 0 0;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--muted);
+        max-width: 62ch;
+      }
+
+      .acct-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin: 0 0 16px;
+      }
+      .acct-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        padding: 20px;
+      }
+      .acct-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .acct-card-head h2 {
+        font-family: var(--font-display);
+        font-size: 17px;
+        font-weight: var(--fw-bold);
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+      .acct-card-head .acct-meta {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--muted-2);
+      }
+
+      .acct-who { display: flex; align-items: center; gap: 14px; }
+      .acct-avatar {
+        width: 52px; height: 52px; flex: none;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        background: var(--fg); color: var(--surface);
+        font-size: 19px; font-weight: 600;
+      }
+      .acct-name {
+        font-family: var(--font-display);
+        font-size: 19px; font-weight: var(--fw-bold);
+        letter-spacing: -0.02em; margin: 0;
+      }
+      .acct-email {
+        font-family: var(--font-mono);
+        font-size: 12.5px; color: var(--muted);
+        margin: 3px 0 0; overflow-wrap: anywhere;
+      }
+      .acct-since {
+        font-size: 12.5px; color: var(--muted-2); margin: 7px 0 0;
+      }
+
+      .acct-k {
+        font-family: var(--font-mono);
+        font-size: 10.5px; letter-spacing: 0.11em; text-transform: uppercase;
+        color: var(--muted-2); margin: 0;
+      }
+      .acct-v {
+        font-size: clamp(26px, 3vw, 32px);
+        font-weight: var(--fw-bold);
+        letter-spacing: -0.035em;
+        line-height: 1.05;
+        margin: 10px 0 0;
+        overflow-wrap: anywhere;
+      }
+      .acct-v .acct-unit { font-size: 15px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+      .acct-n {
+        font-size: 12.5px; color: var(--muted); margin: 8px 0 0;
+      }
+
+      .acct-identity { margin-bottom: 16px; }
+      .acct-usage-meter { margin-bottom: 16px; }
+      .acct-meter { margin-top: 18px; }
+      .acct-meter-track {
+        height: 10px; border-radius: 999px;
+        background: var(--track); overflow: hidden;
+      }
+      .acct-meter-fill {
+        height: 100%; border-radius: 999px;
+        background: var(--accent);
+        width: 0%;
+        transition: width 700ms var(--ease, ease);
+      }
+      .acct-meter-meta {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 14px; flex-wrap: wrap;
+        margin-top: 12px; font-size: 13px; color: var(--muted);
+      }
+      .acct-meter-meta .acct-num { font-family: var(--font-mono); font-size: 13px; color: var(--fg); }
+      .acct-counter { font-family: var(--font-mono); font-size: 12px; }
+
+      .acct-empty {
+        margin-top: 14px;
+        padding: 16px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius-sm, 10px);
+        background: var(--surface-sunken);
+        font-size: 13.5px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+      .acct-empty p { margin: 0 0 6px; }
+      .acct-empty p:last-child { margin-bottom: 0; }
+      .acct-empty a { color: var(--accent); text-decoration: underline; }
+
+      .acct-connection { margin-bottom: 16px; }
+      .acct-conn-row {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 14px; font-size: 14px;
+      }
+      .acct-dot {
+        width: 9px; height: 9px; border-radius: 50%; flex: none;
+        background: var(--muted-2);
+      }
+      .acct-dot.ok { background: var(--ok); }
+      .acct-dot.warn { background: var(--warn); }
+      .acct-conn-spacer { flex: 1; }
+      .acct-kv { margin: 12px 0 0; }
+      .acct-row {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border);
+        font-size: 13.5px;
+      }
+      .acct-row:last-child { border-bottom: 0; }
+      .acct-row dt { color: var(--muted); }
+      .acct-row dd { margin: 0; font-family: var(--font-mono); font-size: 13px; text-align: right; overflow-wrap: anywhere; }
+
+      .acct-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .acct-actions .btn-action { flex: 1 1 auto; }
+      .btn-action.ghost {
+        background: transparent; color: var(--muted);
+        border: 1px solid var(--border);
+      }
+      .btn-action.sm { padding: 7px 12px; font-size: 12.5px; flex: none; }
+
+      .acct-access-row {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border);
+        font-size: 13.5px;
+      }
+      .acct-access-row:last-child { border-bottom: 0; }
+      .acct-access-row p { margin: 0; color: var(--muted); }
+      .acct-access-row p:first-child { color: var(--fg); font-weight: 500; flex: none; }
+
       /* Mobile compact */
+      @media (max-width: 920px) {
+        .acct-grid { grid-template-columns: 1fr; }
+        /* The connection row's Configure button is non-shrinking (flex: none);
+           on narrow screens the long status text pushes it past the viewport,
+           so drop it onto its own full-width line instead. */
+        .acct-conn-row { flex-wrap: wrap; }
+        .acct-conn-row .btn-action { flex: 1 1 100%; }
+      }
       @media (max-width: 920px) {
         .hero { padding: 24px 16px 28px; }
         .headline { font-size: clamp(34px, 10vw, 56px); line-height: 1.08; }
@@ -2941,7 +3356,7 @@
     </nav>
 
     <div class="topbar-account">
-      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Credits remaining" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
+      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Runs remaining this month" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>
         </svg>
@@ -2955,6 +3370,12 @@
   <main class="viewport" id="viewport">
     <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" tabindex="-1" data-view="home">
       <div class="hero" id="hero">
+        <div class="hero-field" aria-hidden="true">
+          <canvas class="fx-grid" id="fx-grid" aria-hidden="true" tabindex="-1"></canvas>
+          <div class="fx-mask fx-mask-top"></div>
+          <div class="fx-mask fx-mask-bottom"></div>
+          <div class="fx-mask fx-mask-hero"></div>
+        </div>
         <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
         <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
 
@@ -3043,24 +3464,48 @@
 
             <!-- Pipeline Progress View -->
             <div id="pipeline-progress" class="pipeline-progress">
-              <div class="pipeline-progress-icon">
+              <div class="pipeline-prompt-recap">
+                <p class="pipeline-prompt-kicker">Your prompt</p>
+                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
+                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
+              </div>
+              <div class="pipeline-progress-icon" id="pipeline-progress-icon">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                 </svg>
               </div>
-              <h3 id="progress-title-text">Generating your code...</h3>
-              <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              <div class="pipeline-status" id="pipeline-status" role="status" aria-live="polite">
+                <h3 id="progress-title-text">Understanding your prompt</h3>
+                <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              </div>
               <div class="progress-track">
                 <div class="progress-fill" id="pipeline-progress-fill"></div>
               </div>
               <div class="progress-meta">
                 <span id="progress-elapsed">0s</span>
-                <span id="progress-estimate">~120s</span>
+                <span id="progress-stage-count">Step 1 of 3</span>
               </div>
-              <div class="progress-steps-dots">
-                <div class="progress-dot" id="pdot-1"></div>
-                <div class="progress-dot" id="pdot-2"></div>
-                <div class="progress-dot" id="pdot-3"></div>
+              <div class="progress-steps-dots" id="pipeline-stage-nav">
+                <button class="progress-stage" type="button" id="pdot-1" data-step="1" data-state="pending" disabled onclick="selectPipelineStage(1)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Architect</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-2" data-step="2" data-state="pending" disabled onclick="selectPipelineStage(2)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Generator</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-3" data-step="3" data-state="pending" disabled onclick="selectPipelineStage(3)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Review</span>
+                </button>
+              </div>
+              <p class="pipeline-note" id="pipeline-note" hidden></p>
+
+              <div class="pipeline-failure" id="pipeline-failure" role="alert" hidden>
+                <h4 class="pipeline-failure-title" id="pipeline-failure-title"></h4>
+                <p class="pipeline-failure-message" id="pipeline-failure-message"></p>
+                <p class="pipeline-failure-hint" id="pipeline-failure-hint" hidden></p>
+                <div class="pipeline-failure-actions" id="pipeline-failure-actions"></div>
               </div>
             </div>
 
@@ -3102,6 +3547,7 @@
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                         <span>Copy</span>
                       </button>
+                      <span id="results-copy-status" class="results-copy-status" role="status"></span>
                       <pre id="results-code-output" class="code-font"></pre>
                     </div>
                   </div>
@@ -3122,7 +3568,7 @@
               </div>
 
               <div class="results-action-bar" aria-label="Generation actions">
-                <button id="btn-deploy-to-ff" class="btn-header-action btn-deploy-results hidden" onclick="initiateCommitToFlutterFlow()">
+                <button id="btn-deploy-to-ff" data-deploy-start class="btn-header-action btn-deploy-results hidden" onclick="initiateCommitToFlutterFlow()">
                   <img class="flutterflow-deploy-icon" src="https://flutterflow.io/favicon.ico" alt="" />
                   Deploy to FlutterFlow
                 </button>
@@ -3188,22 +3634,115 @@
     </section>
 
     <section id="account-view" class="view view-account" aria-label="Account" role="region" tabindex="-1" data-view="account" hidden>
-      <div class="surface-card account-card">
-        <h2>Account</h2>
-        <div id="auth-signedout" style="margin-top: 8px;">
+      <div class="surface-card account-card" style="background:var(--surface-translucent);">
+        <header class="acct-head">
+          <p class="acct-eyebrow">Account</p>
+          <h2 class="acct-title">Your workspace, in one place.</h2>
+          <p class="acct-lead">Who you are signed in as, how much of your plan you have used this period, and what is connected to FlutterFlow.</p>
+        </header>
+
+        <div id="auth-signedout">
           <p style="color:var(--muted); margin-bottom: 18px; font-size: 14px;">Sign in to track usage and manage your subscription.</p>
           <button class="btn-action btn-run" onclick="openSignInModal()">Sign In</button>
         </div>
-        <div id="auth-signedin" class="hidden" style="margin-top: 8px;">
-          <div class="account-row"><span class="muted">Email</span><span id="auth-user-email">—</span></div>
-          <div class="account-row"><span class="muted">Plan</span><span id="subscription-tier-badge" class="inline-badge">Free</span></div>
-          <div class="account-row"><span class="muted">Usage</span><span id="usage-counter">0 / 2 runs this month</span></div>
-          <div class="account-actions">
-            <button class="btn-action btn-run" onclick="openApiKeysModal()">Configure API Keys</button>
-            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal()">Manage Subscription</button>
-            <button class="btn-action" style="background:transparent;color:var(--muted);border:1px solid var(--border);" onclick="handleSignOut()">Sign Out</button>
+
+        <div id="auth-signedin" class="hidden">
+          <div class="acct-grid">
+            <div class="acct-card acct-identity">
+              <div class="acct-who">
+                <span class="acct-avatar" id="acct-avatar" aria-hidden="true">?</span>
+                <div style="min-width:0;">
+                  <p class="acct-name" id="acct-name">—</p>
+                  <p class="acct-email" id="auth-user-email">—</p>
+                  <p class="acct-since" id="acct-since">Signed in by email magic link.</p>
+                </div>
+              </div>
+              <div class="acct-actions">
+                <button class="btn-action ghost" onclick="switchView('plans')">Change plan</button>
+                <button class="btn-action ghost" onclick="handleSignOut()">Sign out</button>
+              </div>
+            </div>
+
+            <div class="acct-card acct-plan">
+              <p class="acct-k">Current plan</p>
+              <p class="acct-v"><span id="acct-plan-tier">Free</span> <span class="acct-unit" id="acct-plan-price">$0 / month</span></p>
+              <p class="acct-n" id="acct-plan-note">No subscription.</p>
+              <p class="acct-n" id="acct-renewal">Renewal date not available yet.</p>
+              <span id="subscription-tier-badge" class="inline-badge" style="margin-top:12px;">Free</span>
+            </div>
+
+            <div class="acct-card acct-usage">
+              <p class="acct-k">Generations left this period</p>
+              <p class="acct-v"><span id="acct-left-count">—</span> <span class="acct-unit">of <span id="acct-left-limit">—</span></span></p>
+              <p class="acct-n" id="acct-reset-note">Runs reset at the start of each month.</p>
+            </div>
+          </div>
+
+          <div class="acct-card acct-usage-meter">
+            <div class="acct-card-head">
+              <h2>Usage this month</h2>
+              <span class="acct-meta" id="acct-meter-meta">—</span>
+            </div>
+            <div class="acct-meter">
+              <div class="acct-meter-track" role="img" id="acct-meter-track" aria-label="Usage this period">
+                <div class="acct-meter-fill" id="acct-meter-fill"></div>
+              </div>
+              <div class="acct-meter-meta">
+                <span><span class="acct-num" id="acct-used-count">0</span> generations used</span>
+                <span id="usage-counter" class="acct-counter">0 / 2 runs this month</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="acct-card acct-history" id="acct-history">
+            <div class="acct-card-head">
+              <h2>Generation history</h2>
+              <span class="acct-meta">not saved</span>
+            </div>
+            <div class="acct-empty" id="acct-no-history">
+              <p>Saved history isn't available yet.</p>
+              <p>Per-run records aren't persisted, so there is no past list to show. Your current result stays open in the <a href="#home" onclick="switchView('home'); return false;">generation workspace</a>.</p>
+            </div>
+          </div>
+
+          <div class="acct-card acct-connection">
+            <div class="acct-card-head">
+              <h2>FlutterFlow connection</h2>
+              <span class="acct-meta">API key</span>
+            </div>
+            <div class="acct-conn-row">
+              <span class="acct-dot" id="acct-ff-dot" aria-hidden="true"></span>
+              <span id="acct-ff-status">Checking…</span>
+              <span class="acct-conn-spacer"></span>
+              <button class="btn-action ghost sm" onclick="openApiKeysModal()">Configure</button>
+            </div>
+            <dl class="acct-kv">
+              <div class="acct-row"><dt>Endpoint</dt><dd id="acct-ff-endpoint">—</dd></div>
+              <div class="acct-row"><dt>Default project</dt><dd id="acct-ff-project">—</dd></div>
+            </dl>
+          </div>
+
+          <div class="acct-card acct-access">
+            <div class="acct-card-head">
+              <h2>Provider keys &amp; access</h2>
+              <span class="acct-meta">stored on this device</span>
+            </div>
+            <div class="acct-access-row">
+              <p>Sign-in method</p>
+              <p style="text-align:right;">Email magic link. No password is stored.</p>
+            </div>
+            <div class="acct-access-row">
+              <p>API keys</p>
+              <p style="text-align:right;">Provider and FlutterFlow keys are encrypted and kept in this browser.</p>
+            </div>
+            <div class="acct-actions">
+              <button class="btn-action ghost" onclick="openApiKeysModal()">Configure API Keys</button>
+              <button class="btn-action ghost" id="manage-billing-btn" onclick="openCustomerPortal(this)">Manage Subscription</button>
+              <button class="btn-action ghost" onclick="handleSignOut()">Sign Out</button>
+            </div>
           </div>
         </div>
+
         <div id="auth-guest-usage" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px;">
             <span style="font-size:14px; color:var(--muted);"><span id="guest-usage-text">0 / 2 generations used</span></span>
@@ -3222,44 +3761,30 @@
         <h2>Choose a plan</h2>
         <p style="color:var(--muted); font-size:14px; margin-bottom: 22px;">Unlock more generations and advanced features.</p>
         <div class="pm-cards" style="padding:0;">
-          <div class="pm-card">
+          <div class="pm-card" data-tier="free">
             <div class="pm-card-name">Free</div>
             <div class="pm-card-price">$0<span class="price-suffix">/mo</span></div>
             <div class="pm-price-note">&nbsp;</div>
-            <ul class="pm-features">
-              <li>2 generations/month</li>
-              <li>Gemini model only</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <div id="plans-free-current" class="pm-current-plan-indicator">Current plan</div>
           </div>
 
-          <div class="pm-card pm-card-pro">
+          <div class="pm-card pm-card-pro" data-tier="professional">
             <div class="pm-popular-badge">Popular</div>
             <div class="pm-card-name">Pro</div>
             <div class="pm-card-label">For FlutterFlow Professionals</div>
             <div class="pm-card-price"><span id="plans-pro-price">A$11</span><span class="price-suffix">/mo</span></div>
             <div id="plans-pro-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>50 generations/month</li>
-              <li>All models</li>
-              <li>Code Regeneration</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="plans-checkout-btn-professional" onclick="startCheckout('professional')" class="pm-subscribe-btn pm-subscribe-btn-pro">Subscribe</button>
           </div>
 
-          <div class="pm-card pm-card-power">
+          <div class="pm-card pm-card-power" data-tier="power">
             <div class="pm-card-name">Power</div>
             <div class="pm-card-label">For Agencies &amp; Enterprise</div>
             <div class="pm-card-price"><span id="plans-power-price">A$49</span><span class="price-suffix">/mo</span></div>
             <div id="plans-power-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>2000 generations/month</li>
-              <li>All models + early access</li>
-              <li>BYOK support</li>
-              <li>API &amp; MCP Access</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="plans-checkout-btn-power" onclick="startCheckout('power')" class="pm-subscribe-btn pm-subscribe-btn-power">Subscribe</button>
           </div>
         </div>
@@ -3268,20 +3793,26 @@
     </section>
   </main>
 
-    <!-- Credits Modal -->
+    <!-- Usage / Billing Modal -->
     <div id="credits-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeCreditsModal" onclick="closeCreditsModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
-          <h2 class="font-semibold text-base text-gray-900">Credits</h2>
+          <h2 class="font-semibold text-base text-gray-900">Usage</h2>
           <button onclick="closeCreditsModal()" class="modal-close">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="p-6 space-y-4" style="overflow-y:auto; flex:1;">
-          <p class="text-sm text-gray-600">Your available balance for creating custom code.</p>
-          <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
-          <p class="text-xs text-gray-400">Usage history and top-ups are managed through your subscription.</p>
-          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(); closeCreditsModal();">Manage Subscription</button>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Plan</span>
+            <span id="usage-dialog-tier" class="inline-badge">Free</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Used this month</span>
+            <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
+          </div>
+          <p id="usage-dialog-status" class="text-xs text-gray-400">Runs reset at the start of each month.</p>
+          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(this)">Manage Subscription</button>
         </div>
       </div>
     </div>
@@ -3494,7 +4025,7 @@
         </div>
         <div class="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end">
           <button onclick="closeCommitConfirmModal()" class="px-4 py-2 text-sm font-medium text-gray-400 hover:bg-gray-50 rounded-lg transition-colors">Cancel</button>
-          <button onclick="confirmCommitToFlutterFlow()" class="px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors">Confirm Commit</button>
+          <button onclick="confirmCommitToFlutterFlow()" data-deploy-confirm class="px-4 py-2 text-sm font-medium text-white bg-orange-500 hover:bg-orange-600 rounded-lg transition-colors">Confirm Commit</button>
         </div>
       </div>
     </div>
@@ -3549,6 +4080,40 @@
             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Open in FlutterFlow
           </a>
           <button onclick="closeCommitSuccessModal()" class="px-4 py-2 text-sm font-medium text-white bg-green-500 hover:bg-green-600 rounded-lg transition-colors">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Commit Terminal Modal (partial / unconfirmed outcomes) -->
+    <div id="commit-terminal-modal" class="modal-overlay" data-modal-close-handler="closeCommitTerminalModal" data-modal-initial-focus="[data-terminal-close]" onclick="closeCommitTerminalModal(event)">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:520px;">
+        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+          <h2 class="font-semibold text-base text-amber-600" id="terminal-heading">Deploy outcome</h2>
+          <button onclick="closeCommitTerminalModal()" class="modal-close"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+        </div>
+        <div class="p-6 space-y-4">
+          <div class="text-center">
+            <div class="w-14 h-14 bg-amber-50 border border-amber-100 rounded-full flex items-center justify-center mx-auto mb-3">
+              <svg class="w-7 h-7 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <p class="text-sm font-medium text-gray-800" id="terminal-title"></p>
+            <p class="text-sm text-gray-500 mt-1" id="terminal-message"></p>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-4 border border-gray-100 text-sm">
+            <h3 class="font-medium text-gray-700 mb-2 text-sm">Deploy target</h3>
+            <div class="space-y-1.5" id="terminal-identity-list"></div>
+          </div>
+          <div id="terminal-file-outcomes" class="hidden bg-red-50 border border-red-100 rounded-lg p-3">
+            <p class="text-xs font-semibold text-red-700 uppercase mb-1">Per-file outcomes</p>
+            <ul class="space-y-1"></ul>
+          </div>
+          <div class="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-700" id="terminal-guidance"></div>
+        </div>
+        <div class="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end items-center">
+          <a id="terminal-open-ff-link" href="https://app.flutterflow.io/" target="_blank" rel="noopener noreferrer" class="px-4 py-2 text-sm font-medium text-orange-500 hover:bg-orange-50 rounded-lg transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Open in FlutterFlow
+          </a>
+          <button data-terminal-close onclick="closeCommitTerminalModal()" class="px-4 py-2 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-lg transition-colors">Close</button>
         </div>
       </div>
     </div>
@@ -3634,46 +4199,32 @@
         <!-- Plan Cards -->
         <div class="pm-cards">
           <!-- Free -->
-          <div class="pm-card">
+          <div class="pm-card" data-tier="free">
             <div class="pm-card-name">Free</div>
             <div class="pm-card-price">$0<span class="price-suffix">/mo</span></div>
             <div class="pm-price-note">&nbsp;</div>
-            <ul class="pm-features">
-              <li>2 generations/month</li>
-              <li>Gemini model only</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <div id="free-tier-current" class="pm-current-plan-indicator">Current plan</div>
           </div>
 
           <!-- Pro -->
-          <div class="pm-card pm-card-pro">
+          <div class="pm-card pm-card-pro" data-tier="professional">
             <div class="pm-popular-badge">Popular</div>
             <div class="pm-card-name">Pro</div>
             <div class="pm-card-label">For FlutterFlow Professionals</div>
             <div class="pm-card-price"><span id="pro-price">A$11</span><span class="price-suffix">/mo</span></div>
             <div id="pro-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>50 generations/month</li>
-              <li>All models</li>
-              <li>Code Regeneration</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="checkout-btn-professional" onclick="startCheckout('professional')" class="pm-subscribe-btn pm-subscribe-btn-pro">Subscribe</button>
           </div>
 
           <!-- Power -->
-          <div class="pm-card pm-card-power">
+          <div class="pm-card pm-card-power" data-tier="power">
             <div class="pm-card-name">Power</div>
             <div class="pm-card-label">For Agencies &amp; Enterprise</div>
             <div class="pm-card-price"><span id="power-price">A$49</span><span class="price-suffix">/mo</span></div>
             <div id="power-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>2000 generations/month</li>
-              <li>All models + early access</li>
-              <li>BYOK support</li>
-              <li>API &amp; MCP Access</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="checkout-btn-power" onclick="startCheckout('power')" class="pm-subscribe-btn pm-subscribe-btn-power">Subscribe</button>
           </div>
         </div>

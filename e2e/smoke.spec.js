@@ -126,7 +126,7 @@ test.describe("Redesigned hero landing and composer", () => {
     await page.goto("/#account");
 
     const badge = page.locator("#subscription-tier-badge");
-    await expect(badge).toContainText("Professional");
+    await expect(badge).toContainText("Pro");
   });
 
   test("signed-in Power badge is rendered from fixture", async ({ page }) => {
@@ -149,7 +149,7 @@ test.describe("Redesigned hero landing and composer", () => {
     await page.goto("/#account");
 
     const badge = page.locator("#subscription-tier-badge");
-    await expect(badge).toContainText("Power Developer");
+    await expect(badge).toContainText("Power");
   });
 
   test("unresolved subscription surfaces the unavailable plan state", async ({ page }) => {
