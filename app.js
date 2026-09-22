@@ -4555,11 +4555,17 @@ function renderSendNewLinkState(state) {
     msg.textContent = getMagicLinkResultMessage(state.data, authState.email || "") || "Link sent — check your email."
     return
   }
-  // status === "error": surface the real failure, never a canned success.
+  // status === "error": surface the real failure, never a canned success. The
+  // propagated Error carries a user-safe reason (e.g. "HTTP 429", "HTTP 500")
+  // rather than raw server internals, and a rate-limit must not read identically
+  // to a server error. Fall back to the generic copy only when no reason escaped.
   btn.disabled = false
   btn.textContent = "Send new link"
   msg.className = "acct-access-msg error"
-  msg.textContent = "Couldn't send a link right now. Please try again."
+  const reason = state.error?.message
+    ? `Couldn't send a link right now. ${state.error.message}`
+    : "Couldn't send a link right now. Please try again."
+  msg.textContent = reason
 }
 
 async function handleSendNewLink() {

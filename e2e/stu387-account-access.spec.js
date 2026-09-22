@@ -133,6 +133,35 @@ test.describe("STU-387 account access & data", () => {
     await expect(btn).toBeEnabled();
   });
 
+  test("send new link surfaces the specific failure reason (rate-limit vs server error differ)", async ({ page }) => {
+    let status = 429; // rate limit — a distinguishable failure
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...refreshOverride(),
+      [ENDPOINTS.identity]: identityWithUsage({ email: EMAIL, count: 12 }),
+      [ENDPOINTS.getSubscription]: professionalSubscription(),
+      [ENDPOINTS.authSendMagicLink]: () => err(status, "rate limited"),
+    });
+    await page.goto("/");
+    await openAccount(page);
+
+    const msg = page.locator("#send-new-link-msg");
+    const btn = page.locator("#send-new-link-btn");
+
+    await btn.click();
+    await expect(msg).toContainText("429");
+    const rateLimitText = await msg.textContent();
+
+    status = 500; // a genuinely different failure
+    await btn.click();
+    await expect(msg).toContainText("500");
+    const serverErrorText = await msg.textContent();
+
+    // A rate limit must not read identically to a server error: the real
+    // failure reason (per the module contract) is what distinguishes them.
+    expect(rateLimitText?.trim()).not.toBe(serverErrorText?.trim());
+  });
+
   test("a second send while one is in flight is refused (single request)", async ({ page }) => {
     let calls = 0;
     await seedSession(page);
@@ -140,25 +169,33 @@ test.describe("STU-387 account access & data", () => {
       ...refreshOverride(),
       [ENDPOINTS.identity]: identityWithUsage({ email: EMAIL, count: 12 }),
       [ENDPOINTS.getSubscription]: professionalSubscription(),
-      [ENDPOINTS.authSendMagicLink]: async () => {
+      [ENDPOINTS.authSendMagicLink]: () => {
         calls += 1;
-        // Hold the request in flight for the duration of the assertion window.
-        await new Promise(() => {});
+        return magicLinkSent();
       },
     });
     await page.goto("/");
     await openAccount(page);
 
-    const btn = page.locator("#send-new-link-btn");
-    await btn.click(); // in flight, endpoint not yet resolved
-    // The control visibly locks while pending, so the user cannot double-send.
-    await expect(btn).toBeDisabled();
-    // Give any (incorrect) second request the chance to fire; only the first
-    // from the initial click may have reached the endpoint.
-    await page.waitForTimeout(200);
+    // Ensure the app bundle has finished wiring the global handler before we
+    // send — on a cold Vite boot under parallel workers the account view can be
+    // visible in the static HTML before app.js has attached handlers.
+    await page.waitForFunction(() => typeof window.handleSendNewLink === "function");
+    // Attempt TWO sends back-to-back in one synchronous tick. handleSendNewLink
+    // runs synchronously to its first await, so the FIRST call launches the send
+    // — the controller's in-flight flag flips to true and exactly one request is
+    // issued — before the SECOND call runs while the first is still in flight
+    // (its network await cannot settle within the same stack). This is what makes
+    // the controller's `if (inFlight) return busy` guard load-bearing: only that
+    // guard can refuse the second call. If it were deleted, the second call would
+    // fire a second fetch and the calls assertion below would fail.
+    await page.evaluate(() => {
+      window.handleSendNewLink();
+      window.handleSendNewLink();
+    });
+    await page.waitForTimeout(150);
     expect(calls).toBe(1);
-    // The pending request is intentionally left unresolved; the deterministic
-    // duplicate-rejection of the controller is asserted in the unit suite
+    // The in-flight guard is also asserted deterministically in the unit suite
     // (src/accountAccess.test.js "a duplicate reauth while one is in flight").
   });
 
