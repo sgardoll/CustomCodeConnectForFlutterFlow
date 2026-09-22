@@ -9,8 +9,7 @@ import {
   PLAN_LIMITS,
   PLAN_FEATURES,
   planLabel,
-  UNSUPPORTED_PROMISES,
-  UNAVAILABLE_MARKER,
+  CONTACT_TO_ACCESS_MARKER,
 } from "./plansSurface.js";
 
 // Every surface (topbar, account badge, plans page, usage dialog, gating)
@@ -45,12 +44,19 @@ test("criterion 1: limits ascend from free through power and match the gating co
 // The whitelist of capabilities the live product actually delivers. A feature
 // row that is not on this list is a prototype promise (criterion 5) and must
 // not appear in a plan card.
+//
+// "API & MCP access" and "early access" are ON this list: the owner confirmed
+// both ship. API/MCP access is reached by contacting us rather than through a
+// self-serve signup, which is why that row names its access path — but the
+// capability is real, so the row must read as available, not as a promise.
 const SUPPORTED_CAPABILITIES = new Set([
   "generations per month",
   "code generation models",
   "code review on every run",
   "regenerate from flutterflow build errors",
   "bring your own key (byok)",
+  "api & mcp access",
+  "early access",
 ]);
 
 // A row counts as a supported capability when its text references one of the
@@ -59,6 +65,11 @@ const SUPPORTED_CAPABILITIES = new Set([
 // access" claim is a prototype promise and must be rejected.
 function capabilityOf(row) {
   const normalized = row.toLowerCase();
+  // Checked before the generic "model" rule, because "All models + early
+  // access" contains both phrases and its distinguishing capability is the
+  // early-access one.
+  if (normalized.includes("api & mcp")) return "api & mcp access";
+  if (normalized.includes("early access")) return "early access";
   if (normalized.includes("generation")) return "generations per month";
   if (normalized.includes("model")) return "code generation models";
   if (normalized.includes("review")) return "code review on every run";
@@ -67,57 +78,48 @@ function capabilityOf(row) {
   return null;
 }
 
-// A row that maps to no live capability is still acceptable — and only
-// acceptable — while it is explicitly flagged as not-yet-available.
-function isMarkedUnavailable(row) {
-  return row.trim().endsWith(UNAVAILABLE_MARKER);
-}
+const NOT_AVAILABLE_WORDING = ["coming soon", "not yet available", "unavailable", "roadmap"];
 
-test("criterion 5: every feature row maps to a supported capability or is clearly not-yet-available", () => {
+test("criterion 5: every feature row maps to a capability the product delivers", () => {
   for (const tier of PLAN_TIERS) {
     for (const row of PLAN_FEATURES[tier]) {
       const capability = capabilityOf(row);
-      assert.ok(
-        capability !== null || isMarkedUnavailable(row),
-        `feature "${row}" (${tier}) is neither a supported capability nor clearly marked not-yet-available`,
+      assert.notEqual(
+        capability,
+        null,
+        `feature "${row}" (${tier}) does not map to any supported capability — it would read as a promise`,
       );
-      if (capability !== null) {
-        assert.ok(
-          SUPPORTED_CAPABILITIES.has(capability),
-          `feature "${row}" maps to unsupported capability "${capability}"`,
-        );
-      }
+      assert.ok(
+        SUPPORTED_CAPABILITIES.has(capability),
+        `feature "${row}" maps to unsupported capability "${capability}"`,
+      );
     }
   }
 });
 
-test("criterion 5: a prototype-only promise is allowed only when marked unavailable", () => {
-  for (const tier of PLAN_TIERS) {
-    for (const row of PLAN_FEATURES[tier]) {
-      const normalized = row.toLowerCase();
-      const promise = UNSUPPORTED_PROMISES.find((p) => normalized.includes(p));
-      if (promise) {
-        assert.ok(
-          isMarkedUnavailable(row),
-          `"${row}" (${tier}) mentions unsupported promise "${promise}" without the unavailable marker — it reads as available`,
-        );
-      }
+test("product decision: the owner-requested rows are restored and read as available", () => {
+  // The owner asked to keep these two rows (STU-382 review decision) and
+  // confirmed both capabilities ship. They must render on the Power card and
+  // must NOT be marked unavailable — an earlier revision wrongly suffixed
+  // them "(coming soon)" on the incorrect inference that no user-facing
+  // surface existed in the codebase.
+  const power = PLAN_FEATURES.power;
+  const joined = power.join(" … ").toLowerCase();
+
+  assert.ok(joined.includes("all models + early access"), 'Power card must keep "All models + early access"');
+  assert.ok(
+    joined.includes(`api & mcp access ${CONTACT_TO_ACCESS_MARKER.toLowerCase()}`),
+    `Power card must present "API & MCP access ${CONTACT_TO_ACCESS_MARKER}" — the capability ships, so it names its access path rather than reading as a promise`,
+  );
+
+  for (const row of power) {
+    for (const wording of NOT_AVAILABLE_WORDING) {
+      assert.ok(
+        !row.toLowerCase().includes(wording),
+        `Power row "${row}" reads as not-yet-available, but the owner confirmed this capability ships`,
+      );
     }
   }
-});
-
-test("product decision: the owner-requested rows are restored and stay clearly not-yet-available", () => {
-  // The owner asked to keep these two rows (STU-382 review decision). They
-  // must render on the Power card, and must never read as available today.
-  const power = PLAN_FEATURES.power.join(" … ");
-  assert.ok(
-    power.toLowerCase().includes(`api & mcp access ${UNAVAILABLE_MARKER}`),
-    'Power card must keep "API & MCP access (coming soon)"',
-  );
-  assert.ok(
-    power.toLowerCase().includes(`all models + early access ${UNAVAILABLE_MARKER}`),
-    'Power card must keep "All models + early access (coming soon)"',
-  );
 });
 
 test("criterion 5: BYOK — a real capability — is the power-only differentiator", () => {

@@ -33,25 +33,14 @@ export const PLAN_LIMITS = Object.freeze({
   power: 2000,
 });
 
-// A row is only permitted to carry one of these phrases while it is ALSO
-// explicitly marked not-yet-available (see UNAVAILABLE_MARKER below). An
-// un-marked occurrence is a prototype promise (criterion 5) and the tests
-// reject it. The product exposes no user-facing API/MCP surface and no separate
-// early-access capability today, so the restored rows must always stay marked.
-export const UNSUPPORTED_PROMISES = Object.freeze([
-  "early access",
-  "api & mcp",
-]);
-
-// The exact suffix that marks a not-yet-available row as unavailable rather
-// than promised. The test suite requires every row containing an
-// UNSUPPORTED_PROMISES phrase to end with this marker; rendering and tests
-// read it from here so the wording stays in one place.
-export const UNAVAILABLE_MARKER = "(coming soon)";
-
-// The not-yet-available suffix, appended to rows the owner asked to keep that
-// do not map to a live capability yet.
-const unavailable = (text) => `${text} ${UNAVAILABLE_MARKER}`;
+// Rows that carry a capability which is real but is not self-serve: the
+// capability exists, so the row must present it as available, and the access
+// path is stated rather than implied. "API & MCP access" is shipped — customers
+// reach it by getting in contact, not through a self-serve signup — so it is
+// NOT marked unavailable. An earlier revision of this file marked it
+// "(coming soon)" on the incorrect inference that no user-facing surface
+// existed in the codebase; the owner has since confirmed it ships.
+export const CONTACT_TO_ACCESS_MARKER = "(contact us)";
 
 export const PLAN_FEATURES = Object.freeze({
   free: Object.freeze([
@@ -71,7 +60,7 @@ export const PLAN_FEATURES = Object.freeze({
     "Code Regeneration",
     "Bring your own key (BYOK)",
     "Code Review",
-    unavailable("All models + early access"),
-    unavailable("API & MCP access"),
+    "All models + early access",
+    `API & MCP access ${CONTACT_TO_ACCESS_MARKER}`,
   ]),
 });

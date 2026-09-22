@@ -22,8 +22,10 @@ import {
  *  - C4: the shipped surface advertises no simulated purchase success (the
  *    design's mock "Subscription confirmed / no charge was made" dialogs are
  *    absent), and an upgrade click goes to the real Stripe checkout endpoint.
- *  - C5: the plan comparison cards carry no unsupported prototype promises
- *    (no "API & MCP access", no "early access") and only supported rows.
+ *  - C5: the plan comparison cards carry only capabilities the product
+ *    actually delivers. "API & MCP access" and "early access" both ship, so
+ *    they appear as available rows ("API & MCP access (contact us)" names its
+ *    non-self-serve access path); no row may read as not-yet-available.
  *
  * A checkout return alone never grants a paid tier. Entitlement only ever
  * comes from the get-subscription reconciliation fixture, so "?checkout=X"
@@ -220,7 +222,7 @@ test.describe("STU-382 plans surface and paywall states", () => {
     await expect(manageBtn).toBeFocused();
   });
 
-  test("C5: the plans cards carry no unsupported prototype promises presented as available", async ({ page }) => {
+  test("C5: the plans cards present only capabilities the product delivers, all as available", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, {
       [ENDPOINTS.identity]: identityWithUsage({ count: 6 }),
@@ -230,22 +232,25 @@ test.describe("STU-382 plans surface and paywall states", () => {
     const plansView = page.locator("#plans-view");
 
     // The owner asked to KEEP the "API & MCP Access" and "All models + early
-    // access" rows, but nothing not-yet-live may read as available. The rows
+    // access" rows, and confirmed BOTH capabilities ship. They must therefore
+    // read as available. API/MCP access is reached by contacting us rather than
+    // through a self-serve signup, so that row names its access path. The rows
     // render from PLAN_FEATURES (the same source the modal uses). toContainText
     // auto-waits until the JS render fills the lists, so we never race an
     // un-rendered card.
-    await expect(plansView).toContainText("API & MCP access (coming soon)");
-    await expect(plansView).toContainText("All models + early access (coming soon)");
+    await expect(plansView).toContainText("All models + early access");
+    await expect(plansView).toContainText("API & MCP access (contact us)");
 
     const plansText = await plansView.innerText();
-    // Every row that mentions a prototype promise must be clearly unavailable:
-    // each such line ends with the not-yet-available marker.
+    // No row may read as not-yet-available. An earlier revision marked these
+    // two "(coming soon)" on the incorrect inference that no user-facing
+    // surface existed in the codebase; the owner has since confirmed both ship.
     const rows = plansText.split("\n");
     for (const phrase of ["api & mcp", "early access"]) {
       const matching = rows.filter((r) => r.toLowerCase().includes(phrase));
       expect(matching.length).toBeGreaterThan(0);
       for (const row of matching) {
-        expect(row.toLowerCase()).toContain("(coming soon)");
+        expect(row).not.toMatch(/coming soon|not yet available|unavailable/i);
       }
     }
 
@@ -258,12 +263,12 @@ test.describe("STU-382 plans surface and paywall states", () => {
     expect(plansText).toContain("Code Regeneration");
 
     // The pricing modal renders from the same PLAN_FEATURES source, so its
-    // Power card carries the same restored, marked-unavailable rows — the
-    // modal's unsupported-promise path is covered, not just the plans page.
+    // Power card carries the same restored rows — the modal is covered, not
+    // just the plans page.
     await page.evaluate(() => window.openPricingModal());
     const modalPower = page.locator("#pricing-modal .pm-card-power .pm-features");
-    await expect(modalPower).toContainText("API & MCP access (coming soon)");
-    await expect(modalPower).toContainText("All models + early access (coming soon)");
+    await expect(modalPower).toContainText("All models + early access");
+    await expect(modalPower).toContainText("API & MCP access (contact us)");
     await expect(modalPower).toContainText("BYOK");
   });
 });
