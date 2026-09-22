@@ -137,11 +137,10 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await page.locator("#api-keys-modal .bg-blue-500").click();
     await expect(page.locator("#api-keys-modal")).toBeHidden();
 
-    // saveApiKeys closes the editor inside a 1s timeout; wait it out.
-    await page.waitForTimeout(1300);
-
-    // Success advances to the next onboarding step and returns to it.
-    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+    // saveApiKeys closes the editor inside a 1s timeout, then returns to the
+    // walkthrough at the next step. Poll for the walkthrough rather than
+    // sleeping on a fixed window so the assertion is immune to CI load.
+    await expect(page.locator(WALKTHROUGH)).toBeVisible({ timeout: 8000 });
     await expect(page.locator("#walkthrough-step2")).toHaveClass(/wt-current/);
 
     // "Add Prompt" returns to the composer.
