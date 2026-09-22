@@ -7,6 +7,7 @@ import {
   powerSubscription,
   unresolvedSubscription,
   portalSession,
+  oneArtifact,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
 
@@ -44,6 +45,19 @@ async function seedSession(page) {
       JSON.stringify({ email: "metered@example.com", sessionToken: "session-token" }),
     );
   });
+}
+
+/**
+ * A real pipeline endpoint response (valid artifact output) whose generator
+ * step answers with a server-reconciled usage count, so a completed run drives
+ * the post-run metering path instead of being observed through a reload.
+ */
+function pipelineReconciledTo(count) {
+  const fixture = oneArtifact();
+  const body = JSON.parse(fixture.body);
+  body.usage_count = count;
+  body.usage_month = currentMonth();
+  return { ...fixture, body: JSON.stringify(body) };
 }
 
 async function openUsage(page) {
@@ -188,6 +202,40 @@ test.describe("STU-381 monthly usage metering", () => {
     await expect(page.locator("#topbar-credits-count")).toHaveText("43");
 
     // Account row reflects the reconciled count without ever opening a dialog.
+    await page.locator('a.nav-link[data-view="account"]').click();
+    await expect(page.locator("#usage-counter")).toHaveText("7 / 50 runs this month");
+
+    await openUsage(page);
+    await expect(page.locator("#credits-balance")).toHaveText("7 / 50 runs this month");
+    await expect(page.locator("#usage-dialog-tier")).toHaveText("Pro");
+  });
+
+  test("a metered run reconciles the count onto every usage surface as a consequence of the run", async ({ page }) => {
+    // The sibling test above observes the reconciled count by reloading, which
+    // re-runs resolveIdentity/fetchSubscription. This test instead drives the
+    // post-run path directly: it performs a real generation run through the
+    // composer (#pipeline-input -> #hero-send, with the pipeline endpoint
+    // fixtured) and asserts every usage surface moves because the run's
+    // generator response reconciled the count — never because of a reload.
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: identityWithUsage({ count: 4 }),
+      [ENDPOINTS.getSubscription]: professionalSubscription(),
+      [ENDPOINTS.pipeline]: () => pipelineReconciledTo(7),
+    });
+    await page.goto("/");
+    await expect(page.locator("#topbar-credits-count")).toHaveText("46");
+
+    // Drive a real run; no reload is involved at any point after this.
+    await page.fill("#pipeline-input", "A circular progress gauge with a gradient stroke.");
+    await page.click("#hero-send");
+
+    // The run's generator response reconciles the count from 4 -> 7, so the
+    // topbar moves from 46 remaining to 43 without a page.reload().
+    await expect(page.locator("#topbar-credits-count")).toHaveText("43");
+    await expect(page.locator("#topbar-credits").getByText("43")).toBeVisible();
+
+    // The account row and the dialog converge on the same reconciled count.
     await page.locator('a.nav-link[data-view="account"]').click();
     await expect(page.locator("#usage-counter")).toHaveText("7 / 50 runs this month");
 
