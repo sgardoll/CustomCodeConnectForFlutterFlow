@@ -7,12 +7,13 @@
 // limits agree across surfaces") hold structurally rather than by accident of
 // repeated copy/paste.
 //
-// The feature list also encodes criterion 5: every row must map to a CURRENT
-// supported capability of the product. Prototype-only promises (an exposed
-// API/MCP surface and a distinct "early access" tier) are deliberately NOT
-// listed here — the product exposes no user-facing API/MCP product surface and
-// no separate early-access capability, so advertising them in a plan card
-// would invent capability the app does not deliver. BYOK is real (the
+// The feature list also encodes criterion 5: a row must EITHER map to a CURRENT
+// supported capability of the product, OR — when the owner has asked the row be
+// kept (the "API & MCP access" and "All models + early access" rows) — be
+// presented as CLEARLY not-yet-available rather than promised. Anything not
+// live yet is suffixed "(coming soon)" so it can never read as a capability the
+// app delivers today. This is the single source both the plans page and the
+// pricing modal render from, so the two surfaces cannot drift. BYOK is real (the
 // "Configure API Keys" surface) and remains listed.
 export const PLAN_LABELS = Object.freeze({
   free: "Free",
@@ -32,6 +33,26 @@ export const PLAN_LIMITS = Object.freeze({
   power: 2000,
 });
 
+// A row is only permitted to carry one of these phrases while it is ALSO
+// explicitly marked not-yet-available (see UNAVAILABLE_MARKER below). An
+// un-marked occurrence is a prototype promise (criterion 5) and the tests
+// reject it. The product exposes no user-facing API/MCP surface and no separate
+// early-access capability today, so the restored rows must always stay marked.
+export const UNSUPPORTED_PROMISES = Object.freeze([
+  "early access",
+  "api & mcp",
+]);
+
+// The exact suffix that marks a not-yet-available row as unavailable rather
+// than promised. The test suite requires every row containing an
+// UNSUPPORTED_PROMISES phrase to end with this marker; rendering and tests
+// read it from here so the wording stays in one place.
+export const UNAVAILABLE_MARKER = "(coming soon)";
+
+// The not-yet-available suffix, appended to rows the owner asked to keep that
+// do not map to a live capability yet.
+const unavailable = (text) => `${text} ${UNAVAILABLE_MARKER}`;
+
 export const PLAN_FEATURES = Object.freeze({
   free: Object.freeze([
     "2 generations/month",
@@ -50,14 +71,7 @@ export const PLAN_FEATURES = Object.freeze({
     "Code Regeneration",
     "Bring your own key (BYOK)",
     "Code Review",
+    unavailable("All models + early access"),
+    unavailable("API & MCP access"),
   ]),
 });
-
-// Prototype promises that map to NO current capability. The plans surface
-// must never advertise these (criterion 5); the test suite asserts both that
-// they are absent from the rendered cards and that this contract stays in
-// sync with PLAN_FEATURES.
-export const UNSUPPORTED_PROMISES = Object.freeze([
-  "early access",
-  "api & mcp",
-]);

@@ -59,6 +59,13 @@ const proModelOption = (page) =>
   page.locator('#code-generator-model option[value="openai/gpt-5.6-sol"]');
 
 test.describe("STU-382 plans surface and paywall states", () => {
+  // The price assertions in this suite (A$11 / A$49) must render the AUD base
+  // value, never a converted one. formatPrice converts whenever the detected
+  // currency is not AUD, and that conversion would differ between a dev
+  // machine (Sydney TZ → A$11) and CI (UTC → $7.15) and fail non-hermetically.
+  // Pin the timezone so the verdict does not depend on the host.
+  test.use({ timezoneId: "Australia/Sydney", locale: "en-AU" });
+
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hasSeenWalkthrough", "true"));
   });
@@ -134,7 +141,11 @@ test.describe("STU-382 plans surface and paywall states", () => {
     await expect(page.locator("#subscription-tier-badge")).toHaveText("Pro");
     await expect(page.getByText("Subscription active!")).toBeVisible();
 
-    // Allowance and models refreshed from the reconciled contract.
+    // Allowance refreshed from the reconciled contract: 50/run limit minus the
+    // 12 metered runs leaves 38 remaining in the topbar allowance.
+    await expect(page.locator("#topbar-credits-count")).toHaveText("38");
+
+    // Models refreshed from the reconciled contract.
     await expect(proModelOption(page)).toBeEnabled();
     await expect(proModelOption(page)).not.toContainText("(PRO)");
   });
@@ -209,22 +220,51 @@ test.describe("STU-382 plans surface and paywall states", () => {
     await expect(manageBtn).toBeFocused();
   });
 
-  test("C5: the plans cards carry no unsupported prototype promises", async ({ page }) => {
+  test("C5: the plans cards carry no unsupported prototype promises presented as available", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, {
       [ENDPOINTS.identity]: identityWithUsage({ count: 6 }),
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
     await page.goto("/#plans");
-    const plansText = await page.locator("#plans-view").innerText();
-    for (const promise of ["API & MCP", "early access"]) {
-      expect(plansText.toLowerCase()).not.toContain(promise.toLowerCase());
+    const plansView = page.locator("#plans-view");
+
+    // The owner asked to KEEP the "API & MCP Access" and "All models + early
+    // access" rows, but nothing not-yet-live may read as available. The rows
+    // render from PLAN_FEATURES (the same source the modal uses). toContainText
+    // auto-waits until the JS render fills the lists, so we never race an
+    // un-rendered card.
+    await expect(plansView).toContainText("API & MCP access (coming soon)");
+    await expect(plansView).toContainText("All models + early access (coming soon)");
+
+    const plansText = await plansView.innerText();
+    // Every row that mentions a prototype promise must be clearly unavailable:
+    // each such line ends with the not-yet-available marker.
+    const rows = plansText.split("\n");
+    for (const phrase of ["api & mcp", "early access"]) {
+      const matching = rows.filter((r) => r.toLowerCase().includes(phrase));
+      expect(matching.length).toBeGreaterThan(0);
+      for (const row of matching) {
+        expect(row.toLowerCase()).toContain("(coming soon)");
+      }
     }
-    // Supported rows remain present and accurately priced.
+
+    // Supported rows remain present and accurately priced. The AUD timezone pin
+    // above makes these price assertions hermetic (A$11/A$49, not a converted
+    // value) on any host.
     await expect(page.locator("#plans-power-price")).toHaveText("A$49");
     await expect(page.locator("#plans-pro-price")).toHaveText("A$11");
     expect(plansText).toContain("BYOK");
     expect(plansText).toContain("Code Regeneration");
+
+    // The pricing modal renders from the same PLAN_FEATURES source, so its
+    // Power card carries the same restored, marked-unavailable rows — the
+    // modal's unsupported-promise path is covered, not just the plans page.
+    await page.evaluate(() => window.openPricingModal());
+    const modalPower = page.locator("#pricing-modal .pm-card-power .pm-features");
+    await expect(modalPower).toContainText("API & MCP access (coming soon)");
+    await expect(modalPower).toContainText("All models + early access (coming soon)");
+    await expect(modalPower).toContainText("BYOK");
   });
 });
 

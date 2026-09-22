@@ -8,6 +8,7 @@ import {
 import {
   PLAN_LABELS as planLabels,
   PLAN_LIMITS as planLimits,
+  PLAN_FEATURES as planFeatures,
 } from "./src/plansSurface.js";
 import {
   getPrimaryArtifact,
@@ -5090,6 +5091,27 @@ function updatePricingModalState(tier) {
   if (freeCurrent) freeCurrent.classList.toggle('hidden', tier !== 'free')
 }
 
+// Render every plan card's feature list from the single PLAN_FEATURES source,
+// so the plans page and the pricing modal share one feature set and can never
+// drift (and a test can never assert a constant the UI does not render). Each
+// .pm-card carries data-tier; its <ul class="pm-features"> is filled from
+// PLAN_FEATURES[tier]. Idempotent: safe to run more than once.
+function renderPlanFeatureLists() {
+  document.querySelectorAll('.pm-card[data-tier]').forEach((card) => {
+    const tier = card.dataset.tier
+    const rows = planFeatures[tier]
+    if (!rows) return
+    const ul = card.querySelector('ul.pm-features')
+    if (!ul) return
+    ul.innerHTML = ''
+    for (const row of rows) {
+      const li = document.createElement('li')
+      li.textContent = row
+      ul.appendChild(li)
+    }
+  })
+}
+
 function updatePricingDisplay() {
   const currency = detectUserCurrency()
   const proEl = document.getElementById('pro-price')
@@ -5161,6 +5183,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   confirmCheckoutAfterReconcile();
   updateSubscriptionUI();
   updatePricingDisplay();
+  renderPlanFeatureLists();
 
   // Initialize API keys and check connection
   await checkConnection();
