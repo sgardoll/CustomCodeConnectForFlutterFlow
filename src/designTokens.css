@@ -1,0 +1,133 @@
+/* Design tokens exported from the Custom Code Connect design system.
+   Source: custom-code-connect-hero.html :root (canonical token set).
+   Loaded from index.html as the single source of truth for color, type,
+   spacing, radii, shadows and motion. */
+
+@font-face {
+  font-family: "Delight";
+  src: url("/fonts/Delight-VF.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  /* Surfaces */
+  --bg: oklch(96.65% 0.0074 260.73);
+  --surface: oklch(100% 0 0);
+  --surface-translucent: oklch(100% 0 0 / 0.65);
+  --surface-glass: oklch(100% 0 0 / 0.72);
+  --surface-sunken: oklch(98.4% 0.004 260);
+
+  /* Ink */
+  --fg: oklch(20.77% 0.0398 265.75);
+  --muted: oklch(48% 0.02 260);
+  --muted-2: oklch(68% 0.018 260);
+  --on-dark: oklch(100% 0 0);
+
+  /* Hairlines and interaction greys */
+  --border: oklch(90% 0.012 260);
+  --border-strong: oklch(80% 0.02 260);
+  --fill-hover: color-mix(in oklch, var(--fg) 5%, var(--surface));
+  --fill-subtle: color-mix(in oklch, var(--fg) 6%, var(--surface));
+  --fill-selected: color-mix(in oklch, var(--fg) 4%, var(--surface));
+  --track: color-mix(in oklch, var(--fg) 7%, var(--surface));
+  --avatar: oklch(88% 0.02 260);
+
+  /* Accent: hot coral-orange, at most twice per screen */
+  --accent: oklch(63% 0.22 32);
+  --accent-soft: oklch(from var(--accent) l c h / 0.18);
+  --accent-ring: oklch(from var(--accent) l c h / 0.45);
+
+  /* Interactive field ink — a light blue, laid down semi-transparently */
+  --fx-ink: oklch(70% 0.13 250);
+
+  /* State palette */
+  --ok: oklch(52% 0.11 165);
+  --ok-soft: oklch(52% 0.11 165 / 0.12);
+  --warn: oklch(66% 0.13 70);
+  --warn-soft: oklch(66% 0.13 70 / 0.14);
+  --bad: oklch(55% 0.19 25);
+  --bad-soft: oklch(55% 0.19 25 / 0.1);
+  --disabled-bg: oklch(88% 0.015 260);
+  --disabled-fg: oklch(58% 0.02 260);
+
+  /* Type */
+  --font-display: "Delight", "Outfit", "DM Sans", system-ui, sans-serif;
+  --font-body: "Delight", "Outfit", "DM Sans", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fw-ui: 560;
+  --fw-bold: 620;
+  --fw-black: 700;
+  --ls-display: -0.04em;
+  --ls-heading: -0.03em;
+  --ls-mono: 0.13em;
+  --fs-display: 54px;
+  --fs-h2: 28px;
+  --fs-h3: 22px;
+  --fs-h4: 18px;
+  --fs-lead: 17px;
+  --fs-body: 14.5px;
+  --fs-small: 13.5px;
+  --fs-caption: 12.5px;
+  --fs-mono: 11.5px;
+  --fs-micro: 10.5px;
+  --lh-display: 1.04;
+  --lh-heading: 1.15;
+  --lh-body: 1.6;
+
+  /* Radius */
+  --radius-xl: 22px;
+  --radius-lg: 20px;
+  --radius-md: 16px;
+  --radius-sm: 14px;
+  --radius-control: 12px;
+  --radius-nav: 11px;
+  --radius-icon: 10px;
+  --radius-chip: 999px;
+  --radius-badge: 7px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px oklch(20% 0.03 260 / 0.06);
+  --shadow-md: 0 1px 2px oklch(20% 0.03 260 / 0.06), 0 18px 46px -22px oklch(20% 0.03 260 / 0.3);
+  --shadow-control: 0 2px 6px oklch(20% 0.03 260 / 0.22);
+  --shadow-composer: 0 0 0 3px var(--accent-soft), 0 1px 2px oklch(20% 0.03 260 / 0.06), 0 0 44px -8px oklch(63% 0.22 32 / 0.16), 0 20px 52px -20px oklch(63% 0.22 32 / 0.18);
+  --blur-chrome: 14px;
+
+  /* Motion: one easing, three durations, plus the authored clocks */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --ease-overshoot: cubic-bezier(0.32, 1.38, 0.5, 1);
+  --t-fast: 150ms;
+  --t-enter: 220ms;
+  --t-reveal: 500ms;
+  --t-progress: 700ms;
+  --t-ring: 900ms;
+  --t-morph: 1120ms;
+
+  /* Layout */
+  --touch: 44px;
+  --control-h: 46px;
+  --stage-w: 1920px;
+  --stage-h: 1080px;
+  --measure-prose: 62ch;
+  --measure-lead: 68ch;
+}
+
+/* Visible focus styles for keyboard navigation */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Reduced-motion defaults: suppress non-essential transitions/animations
+   unless a component explicitly opts back in. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
