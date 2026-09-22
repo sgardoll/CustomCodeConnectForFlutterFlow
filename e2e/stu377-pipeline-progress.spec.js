@@ -496,6 +496,35 @@ test.describe("Stateful transitions stay isolated per run", () => {
     expect(retryRun.bodies.map((body) => body.step)).toEqual(["generator", "review"]);
   });
 
+  test("editing mid-regeneration restores the regeneration control", async ({ page }) => {
+    await openHome(page);
+    await routePipelineStages(page);
+
+    await page.locator("#pipeline-input").fill("A progress ring");
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+
+    const refinement = await routePipelineStages(page, { hold: ["generator"] });
+    await page.locator("#btn-refine-header").click();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+
+    // Editing abandons the refinement — its trigger must not stay disabled
+    // for the results that come after it.
+    await page.locator("#pipeline-edit-prompt").click();
+    await expect(page.locator("#btn-refine-header")).toBeEnabled();
+
+    // A later run's Results view offers a usable Refine control again.
+    await routePipelineStages(page);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    await expect(page.locator("#btn-refine-header")).toBeEnabled();
+
+    // The abandoned run's late response is still discarded.
+    refinement.release("generator");
+    await page.waitForTimeout(300);
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+  });
+
   test("a failed pasted-errors regeneration keeps a recoverable failure state", async ({ page }) => {
     await openHome(page);
     await routePipelineStages(page);

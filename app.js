@@ -3599,12 +3599,14 @@ async function runRefinement() {
     showPipelineFailure(error, { stage: errorStep, runId, retry: runRefinement });
     updateStepIndicator(errorStep, "error");
   } finally {
+    // The control's own busy affordance is restored even for an abandoned
+    // run — the run guard only protects shared pipeline state.
+    btns.forEach((btn) => {
+      btn.disabled = false;
+      btn.textContent = "Refine & Regenerate";
+    });
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false;
-      btns.forEach((btn) => {
-        btn.disabled = false;
-        btn.textContent = "Refine & Regenerate";
-      });
       updateDeployButtonVisibility();
     }
   }
@@ -3736,12 +3738,12 @@ async function regenerateFromPastedErrors() {
     showPipelineFailure(error, { stage: errorStep, runId, retry: regenerateFromPastedErrors })
     updateStepIndicator(errorStep, "error")
   } finally {
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = "Fix Errors & Regenerate"
+    }
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false
-      if (btn) {
-        btn.disabled = false
-        btn.textContent = "Fix Errors & Regenerate"
-      }
       updateDeployButtonVisibility()
     }
   }
@@ -4202,14 +4204,12 @@ async function regenerateWithErrors(originalError, errorMap) {
     });
     updateStepIndicator(errorStep, "error");
   } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Fix Errors & Regenerate";
+    }
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false;
-
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = "Fix Errors & Regenerate";
-      }
-
       updateDeployButtonVisibility();
     }
   }
