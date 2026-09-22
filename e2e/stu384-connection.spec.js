@@ -7,6 +7,7 @@ import {
   ok,
   err,
   sampleProjectList,
+  stagingProjectList,
   emptyProjectList,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
@@ -218,7 +219,10 @@ test.describe("STU-384 account connection", () => {
     await applyDefaultRoutes(page, {
       ...signedInContext(),
       [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
-      [STAGING_LIST]: sampleProjectList(),
+      // A deliberately DIFFERENT list on staging: the test only passes if the
+      // re-fetch actually hits the staging host. Returning the same list on
+      // both hosts (as before) could not tell production from staging.
+      [STAGING_LIST]: stagingProjectList(),
     });
     await page.goto("/");
     await saveKeyThroughModal(page, { key: KEY, project: PROJ });
@@ -254,6 +258,58 @@ test.describe("STU-384 account connection", () => {
     await expect(page.locator("#acct-ff-status")).toHaveText(
       "Connected to FlutterFlow",
     );
+
+    // The re-fetch must have hit the STAGING host: only the staging project is
+    // offered and no production-only project remains. If the client fell back
+    // to the production endpoint, proj-stg-789 would never appear.
+    await expect(
+      page.locator(
+        `#flutterflow-projects-select option[value="proj-stg-789"]`,
+      ),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-def-456"]`),
+    ).toHaveCount(0);
+  });
+
+  test("removing the key flips the connection card back to not-configured", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the canonical editor for the account card and clear every key.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+
+    // Accept the destructive confirm, then close the modal through the app's
+    // own handler so the sharedControls background-inert state is restored.
+    page.once("dialog", (dialog) => dialog.accept());
+    await page
+      .locator("#api-keys-modal button", { hasText: "Clear All Keys" })
+      .click();
+    await page.evaluate(() => window.closeApiKeysModal());
+
+    // The card must flip back to not-configured: no stale "connected" state
+    // may survive removal, and no target project may linger.
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Not connected — add your FlutterFlow API key",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(page.locator("#acct-ff-dot")).not.toHaveClass(/ok/);
+
+    // No masked or raw key material may remain in any account card label.
+    const card = page.locator(".acct-card.acct-connection");
+    await expect(card).not.toContainText(KEY);
+    await expect(page.locator("#acct-ff-status")).not.toContainText("••••");
   });
 
   test("signed-out entry can still save the key without a connection card", async ({ page }) => {

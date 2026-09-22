@@ -1356,7 +1356,12 @@ async function validateFlutterFlowConnection() {
   renderApiKeyConnection();
 
   try {
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
     ffConnectionState = projects && projects.length > 0
       ? "connected"
@@ -1485,7 +1490,12 @@ async function fetchProjects(apiKey) {
 
   try {
     // Create temporary client instance (no project ID needed)
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
 
     if (!projects || projects.length === 0) {
@@ -5784,7 +5794,12 @@ async function populateConfirmProjectSelect() {
   select.disabled = false;
   select.innerHTML = '<option value="">Loading projects…</option>';
   try {
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
     if (!isCurrent()) return;
 
