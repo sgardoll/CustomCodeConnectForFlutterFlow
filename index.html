@@ -919,6 +919,93 @@
       .results-action-bar .btn-error-regen {
         flex-grow: 1.45;
       }
+      .results-action-scope {
+        flex: 0 0 auto;
+        display: block;
+        margin: 10px 24px 4px;
+        font-size: 11px;
+        color: var(--muted, #64748b);
+        text-align: center;
+      }
+      .results-replacement-error {
+        border: 1px solid #fbbf24;
+        background: #fffbeb;
+        border-radius: var(--radius-lg, 16px);
+        margin: 0 24px 12px;
+        padding: 12px 14px;
+      }
+      .results-replacement-error-body {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .results-replacement-error-icon {
+        width: 20px;
+        height: 20px;
+        flex: 0 0 20px;
+        color: #d97706;
+      }
+      .results-replacement-error-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1 1 200px;
+        min-width: 180px;
+      }
+      .results-replacement-error-text strong {
+        color: #b45309;
+        font-size: 12.5px;
+      }
+      .results-replacement-error-text span {
+        color: #92400e;
+        font-size: 12px;
+      }
+      .results-replacement-error .btn-header-action {
+        min-height: 36px;
+        padding: 6px 14px;
+      }
+
+      /* Shared-control styling for the pasted-build-error input overlay. */
+      .error-input-card {
+        background: var(--surface, #fff);
+        border: 1px solid var(--border, #e5e7eb);
+        border-radius: var(--radius-lg, 16px);
+        box-shadow: 0 16px 48px -12px rgba(0, 0, 0, 0.18);
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .error-input-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .error-input-textarea {
+        width: 100%;
+        min-height: 160px;
+        resize: vertical;
+        background: #fffbf0;
+        border-color: #fcd34d;
+        color: #78350f;
+        font-family: "DM Mono", "SFMono-Regular", ui-monospace, monospace;
+        font-size: 12.5px;
+        line-height: 1.6;
+      }
+      .error-input-textarea:focus-visible {
+        border-color: #f59e0b;
+        box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 35%, transparent);
+      }
+      .btn-error-input-cancel {
+        background: transparent;
+        color: var(--muted, #64748b);
+        border: 1px solid var(--border, #e5e7eb);
+      }
+      .btn-error-input-cancel:hover:not(:disabled) {
+        background: var(--surface-sunken, #f1f5f9);
+      }
       .btn-deploy-results {
         background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
         color: #fff;
@@ -3518,6 +3605,23 @@
                 <span id="results-file-count" class="results-file-count">0 files</span>
               </div>
 
+              <!-- Persistent error + retry UI for a failed refinement /
+                   build-error replacement. The previous successful result stays
+                   visible and copyable beneath it; this is not a toast. -->
+              <div id="results-replacement-error" class="results-replacement-error" role="alert" tabindex="-1" hidden>
+                <div class="results-replacement-error-body">
+                  <svg class="results-replacement-error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M10.3 3.6 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/>
+                    <path d="M12 9v4m0 4h.01"/>
+                  </svg>
+                  <div class="results-replacement-error-text">
+                    <strong id="results-replacement-error-title">Regeneration failed</strong>
+                    <span id="results-replacement-error-message"></span>
+                  </div>
+                  <button id="results-replacement-error-retry" type="button" class="btn-header-action btn-error-regen"></button>
+                </div>
+              </div>
+
               <div id="bundle-strip" class="bundle-strip">
                 <button id="results-summary-tab" class="results-summary-tab" type="button" onclick="selectResultsSummary()">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -3572,39 +3676,40 @@
                   <img class="flutterflow-deploy-icon" src="https://flutterflow.io/favicon.ico" alt="" />
                   Deploy to FlutterFlow
                 </button>
-                <button id="btn-error-regen-header" class="btn-header-action btn-error-regen" onclick="showErrorInputPanel()">
+                <button id="btn-error-regen-header" class="btn-header-action btn-error-regen" onclick="showErrorInputPanel()" title="Regenerate the whole bundle from pasted FlutterFlow build errors">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"/></svg>
                   Add FlutterFlow Build Errors &amp; Regenerate
                 </button>
-                <button id="btn-refine-header" class="btn-header-action btn-refine-regen btn-refine-action" onclick="runRefinement()">
+                <button id="btn-refine-header" class="btn-header-action btn-refine-regen btn-refine-action" onclick="runRefinement()" title="Regenerate the selected artifact, keeping the rest of the bundle">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                   Refine &amp; Regenerate
                 </button>
               </div>
+              <p class="results-action-scope">Refine &amp; Regenerate acts on the <strong>selected artifact</strong>&nbsp;·&nbsp;build-error fixes regenerate the <strong>whole bundle</strong>.</p>
             </div>
 
             <!-- Error Input Panel (overlay on results) -->
             <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;">
-              <div style="width:100%;max-width:560px;">
-                <div class="flex items-center justify-between mb-4">
+              <div class="error-input-card" style="width:100%;max-width:560px;">
+                <div class="error-input-header">
                   <div class="flex items-center gap-2">
                     <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"/></svg>
                     <h3 class="text-base font-semibold text-gray-800">Paste FlutterFlow Build Errors</h3>
                   </div>
-                  <button onclick="hideErrorInputPanel()" class="text-gray-400 hover:text-gray-600 p-1">
+                  <button onclick="hideErrorInputPanel()" class="modal-close text-gray-400 hover:text-gray-600 p-1" aria-label="Close build error input">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                   </button>
                 </div>
-                <p class="text-sm text-gray-500 mb-4">Paste the raw Dart compiler output below — the AI will analyse every error and regenerate fixed code.</p>
+                <p class="text-sm text-gray-500 mb-4">Paste the raw Dart compiler output below — the AI will analyse every error and regenerate fixed code for the <strong>whole bundle</strong>.</p>
                 <textarea
                   id="ff-error-paste-input"
+                  class="control-field error-input-textarea"
                   rows="8"
-                  style="background:#fffbf0; border-color:#fcd34d; color:#78350f;"
                   placeholder="Paste FlutterFlow / Dart build errors here..."
                   spellcheck="false"
                 ></textarea>
                 <div class="flex items-center justify-between mt-4">
-                  <button onclick="clearErrorInput(); hideErrorInputPanel();" class="text-sm text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
+                  <button id="btn-error-input-cancel" onclick="hideErrorInputPanel()" class="btn-header-action btn-error-input-cancel">Cancel</button>
                   <button id="btn-fix-from-errors" onclick="regenerateFromPastedErrors()" class="btn-header-action btn-error-regen">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                     Fix Errors &amp; Regenerate
