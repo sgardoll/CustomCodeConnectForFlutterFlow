@@ -27,7 +27,11 @@ test.describe("Redesigned hero landing and composer", () => {
   });
 
   test.afterEach(async ({ page }) => {
-    expect(page.consoleFailures).toEqual([]);
+    // Ignore Chromium permissions-policy notices that are unrelated to app code.
+    const relevantFailures = page.consoleFailures.filter(
+      (text) => !/Permissions policy violation: compute-pressure/.test(text),
+    );
+    expect(relevantFailures).toEqual([]);
   });
 
   test("shows the hero landing and an empty composer", async ({ page }) => {
