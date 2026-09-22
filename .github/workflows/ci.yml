@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  ci:
     runs-on: ubuntu-latest
 
     steps:
@@ -40,13 +40,4 @@ jobs:
         run: npm run test:proxies
 
       - name: Scan production bundle for API key/endpoint leaks
-        run: |
-          set -e
-          echo "Scanning dist/ for leaked provider API endpoints and API key assignments..."
-          if grep -R --include='*.js' --include='*.html' --include='*.css' -E \
-            'api\.groq\.com|apiKey[[:space:]]*[:=][[:space:]]*["'\'''][^"'\''']+["'\''']' \
-            dist/; then
-            echo "FAIL: Potential provider API key/endpoint leak detected in dist/"
-            exit 1
-          fi
-          echo "No API key/endpoint leaks found."
+        run: python3 scripts/scan_bundle_for_leaks.py
