@@ -2867,7 +2867,7 @@
     </nav>
 
     <div class="topbar-account">
-      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Credits remaining" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
+      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Runs remaining this month" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>
         </svg>
@@ -3126,7 +3126,7 @@
           <div class="account-row"><span class="muted">Usage</span><span id="usage-counter">0 / 2 runs this month</span></div>
           <div class="account-actions">
             <button class="btn-action btn-run" onclick="openApiKeysModal()">Configure API Keys</button>
-            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal()">Manage Subscription</button>
+            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal(this)">Manage Subscription</button>
             <button class="btn-action" style="background:transparent;color:var(--muted);border:1px solid var(--border);" onclick="handleSignOut()">Sign Out</button>
           </div>
         </div>
@@ -3194,20 +3194,26 @@
     </section>
   </main>
 
-    <!-- Credits Modal -->
+    <!-- Usage / Billing Modal -->
     <div id="credits-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeCreditsModal" onclick="closeCreditsModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
-          <h2 class="font-semibold text-base text-gray-900">Credits</h2>
+          <h2 class="font-semibold text-base text-gray-900">Usage</h2>
           <button onclick="closeCreditsModal()" class="modal-close">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="p-6 space-y-4" style="overflow-y:auto; flex:1;">
-          <p class="text-sm text-gray-600">Your available balance for creating custom code.</p>
-          <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
-          <p class="text-xs text-gray-400">Usage history and top-ups are managed through your subscription.</p>
-          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(); closeCreditsModal();">Manage Subscription</button>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Plan</span>
+            <span id="usage-dialog-tier" class="inline-badge">Free</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Used this month</span>
+            <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
+          </div>
+          <p id="usage-dialog-status" class="text-xs text-gray-400">Runs reset at the start of each month.</p>
+          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(this)">Manage Subscription</button>
         </div>
       </div>
     </div>
