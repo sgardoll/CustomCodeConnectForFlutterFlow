@@ -48,30 +48,56 @@ function signedInContext(email = "metered@example.com") {
 
 const WALKTHROUGH = "#walkthrough-modal";
 
-// Reopen the tutorial from the nav and wait state-based for the reopen to
-// actually apply (modal open + not aria-hidden) rather than a one-shot guess.
-// On a cold start the deferred app.js module may not have wired
-// openWalkthroughModal yet, so a click can land while the handler is undefined
-// and silently navigate to #tutorial instead of opening the modal — wait for
-// the wire-up (state) before clicking.
+// The walkthrough modal animates in (overlay fade ~0.25s, content scale-in
+// ~0.3s via `.modal-content` transform). `toBeVisible` and `.open`/`aria-hidden`
+// all pass the instant the transition starts, so a following interaction would
+// race the open animation — during that window the modal is not yet fully on
+// top and e.g. `#main-stage` can still intercept the pointer. Wait state-based
+// for the animation to genuinely settle (computed transform back to scale(1)
+// and overlay fully opaque) so a subsequent click cannot land mid-open. This is
+// a state condition tied to the animation, not a wall-clock sleep.
+async function waitForWalkthroughOpen(page) {
+  await page.waitForFunction(
+    () => {
+      const overlay = document.getElementById("walkthrough-modal");
+      if (!overlay || !overlay.classList.contains("open")) return false;
+      if (overlay.getAttribute("aria-hidden") !== "false") return false;
+      const content = overlay.querySelector(".modal-content");
+      if (!content) return false;
+      const transform = getComputedStyle(content).transform;
+      const settled =
+        !transform || transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
+      return settled && getComputedStyle(overlay).opacity === "1";
+    },
+    { timeout: 8000 },
+  );
+  await expect(page.locator(WALKTHROUGH)).toBeVisible();
+}
+
+// A walkthrough interaction follows either the initial auto-open or a reopen
+// (e.g. returning from the API-key editor). Assert the target itself is visible
+// AND the modal has finished opening before clicking, then let Playwright's own
+// actionability confirm the click lands on the element — so the click cannot
+// race the open animation.
+async function clickInsideWalkthrough(page, selector) {
+  await waitForWalkthroughOpen(page);
+  const target = page.locator(selector);
+  await expect(target).toBeVisible();
+  await target.click();
+}
+
+// Reopen the tutorial from the nav. On a cold start the deferred app.js module
+// may not have wired openWalkthroughModal yet, so a click can land while the
+// handler is undefined and silently navigate to #tutorial instead of opening
+// the modal — wait for the wire-up (state) before clicking, then wait for the
+// open animation to finish.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
     { timeout: 8000 },
   );
   await page.click("#wt-reopen");
-  await page.waitForFunction(
-    () => {
-      const m = document.getElementById("walkthrough-modal");
-      return (
-        m &&
-        m.classList.contains("open") &&
-        m.getAttribute("aria-hidden") === "false"
-      );
-    },
-    { timeout: 8000 },
-  );
-  await expect(page.locator(WALKTHROUGH)).toBeVisible();
+  await waitForWalkthroughOpen(page);
 }
 
 test.describe("STU-391 tutorial + connection onboarding", () => {
@@ -114,7 +140,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).toBeVisible();
     await expect(page.locator("#walkthrough-step1")).toBeVisible();
     // The primary action remains clickable under reduced motion.
-    await page.click("#walkthrough-step1 .wt-step-link");
+    await clickInsideWalkthrough(page, "#walkthrough-step1 .wt-step-link");
     await expect(page.locator("#api-keys-modal")).toBeVisible();
   });
 
@@ -124,7 +150,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).toBeVisible();
 
     await page.check("#walkthrough-dont-show");
-    await page.click(".wt-gotit-btn");
+    await clickInsideWalkthrough(page, ".wt-gotit-btn");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
     expect(
@@ -157,7 +183,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await reopenWalkthrough(page);
 
     // Connect step opens the REAL account editor, not a fake flow.
-    await page.click("#walkthrough-step1 .wt-step-link");
+    await clickInsideWalkthrough(page, "#walkthrough-step1 .wt-step-link");
     await expect(page.locator("#api-keys-modal")).toBeVisible();
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
@@ -173,12 +199,13 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
 
     // saveApiKeys closes the editor inside a 1s timeout, then returns to the
     // walkthrough at the next step. Poll for the walkthrough rather than
-    // sleeping on a fixed window so the assertion is immune to CI load.
+    // sleeping on a fixed window so the assertion is immune to CI load, then
+    // let the robust click wait for the reopen animation to settle.
     await expect(page.locator(WALKTHROUGH)).toBeVisible({ timeout: 8000 });
     await expect(page.locator("#walkthrough-step2")).toHaveClass(/wt-current/);
 
     // "Add Prompt" returns to the composer.
-    await page.click("#walkthrough-step2 .wt-step-link");
+    await clickInsideWalkthrough(page, "#walkthrough-step2 .wt-step-link");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
     await expect(page.locator("#pipeline-input")).toBeFocused();
     // Advancing only happens when the connection genuinely succeeded, which is
@@ -200,7 +227,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await reopenWalkthrough(page);
     await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
 
-    await page.click("#walkthrough-step1 .wt-step-link");
+    await clickInsideWalkthrough(page, "#walkthrough-step1 .wt-step-link");
     await expect(page.locator("#api-keys-modal")).toBeVisible();
 
     // Cancel path: close the editor without having typed/stored a key.
@@ -227,7 +254,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await reopenWalkthrough(page);
     await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
 
-    await page.click("#walkthrough-step1 .wt-step-link");
+    await clickInsideWalkthrough(page, "#walkthrough-step1 .wt-step-link");
     await expect(page.locator("#api-keys-modal")).toBeVisible();
 
     // Type a key and blur so the real (routed-401) endpoint evaluates it, then
@@ -248,7 +275,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
 
     // The failure is surfaced truthfully on the account connection card, which
     // STU-384 renders from the real fetch outcome, not from stored bytes.
-    await page.click(".wt-gotit-btn");
+    await clickInsideWalkthrough(page, ".wt-gotit-btn");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
     await page.locator('a.nav-link[data-view="account"]').click();
     await expect(page.locator("#account-view")).toBeVisible();
