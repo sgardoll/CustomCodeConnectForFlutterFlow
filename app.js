@@ -6,6 +6,10 @@ import {
   setModalPending,
 } from "./src/sharedControls.js";
 import {
+  PLAN_LABELS as planLabels,
+  PLAN_LIMITS as planLimits,
+} from "./src/plansSurface.js";
+import {
   getPrimaryArtifact,
   normalizeArtifactBundle,
 } from "./src/artifactBundle.js";
@@ -139,11 +143,9 @@ let identityState = {
 }
 
 // --- TIER LIMITS ---
-const TIER_LIMITS = {
-  free: 2,
-  professional: 50,
-  power: 2000,
-}
+// Single source of truth in src/plansSurface.js so the plans page, the
+// paywall and generation gating agree (STU-382 criterion 1).
+const TIER_LIMITS = planLimits;
 
 const SUBSCRIPTION_CACHE_KEY = 'ccc_subscription'
 const SUBSCRIPTION_CACHE_VERSION = 3
@@ -4686,7 +4688,7 @@ function renderUsageSurfaces() {
   const limit = resolved ? getRunLimit() : 0;
   const remaining = Math.max(0, limit - count);
   const usedLimitText = `${count} / ${limit} runs this month`;
-  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const labels = planLabels;
   const tier = resolved ? (subscriptionState.tier || "free") : null;
 
   const topbarCredits = document.getElementById("topbar-credits-count");
@@ -4992,17 +4994,43 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
   }
 }
 
+// Set when the user returns from Stripe with `?checkout=success`. The paid
+// entitlement is never granted by the return param itself — it is only ever
+// set by the subscription reconciliation below. This flag defers the "plan
+// active" confirmation until after reconcileSubscription has confirmed a paid
+// tier, so a return that has NOT reconciled (blocked, webhook lag, or a
+// cancelled/failed session) can never be reported as subscribed (STU-382
+// criterion 3).
+let checkoutConfirmPending = false
+
 function handleCheckoutRedirect() {
   const params = new URLSearchParams(window.location.search)
   const checkout = params.get('checkout')
   if (checkout === 'success') {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     clearSubscriptionCache()
-    showToast('Subscription active! Welcome aboard.', 'success')
+    checkoutConfirmPending = true
   } else if (checkout === 'cancel') {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     showToast('Checkout cancelled.', 'info')
   }
+  return checkout
+}
+
+// Called once the subscription has been reconciled after a checkout return.
+// Only reports a live plan when the contract is actually paid; otherwise it
+// says the subscription is still being confirmed so the UI never claims a
+// subscribed state it cannot back up.
+function confirmCheckoutAfterReconcile() {
+  if (!checkoutConfirmPending) return
+  checkoutConfirmPending = false
+  const isPaid = subscriptionState.tier !== 'free'
+  showToast(
+    isPaid
+      ? 'Subscription active! Your plan is live.'
+      : 'Checkout complete — confirming your subscription. Check Manage billing if it does not update.',
+    isPaid ? 'success' : 'info',
+  )
 }
 
 // --- SUBSCRIPTION UI ---
@@ -5015,7 +5043,7 @@ function updateSubscriptionUI() {
 
   const badge = document.getElementById('subscription-tier-badge')
   if (badge) {
-    const labels = { free: 'Free', professional: 'Professional', power: 'Power Developer' }
+    const labels = planLabels
     const colors = {
       free: 'bg-gray-100 text-gray-600',
       professional: 'bg-indigo-100 text-indigo-700',
@@ -5130,6 +5158,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   await initializeAuth();
   handleCheckoutRedirect();
   await fetchSubscription();
+  confirmCheckoutAfterReconcile();
   updateSubscriptionUI();
   updatePricingDisplay();
 
@@ -6623,7 +6652,7 @@ function updateShellUI() {
   const loading = signedIn && isSubscriptionLoading();
   const resolved = !signedIn || isSubscriptionResolved();
 
-  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const labels = planLabels;
   const planLabel = loading ? "Checking…" : resolved ? labels[tier] || "Free" : "—";
 
   const topbarPlan = document.getElementById("topbar-plan");
