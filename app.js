@@ -36,6 +36,7 @@ import {
   explainPlusAliasRule,
   getMagicLinkResultMessage,
   isKnownProviderPlusAlias,
+  PLUS_ALIAS_REJECTED_CODE,
   trimEmail,
 } from "./src/authMagicLink.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
@@ -4296,10 +4297,10 @@ async function handleMagicLinkRequest() {
 
   try {
     const data = await sendMagicLink(email)
-    if (input && data?.code !== 'PLUS_ALIAS_REJECTED') input.value = ''
+    if (input && data?.code !== PLUS_ALIAS_REJECTED_CODE) input.value = ''
     if (msg) msg.textContent = getMagicLinkResultMessage(data, email)
-    if (btn) btn.textContent = data?.code === 'PLUS_ALIAS_REJECTED' ? 'Send Link' : 'Sent!'
-    if (btn && data?.code === 'PLUS_ALIAS_REJECTED') btn.disabled = false
+    if (btn) btn.textContent = data?.code === PLUS_ALIAS_REJECTED_CODE ? 'Send Link' : 'Sent!'
+    if (btn && data?.code === PLUS_ALIAS_REJECTED_CODE) btn.disabled = false
   } catch (err) {
     console.error('handleMagicLinkRequest: sendMagicLink failed', { email, err })
     if (msg) msg.textContent = 'Something went wrong. Please try again.'
