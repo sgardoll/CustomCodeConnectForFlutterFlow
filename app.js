@@ -61,6 +61,7 @@ import {
   highlightCode,
   renderMarkdownAudit,
 } from "./src/auditRenderer.js";
+import { initComposer } from "./src/composerAdapter.js";
 
 // --- CONFIGURATION ---
 const IS_DEV = import.meta.env.DEV
@@ -3708,11 +3709,15 @@ async function runThinkingPipeline() {
   pipelineState.isRunning = true;
   resetPipelineResults();
 
-  btn.disabled = true;
-  btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-  </svg>
-  Running...`;
+  // The redesigned hero shell drives the pipeline from #hero-send, so the
+  // legacy run button is optional; only a surface that has it can show it.
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+    Running...`;
+  }
 
   // Update model info
   updateModelInfo(effectiveModel);
@@ -3860,11 +3865,13 @@ async function runThinkingPipeline() {
     updateStepIndicator(errorStep, "error");
   } finally {
     pipelineState.isRunning = false;
-    btn.disabled = false;
-    btn.innerHTML = `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M8 5v14l11-7z"/>
-    </svg>
-    Run Pipeline`;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+        <path d="M8 5v14l11-7z"/>
+      </svg>
+      Run Pipeline`;
+    }
 
     updateDeployButtonVisibility();
   }
@@ -5143,7 +5150,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  bindHeroChips();
+  initComposer({ onSubmit: runThinkingPipeline });
   restoreViewFromHash();
 });
 
@@ -6530,17 +6537,6 @@ window.addEventListener("popstate", (event) => {
 window.addEventListener("hashchange", () => {
   restoreViewFromHash();
 });
-
-function bindHeroChips() {
-  const chips = document.querySelectorAll("#example-chips .chip");
-  const input = document.getElementById("pipeline-input");
-  chips.forEach((chip) => {
-    chip.addEventListener("click", () => {
-      if (input) input.value = chip.dataset.prompt || "";
-      input?.focus();
-    });
-  });
-}
 
 window.copyResultsCode = copyResultsCode;
 window.selectArtifact = selectArtifact;
