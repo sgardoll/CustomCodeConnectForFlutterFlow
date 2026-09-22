@@ -1346,6 +1346,36 @@
         line-height: 1.45;
       }
       .summary-findings .review-status-icon { margin-top: 2px; }
+      .summary-bundle-warnings {
+        margin: 16px 0 0;
+        padding: 12px 14px;
+        border: 1px solid #fcd34d;
+        border-radius: 10px;
+        background: #fffbeb;
+      }
+      .summary-bundle-warnings h4 {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 6px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #92400e;
+      }
+      .summary-bundle-warnings ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 5px;
+      }
+      .summary-bundle-warnings li {
+        color: #78350f;
+        font-size: 13.5px;
+        line-height: 1.45;
+      }
       .review-score-feedback {
         width: 100%;
         margin-top: 10px;
@@ -1432,6 +1462,19 @@
       }
       .code-copy-button:hover { color: #fff; border-color: #6b7280; background: #333544; }
       .code-copy-button.copied { color: #bbf7d0; border-color: #166534; background: #14532d; }
+      .results-copy-status {
+        position: absolute;
+        z-index: 2;
+        top: 16px;
+        left: 16px;
+        max-width: calc(100% - 140px);
+        font-size: 11.5px;
+        font-weight: 600;
+        line-height: 1.3;
+        color: #99a0b5;
+      }
+      .results-copy-status.ok { color: #4ade80; }
+      .results-copy-status.fail { color: #fca5a5; }
       body.results-fullscreen .panel-code-wrap pre { padding-top: 56px; }
       body.results-fullscreen .results-action-bar {
         display: grid;
@@ -3029,8 +3072,8 @@
         .view, .generation-stage { transition: none; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-Cg45ZfLM.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DjaSE9ws.css">
+    <script type="module" crossorigin src="/assets/index-Ckdrob_z.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CleimGxe.css">
   </head>
   <body>
   <header class="topbar" role="banner">
@@ -3050,7 +3093,7 @@
     </nav>
 
     <div class="topbar-account">
-      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Credits remaining" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
+      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Runs remaining this month" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
         <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>
         </svg>
@@ -3064,6 +3107,12 @@
   <main class="viewport" id="viewport">
     <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" tabindex="-1" data-view="home">
       <div class="hero" id="hero">
+        <div class="hero-field" aria-hidden="true">
+          <canvas class="fx-grid" id="fx-grid" aria-hidden="true" tabindex="-1"></canvas>
+          <div class="fx-mask fx-mask-top"></div>
+          <div class="fx-mask fx-mask-bottom"></div>
+          <div class="fx-mask fx-mask-hero"></div>
+        </div>
         <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
         <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
 
@@ -3235,6 +3284,7 @@
                         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
                         <span>Copy</span>
                       </button>
+                      <span id="results-copy-status" class="results-copy-status" role="status"></span>
                       <pre id="results-code-output" class="code-font"></pre>
                     </div>
                   </div>
@@ -3333,7 +3383,7 @@
           <div class="account-row"><span class="muted">Usage</span><span id="usage-counter">0 / 2 runs this month</span></div>
           <div class="account-actions">
             <button class="btn-action btn-run" onclick="openApiKeysModal()">Configure API Keys</button>
-            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal()">Manage Subscription</button>
+            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal(this)">Manage Subscription</button>
             <button class="btn-action" style="background:transparent;color:var(--muted);border:1px solid var(--border);" onclick="handleSignOut()">Sign Out</button>
           </div>
         </div>
@@ -3401,20 +3451,26 @@
     </section>
   </main>
 
-    <!-- Credits Modal -->
+    <!-- Usage / Billing Modal -->
     <div id="credits-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeCreditsModal" onclick="closeCreditsModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
-          <h2 class="font-semibold text-base text-gray-900">Credits</h2>
+          <h2 class="font-semibold text-base text-gray-900">Usage</h2>
           <button onclick="closeCreditsModal()" class="modal-close">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
         <div class="p-6 space-y-4" style="overflow-y:auto; flex:1;">
-          <p class="text-sm text-gray-600">Your available balance for creating custom code.</p>
-          <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
-          <p class="text-xs text-gray-400">Usage history and top-ups are managed through your subscription.</p>
-          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(); closeCreditsModal();">Manage Subscription</button>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Plan</span>
+            <span id="usage-dialog-tier" class="inline-badge">Free</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-sm" style="color:var(--muted);">Used this month</span>
+            <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
+          </div>
+          <p id="usage-dialog-status" class="text-xs text-gray-400">Runs reset at the start of each month.</p>
+          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(this)">Manage Subscription</button>
         </div>
       </div>
     </div>
