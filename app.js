@@ -98,6 +98,11 @@ const STRIPE_PRICE_IDS = {
 }
 
 const AUTH_SESSION_STORAGE_KEY = 'ccc_auth_session'
+// Where the user asked to sign in from (composer, plans, billing…), so a
+// magic-link round trip — which reloads the page with no memory of the DOM —
+// can return them to that surface instead of always landing on home.
+const SIGNIN_RETURN_STORAGE_KEY = 'ccc_signin_return'
+const SIGNIN_RETURN_TTL_MS = 30 * 60 * 1000
 
 const proGateAttachedSet = new WeakSet()
 
@@ -4264,8 +4269,19 @@ async function initializeAuth() {
     try {
       const { email, sessionToken } = await verifyMagicLink(magicToken)
       saveSession(email, sessionToken)
+      closeSignInModal()
+      // Land back on whichever surface (composer, plans, billing) the user
+      // asked to sign in from, unless the link itself already carried a hash.
+      const returnHash = consumeSignInReturnSurface()
+      if (returnHash && !window.location.hash) window.location.hash = returnHash
     } catch (err) {
-      showToast(err.message || 'Sign-in link invalid or expired.', 'error')
+      consumeSignInReturnSurface()
+      const message = err.message || 'Sign-in link invalid or expired.'
+      showToast(message, 'error')
+      // Surface the failure inline too, with the retry control right there,
+      // instead of leaving the user to hunt for a way back in.
+      openSignInModal()
+      setSignInMessage(message, 'error')
     }
   } else {
     const { email, sessionToken } = getStoredSession()
@@ -4282,9 +4298,43 @@ async function initializeAuth() {
   updateAuthUI()
 }
 
+// Records which surface (home/composer, plans, or account/billing) the user
+// was on when they opened the sign-in modal, so a magic-link click — which
+// lands as a fresh page load — can return them there. Keyed by URL hash,
+// which is how switchView() already tracks the current surface.
+function rememberSignInReturnSurface() {
+  try {
+    localStorage.setItem(SIGNIN_RETURN_STORAGE_KEY, JSON.stringify({
+      hash: window.location.hash || '#home',
+      ts: Date.now(),
+    }))
+  } catch (err) {
+    console.warn('rememberSignInReturnSurface: failed to persist return surface:', err)
+  }
+}
+
+function consumeSignInReturnSurface() {
+  try {
+    const raw = localStorage.getItem(SIGNIN_RETURN_STORAGE_KEY)
+    localStorage.removeItem(SIGNIN_RETURN_STORAGE_KEY)
+    if (!raw) return null
+    const { hash, ts } = JSON.parse(raw)
+    if (!hash || typeof ts !== 'number' || Date.now() - ts > SIGNIN_RETURN_TTL_MS) return null
+    return hash
+  } catch (err) {
+    console.warn('consumeSignInReturnSurface: failed to read return surface:', err)
+    return null
+  }
+}
+
 function openSignInModal() {
   const modal = document.getElementById('signin-modal')
-  if (modal) openModal(modal)
+  if (!modal) return
+  rememberSignInReturnSurface()
+  const input = document.getElementById('signin-email-input')
+  input?.removeAttribute('aria-invalid')
+  setSignInMessage('')
+  openModal(modal)
 }
 
 function closeSignInModal(event) {
@@ -4293,17 +4343,26 @@ function closeSignInModal(event) {
   if (modal) closeModal(modal)
 }
 
+function setSignInMessage(text, variant) {
+  const msg = document.getElementById('signin-message')
+  if (!msg) return
+  msg.textContent = text || ''
+  msg.classList.remove('signin-message-success', 'signin-message-error')
+  if (variant) msg.classList.add(`signin-message-${variant}`)
+}
+
 async function handleMagicLinkRequest() {
   const input = document.getElementById('signin-email-input')
   const btn = document.getElementById('signin-submit-btn')
-  const msg = document.getElementById('signin-message')
   const email = trimEmail(input?.value)
 
   const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
   if (!email || !emailRegex.test(email) || email.length > 254) {
-    if (msg) msg.textContent = 'Please enter a valid email address.'
+    input?.setAttribute('aria-invalid', 'true')
+    setSignInMessage('Please enter a valid email address.', 'error')
     return
   }
+  input?.removeAttribute('aria-invalid')
 
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…' }
 
@@ -4311,18 +4370,30 @@ async function handleMagicLinkRequest() {
   // Existing accounts on plus-tagged addresses are still allowed to recover
   // because the server performs the authoritative check.
   const plusAliasHint = explainPlusAliasRule(email)
-  if (msg && plusAliasHint) msg.textContent = plusAliasHint
+  if (plusAliasHint) setSignInMessage(plusAliasHint, 'error')
 
   try {
     const data = await sendMagicLink(email)
-    if (input && data?.code !== PLUS_ALIAS_REJECTED_CODE) input.value = ''
-    if (msg) msg.textContent = getMagicLinkResultMessage(data, email)
-    if (btn) btn.textContent = data?.code === PLUS_ALIAS_REJECTED_CODE ? 'Send Link' : 'Sent!'
-    if (btn && data?.code === PLUS_ALIAS_REJECTED_CODE) btn.disabled = false
+    const isAliasRejected = data?.code === PLUS_ALIAS_REJECTED_CODE
+    if (input && !isAliasRejected) input.value = ''
+    input?.setAttribute('aria-invalid', String(isAliasRejected))
+    setSignInMessage(getMagicLinkResultMessage(data, email), isAliasRejected ? 'error' : 'success')
+    // A successful send must stay retryable — the user may want to resend to
+    // a different address, or send another link if the first one expires —
+    // so the button is re-enabled either way, never left permanently disabled.
+    // "Sent!" is shown briefly for confirmation, then reverts so the control
+    // clearly reads as usable again.
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = isAliasRejected ? 'Send Sign-in Link' : 'Sent!'
+      if (!isAliasRejected) {
+        setTimeout(() => { if (btn.textContent === 'Sent!') btn.textContent = 'Send Sign-in Link' }, 2500)
+      }
+    }
   } catch (err) {
     console.error('handleMagicLinkRequest: sendMagicLink failed', { email, err })
-    if (msg) msg.textContent = 'Something went wrong. Please try again.'
-    if (btn) { btn.disabled = false; btn.textContent = 'Send Link' }
+    setSignInMessage('Something went wrong. Please try again.', 'error')
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Sign-in Link' }
   }
 }
 

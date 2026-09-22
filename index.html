@@ -1716,6 +1716,80 @@
         font-family: "Delight", "DM Sans", sans-serif;
       }
 
+      /* ── Sign In Modal ─────────────────────────────────── */
+      .signin-modal-content {
+        max-width: 420px;
+        border-radius: var(--radius-xl);
+        background: var(--surface);
+      }
+      .signin-modal-body {
+        padding: clamp(24px, 5vw, 32px);
+      }
+      .signin-modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .signin-modal-header h2 {
+        font-family: var(--font-display);
+        font-size: var(--fs-h4);
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        letter-spacing: var(--ls-heading);
+        margin-bottom: 6px;
+      }
+      .signin-modal-header p {
+        font-size: var(--fs-small);
+        color: var(--muted-2);
+        line-height: var(--lh-body);
+      }
+      .signin-label {
+        display: block;
+        font-size: var(--fs-caption);
+        font-weight: var(--fw-ui);
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .signin-input {
+        width: 100%;
+        min-height: var(--control-h);
+        padding: 12px 16px;
+        margin-bottom: 18px;
+        font-family: var(--font-body);
+        font-size: var(--fs-body);
+        color: var(--fg);
+        background: var(--surface-sunken);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+      }
+      .signin-input::placeholder { color: var(--muted-2); }
+      .signin-input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 4px var(--accent-soft);
+      }
+      .signin-input[aria-invalid="true"] {
+        border-color: var(--bad);
+        box-shadow: 0 0 0 4px var(--bad-soft);
+      }
+      .signin-submit {
+        width: 100%;
+        font-size: var(--fs-body);
+      }
+      .signin-message {
+        min-height: 1.5em;
+        margin-top: 16px;
+        text-align: center;
+        font-size: var(--fs-small);
+        line-height: var(--lh-body);
+        color: var(--muted-2);
+      }
+      .signin-message-success { color: var(--ok); }
+      .signin-message-error { color: var(--bad); }
+
       #usage-counter { font-size: 12px; color: var(--muted-2); }
       #subscription-tier-badge {
         display: inline-flex;
@@ -3481,18 +3555,21 @@
 
     <!-- Sign In Modal -->
     <div id="signin-modal" class="modal-overlay" data-modal-close-handler="closeSignInModal" onclick="closeSignInModal(event)">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
-        <div style="padding:32px;">
-          <div class="flex items-start justify-between mb-5">
+      <div class="modal-content signin-modal-content" role="document" onclick="event.stopPropagation()">
+        <div class="signin-modal-body">
+          <div class="signin-modal-header">
             <div>
-              <h2 style="font-size:18px;font-weight:600;color:#131820;margin-bottom:4px;">Sign in</h2>
-              <p style="font-size:13px;color:#9aa0ad;line-height:1.5;">Enter your email and we'll send you a sign-in link.</p>
+              <h2>Sign in</h2>
+              <p id="signin-modal-description">Enter your email and we'll send you a secure sign-in link.</p>
             </div>
-            <button onclick="closeSignInModal()" class="modal-close ml-4 flex-shrink-0"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+            <button onclick="closeSignInModal()" class="modal-close" aria-label="Close sign-in dialog">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
           </div>
-          <input id="signin-email-input" type="email" placeholder="you@example.com" class="api-key-input mb-3" style="font-family:'Delight',sans-serif;font-size:14px;padding:11px 14px;" onkeydown="if(event.key==='Enter') handleMagicLinkRequest()" />
-          <button id="signin-submit-btn" onclick="handleMagicLinkRequest()" class="btn-action btn-run" style="font-size:14px;">Send Sign-in Link</button>
-          <p id="signin-message" role="status" class="text-sm text-gray-400 mt-3 text-center min-h-[1.25rem]"></p>
+          <label class="signin-label" for="signin-email-input">Email address</label>
+          <input id="signin-email-input" type="email" autocomplete="email" placeholder="you@example.com" class="signin-input" aria-describedby="signin-message signin-modal-description" onkeydown="if(event.key==='Enter') handleMagicLinkRequest()" />
+          <button id="signin-submit-btn" onclick="handleMagicLinkRequest()" class="btn-action btn-run signin-submit">Send Sign-in Link</button>
+          <p id="signin-message" class="signin-message" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
       </div>
     </div>

@@ -118,6 +118,23 @@ export const signedInSession = () =>
 export const magicLinkSent = () =>
   ok({ success: true, message: "Magic link sent" });
 
+// STU-149's alias-policy guard: the backend rejects a plus-tagged alias on a
+// known provider domain with this code, and src/authMagicLink.js renders its
+// `message` (or its own local copy) inline in the sign-in modal.
+export const magicLinkAliasRejected = (email = "user+tag@gmail.com") =>
+  ok({
+    code: "PLUS_ALIAS_REJECTED",
+    message: `Please enter your primary email address. Plus aliases (such as ${email}) are not allowed for gmail.com accounts.`,
+  });
+
+// A transient failure sending the magic link (network/service error), for
+// exercising the retry affordance on the sign-in modal's submit control.
+export const magicLinkSendFailure = () => err(500, { error: "Failed to send magic link" });
+
+// An expired or already-used token on the verify-magic-link callback.
+export const magicLinkVerifyFailure = () =>
+  ok({ error: "Sign-in link invalid or expired." });
+
 export const checkoutSession = () =>
   ok({ url: "https://checkout.stripe.com/mock-session" });
 
