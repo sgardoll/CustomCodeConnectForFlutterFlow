@@ -62,6 +62,7 @@ import {
 } from "./src/deployOutcome.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
 import { initHeroMarkField } from "./src/heroMarkField.js";
+import { createPipelineLogoLoop } from "./src/logoMotion.js";
 import {
   applyDependencyOverrides,
   mergeDependenciesIntoYaml,
@@ -5683,6 +5684,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Decorative hero mark field (WebGL with 2D fallback); no dependency on generation state.
   window.__heroField = initHeroMarkField();
+
+  // Decorative pipeline logo loop (120 s authored mark motion in the pipeline
+  // arena). Self-managed: pauses when hidden/offscreen/reduced-motion and is
+  // cleanup-safe on view transition; completion never depends on it.
+  window.__pipelineLogo = createPipelineLogoLoop();
 
   await initializeAuth();
   handleCheckoutRedirect();
