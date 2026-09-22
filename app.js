@@ -1038,12 +1038,15 @@ function closeApiKeysModal(event) {
   walkthroughSettingsActive = false;
   if (fromWalkthrough) {
     // Return to the originating walkthrough step. Advance only when the
-    // account is actually connected (a FlutterFlow key is stored); a failed or
-    // cancelled connection returns to the same connect step so the user can
-    // retry instead of being pushed forward past an unconnected account.
+    // account is genuinely connected, per the STU-384 canonical connection
+    // state (ffConnectionState), which is set only from a successful
+    // listProjects outcome — never from the mere presence of stored key bytes.
+    // A failed or cancelled connection returns to the same connect step so the
+    // user can retry instead of being pushed forward past an unconnected
+    // account.
     const walkthroughModal = document.getElementById("walkthrough-modal");
     if (walkthroughModal) {
-      if (hasStoredKey("flutterflow")) {
+      if (ffConnectionState === "connected") {
         advanceWalkthrough();
       }
       openModal(walkthroughModal);
@@ -1220,10 +1223,11 @@ function updateApiKeyStatusIndicators() {
 async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
+  const enteredKey = flutterflowInput.value.trim();
 
   // Only save if user entered a new value
-  if (flutterflowInput.value.trim()) {
-    await saveApiKey("flutterflow", flutterflowInput.value);
+  if (enteredKey) {
+    await saveApiKey("flutterflow", enteredKey);
   }
 
   const selectedProjectId = projectSelect?.value.trim() || "";
@@ -1238,6 +1242,15 @@ async function saveApiKeys() {
 
   // Reinitialize keys
   await initializeApiKeys();
+
+  // If a key was (re)entered, wait for the REAL connection outcome before the
+  // editor closes, so the walkthrough advance decision in closeApiKeysModal
+  // sees a settled canonical state rather than an in-flight "validating" or
+  // the mere presence of stored bytes. STU-384 owns this state; it is only
+  // "connected" after a real listProjects returns at least one project.
+  if (enteredKey) {
+    await validateFlutterFlowConnection();
+  }
 
   // Update UI
   loadApiKeyInputs();

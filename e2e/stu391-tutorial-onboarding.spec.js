@@ -48,6 +48,32 @@ function signedInContext(email = "metered@example.com") {
 
 const WALKTHROUGH = "#walkthrough-modal";
 
+// Reopen the tutorial from the nav and wait state-based for the reopen to
+// actually apply (modal open + not aria-hidden) rather than a one-shot guess.
+// On a cold start the deferred app.js module may not have wired
+// openWalkthroughModal yet, so a click can land while the handler is undefined
+// and silently navigate to #tutorial instead of opening the modal — wait for
+// the wire-up (state) before clicking.
+async function reopenWalkthrough(page) {
+  await page.waitForFunction(
+    () => typeof window.openWalkthroughModal === "function",
+    { timeout: 8000 },
+  );
+  await page.click("#wt-reopen");
+  await page.waitForFunction(
+    () => {
+      const m = document.getElementById("walkthrough-modal");
+      return (
+        m &&
+        m.classList.contains("open") &&
+        m.getAttribute("aria-hidden") === "false"
+      );
+    },
+    { timeout: 8000 },
+  );
+  await expect(page.locator(WALKTHROUGH)).toBeVisible();
+}
+
 test.describe("STU-391 tutorial + connection onboarding", () => {
   test("fresh user sees the tutorial once with a keyboard-capable, non-autoplaying video", async ({ page }) => {
     await applyDefaultRoutes(page, { identity: guestIdentity() });
@@ -66,8 +92,18 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     expect(await video.evaluate((el) => el.paused)).toBe(true);
     // preload is conservative (metadata), not autoplay/buffering-first.
     await expect(video).toHaveAttribute("preload", "metadata");
-    // Native controls keep it keyboard reachable and tab-sequence capable.
-    expect(await video.evaluate((el) => el.tabIndex >= 0)).toBe(true);
+    // Prove real keyboard reach: Tab forward from the modal chrome and confirm
+    // the video itself receives focus. The native `controls` attribute is what
+    // makes it tabbable/operable — this exercises the actual Tab sequence
+    // rather than the near-vacuous tabIndex >= 0 check.
+    await page.locator("#walkthrough-modal .modal-close").focus();
+    await expect(page.locator("#walkthrough-modal .modal-close")).toBeFocused();
+    let reachedVideo = false;
+    for (let i = 0; i < 8 && !reachedVideo; i++) {
+      await page.keyboard.press("Tab");
+      reachedVideo = await video.evaluate((el) => document.activeElement === el);
+    }
+    expect(reachedVideo).toBe(true);
   });
 
   test("reduced-motion still renders the onboarding usable", async ({ page }) => {
@@ -108,8 +144,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await page.goto("/");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
-    await page.click("#wt-reopen");
-    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+    await reopenWalkthrough(page);
     await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
   });
 
@@ -119,8 +154,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     });
     await applyDefaultRoutes(page, signedInContext());
     await page.goto("/");
-    await page.click("#wt-reopen");
-    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+    await reopenWalkthrough(page);
 
     // Connect step opens the REAL account editor, not a fake flow.
     await page.click("#walkthrough-step1 .wt-step-link");
@@ -147,11 +181,12 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await page.click("#walkthrough-step2 .wt-step-link");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
     await expect(page.locator("#pipeline-input")).toBeFocused();
-    // Advancing only happens when a FlutterFlow key is stored, which is the
-    // behavioural proof that connecting wrote through the real editor.
+    // Advancing only happens when the connection genuinely succeeded, which is
+    // the behavioural proof that connecting wrote through the real editor and
+    // its projects fetch returned a real project.
   });
 
-  test("a failed or cancelled connection returns to the same onboarding step, not forward", async ({ page }) => {
+  test("a cancelled connection (no key entered) returns to the same onboarding step, not forward", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("hasSeenWalkthrough", "true");
     });
@@ -162,20 +197,62 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
       [ENDPOINTS.flutterFlowLegacyListProjects]: err(401, { error: "unauthorized" }),
     });
     await page.goto("/");
-    await page.click("#wt-reopen");
-    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+    await reopenWalkthrough(page);
     await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
 
     await page.click("#walkthrough-step1 .wt-step-link");
     await expect(page.locator("#api-keys-modal")).toBeVisible();
 
-    // Close the editor without having stored a key (failure / cancel path).
+    // Cancel path: close the editor without having typed/stored a key.
     await page.evaluate(() => window.closeApiKeysModal());
     await expect(page.locator("#api-keys-modal")).toBeHidden();
 
     // Returned to the SAME step — no advance past an unconnected account.
     await expect(page.locator(WALKTHROUGH)).toBeVisible();
     await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
+    await expect(page.locator("#walkthrough-step2")).not.toHaveClass(/wt-current/);
+  });
+
+  test("a rejected key entered on onboarding returns to the same step with the failure surfaced", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("hasSeenWalkthrough", "true");
+    });
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      // The key the user types is genuinely rejected by the real endpoint.
+      [ENDPOINTS.flutterFlowListProjects]: err(401, { error: "unauthorized" }),
+      [ENDPOINTS.flutterFlowLegacyListProjects]: err(401, { error: "unauthorized" }),
+    });
+    await page.goto("/");
+    await reopenWalkthrough(page);
+    await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
+
+    await page.click("#walkthrough-step1 .wt-step-link");
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+
+    // Type a key and blur so the real (routed-401) endpoint evaluates it, then
+    // Save & Close. This is the REAL failure path: bytes get stored, but the
+    // connection is rejected.
+    await page.locator("#flutterflow-api-key-input").fill(KEY);
+    await page.locator("#flutterflow-api-key-input").blur();
+    await expect(page.locator("#flutterflow-projects-error")).toBeVisible();
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+
+    // saveApiKeys stored bytes, but the connection genuinely failed, so the
+    // walkthrough must return to the SAME step — never advance on a rejected
+    // key.
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+    await expect(page.locator("#walkthrough-step1")).toHaveClass(/wt-current/);
+    await expect(page.locator("#walkthrough-step2")).not.toHaveClass(/wt-current/);
+
+    // The failure is surfaced truthfully on the account connection card, which
+    // STU-384 renders from the real fetch outcome, not from stored bytes.
+    await page.click(".wt-gotit-btn");
+    await expect(page.locator(WALKTHROUGH)).toBeHidden();
+    await page.locator('a.nav-link[data-view="account"]').click();
+    await expect(page.locator("#account-view")).toBeVisible();
+    await expect(page.locator("#acct-ff-status")).toContainText("API key rejected");
   });
 
   test("closing settings opened outside onboarding does not launch or advance the walkthrough", async ({ page }) => {
@@ -208,8 +285,14 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator("#api-keys-modal")).toBeHidden();
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
-    // Nor later (the old buggy path reopened it after the save window).
-    await page.waitForTimeout(1200);
-    await expect(page.locator(WALKTHROUGH)).toBeHidden();
+    // Nor later (the old buggy path reopened it after the save window). Poll
+    // the negative over the window instead of a single fixed sleep, so a
+    // delayed reopen is caught mid-window rather than slipping past a one-shot
+    // wall-clock gap.
+    const settleDeadline = Date.now() + 1500;
+    while (Date.now() < settleDeadline) {
+      await expect(page.locator(WALKTHROUGH)).toBeHidden();
+      await page.waitForTimeout(100);
+    }
   });
 });
