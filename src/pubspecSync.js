@@ -103,52 +103,70 @@ function splitValueAndComment(rest) {
   };
 }
 
+// The keys that say where a block-form dependency comes from. `version` is
+// deliberately absent: it is a constraint, not a source, so a mapping whose
+// only own key is `version:` describes a normal pub.dev dependency.
+const SOURCE_KEYS = new Set(["sdk", "git", "path", "hosted"]);
+
 /**
- * Reads the first key of a block-form dependency's own mapping.
+ * Reads where a block-form dependency comes from, scanning every key of its
+ * own mapping.
  *
  * A block-form entry says where a package comes from on a following, more
  * deeply indented line: `sdk:`, `git:`, `path:`, a nested `hosted:`, or a
- * `version:` written on its own line. That key is the only thing that
- * distinguishes a package the Flutter SDK supplies from one the analysis
- * manifest cannot reproduce, so it is read here rather than guessed from the
- * package's name. A name list cannot work: it goes stale the moment the SDK
- * ships a package the list has not heard of, and every project declaring that
- * package then reads it as unreproducible.
+ * `version:` written on its own line. YAML mappings are unordered, so the
+ * source key can sit after `version:` or between any other keys — reading
+ * only the first key would classify a valid custom-hosted dependency whose
+ * `version:` happens to come first as a plain pub.dev one, and the
+ * verification runner would then compile against a different package source
+ * than the project ships.
+ *
+ * That key is the only thing that distinguishes a package the Flutter SDK
+ * supplies from one the analysis manifest cannot reproduce, so it is read
+ * here rather than guessed from the package's name. A name list cannot work:
+ * it goes stale the moment the SDK ships a package the list has not heard of,
+ * and every project declaring that package then reads it as unreproducible.
  *
  * @param {string[]} lines - pubspec.yaml split into lines
  * @param {number} entryIndex - Index of the dependency entry's own line
  * @param {number} endIndex - Exclusive end of the enclosing block
  * @param {number} parentIndent - Indent of the dependency entry itself
- * @returns {{key: string, value: string}|null} First own-key, or null if the
- *   entry has no mapping below it
+ * @returns {{key: string|null, value: string|null, version: string|null}}
+ *   The source directive's key and inline value — null when the mapping
+ *   holds no sdk/git/path/hosted key — plus the entry's own `version:` value
+ *   when one appears
  */
 function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
+  let version = null;
   for (let i = entryIndex + 1; i < endIndex; i += 1) {
     const line = lines[i];
     if (isBlankOrComment(line)) continue;
     // Shallower or equal indent means the entry's mapping has ended and this is
-    // a sibling dependency, so there is nothing of this entry's own to read.
-    if (indentOf(line) <= parentIndent) return null;
+    // a sibling dependency, so there is nothing of this entry's own left to read.
+    if (indentOf(line) <= parentIndent) break;
     const trimmed = line.trim();
     const key = parseDependencyName(trimmed);
     if (!key) continue;
     const { value } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    return { key, value };
+    if (SOURCE_KEYS.has(key)) return { key, value, version };
+    if (key === "version" && version === null) version = value;
   }
-  return null;
+  return { key: null, value: null, version };
 }
 
 /**
  * Reads every package declared under `dependencies:` with its constraint.
  *
- * A dependency written in block form (`sdk:`, `git:`, `path:`, or a nested
- * `version:`) has no scalar constraint and must never be rewritten as one, so
- * it is reported with `isScalar: false`.
+ * A dependency written in block form (`sdk:`, `git:`, `path:`, a nested
+ * `hosted:`, or a `version:` on its own line) has no scalar constraint and
+ * must never be rewritten as one, so it is reported with `isScalar: false`.
+ * An entry whose own keys are only `version:` is a normal pub.dev dependency:
+ * `sourceKey` is null and the constraint travels in `version`.
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
- * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null}>}
+ * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null, version: string|null}>}
  */
 export function parseExistingDependencies(yamlContent) {
   const lines = String(yamlContent || "").split("\n");
@@ -185,6 +203,7 @@ export function parseExistingDependencies(yamlContent) {
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,
+      version: directive ? directive.version : null,
     });
   }
   return declared;
@@ -206,7 +225,7 @@ export function parseExistingDependencies(yamlContent) {
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
  * @param {string} blockName - Top-level key, e.g. "dependency_overrides"
- * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null}>}
+ * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null, version: string|null}>}
  */
 export function parseDependencyBlock(yamlContent, blockName) {
   const lines = String(yamlContent || "").split("\n");
@@ -243,6 +262,7 @@ export function parseDependencyBlock(yamlContent, blockName) {
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,
+      version: directive ? directive.version : null,
     });
   }
   return declared;
