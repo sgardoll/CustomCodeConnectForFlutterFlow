@@ -2872,7 +2872,190 @@
         color: var(--accent);
       }
 
+      /* Account overview — real identity, plan, usage and honest history.
+         Every number below is written by renderAccountOverview() from the same
+         metered/session/subscription state the topbar reads; nothing here is
+         illustrative, and no renewal/member date is ever fabricated. */
+      .acct-head { padding: 4px 0 22px; }
+      .acct-eyebrow {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        font-weight: 500;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 12px;
+      }
+      .acct-title {
+        font-family: var(--font-display);
+        font-size: clamp(28px, 5vw, 40px);
+        line-height: 1.06;
+        letter-spacing: -0.03em;
+        font-weight: var(--fw-bold);
+        margin: 0;
+      }
+      .acct-lead {
+        margin: 14px 0 0;
+        font-size: 15px;
+        line-height: 1.6;
+        color: var(--muted);
+        max-width: 62ch;
+      }
+
+      .acct-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr));
+        gap: 16px;
+        margin: 0 0 16px;
+      }
+      .acct-card {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--surface);
+        padding: 20px;
+      }
+      .acct-card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .acct-card-head h2 {
+        font-family: var(--font-display);
+        font-size: 17px;
+        font-weight: var(--fw-bold);
+        letter-spacing: -0.02em;
+        margin: 0;
+      }
+      .acct-card-head .acct-meta {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--muted-2);
+      }
+
+      .acct-who { display: flex; align-items: center; gap: 14px; }
+      .acct-avatar {
+        width: 52px; height: 52px; flex: none;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        background: var(--fg); color: var(--surface);
+        font-size: 19px; font-weight: 600;
+      }
+      .acct-name {
+        font-family: var(--font-display);
+        font-size: 19px; font-weight: var(--fw-bold);
+        letter-spacing: -0.02em; margin: 0;
+      }
+      .acct-email {
+        font-family: var(--font-mono);
+        font-size: 12.5px; color: var(--muted);
+        margin: 3px 0 0; overflow-wrap: anywhere;
+      }
+      .acct-since {
+        font-size: 12.5px; color: var(--muted-2); margin: 7px 0 0;
+      }
+
+      .acct-k {
+        font-family: var(--font-mono);
+        font-size: 10.5px; letter-spacing: 0.11em; text-transform: uppercase;
+        color: var(--muted-2); margin: 0;
+      }
+      .acct-v {
+        font-size: clamp(26px, 3vw, 32px);
+        font-weight: var(--fw-bold);
+        letter-spacing: -0.035em;
+        line-height: 1.05;
+        margin: 10px 0 0;
+        overflow-wrap: anywhere;
+      }
+      .acct-v .acct-unit { font-size: 15px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+      .acct-n {
+        font-size: 12.5px; color: var(--muted); margin: 8px 0 0;
+      }
+
+      .acct-identity { margin-bottom: 16px; }
+      .acct-usage-meter { margin-bottom: 16px; }
+      .acct-meter { margin-top: 18px; }
+      .acct-meter-track {
+        height: 10px; border-radius: 999px;
+        background: var(--track); overflow: hidden;
+      }
+      .acct-meter-fill {
+        height: 100%; border-radius: 999px;
+        background: var(--accent);
+        width: 0%;
+        transition: width 700ms var(--ease, ease);
+      }
+      .acct-meter-meta {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 14px; flex-wrap: wrap;
+        margin-top: 12px; font-size: 13px; color: var(--muted);
+      }
+      .acct-meter-meta .acct-num { font-family: var(--font-mono); font-size: 13px; color: var(--fg); }
+      .acct-counter { font-family: var(--font-mono); font-size: 12px; }
+
+      .acct-empty {
+        margin-top: 14px;
+        padding: 16px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius-sm, 10px);
+        background: var(--surface-sunken);
+        font-size: 13.5px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+      .acct-empty p { margin: 0 0 6px; }
+      .acct-empty p:last-child { margin-bottom: 0; }
+      .acct-empty a { color: var(--accent); text-decoration: underline; }
+
+      .acct-connection { margin-bottom: 16px; }
+      .acct-conn-row {
+        display: flex; align-items: center; gap: 10px;
+        margin-top: 14px; font-size: 14px;
+      }
+      .acct-dot {
+        width: 9px; height: 9px; border-radius: 50%; flex: none;
+        background: var(--muted-2);
+      }
+      .acct-dot.ok { background: var(--ok); }
+      .acct-dot.warn { background: var(--warn); }
+      .acct-conn-spacer { flex: 1; }
+      .acct-kv { margin: 12px 0 0; }
+      .acct-row {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--border);
+        font-size: 13.5px;
+      }
+      .acct-row:last-child { border-bottom: 0; }
+      .acct-row dt { color: var(--muted); }
+      .acct-row dd { margin: 0; font-family: var(--font-mono); font-size: 13px; text-align: right; overflow-wrap: anywhere; }
+
+      .acct-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .acct-actions .btn-action { flex: 1 1 auto; }
+      .btn-action.ghost {
+        background: transparent; color: var(--muted);
+        border: 1px solid var(--border);
+      }
+      .btn-action.sm { padding: 7px 12px; font-size: 12.5px; flex: none; }
+
+      .acct-access-row {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 16px; padding: 11px 0; border-bottom: 1px solid var(--border);
+        font-size: 13.5px;
+      }
+      .acct-access-row:last-child { border-bottom: 0; }
+      .acct-access-row p { margin: 0; color: var(--muted); }
+      .acct-access-row p:first-child { color: var(--fg); font-weight: 500; flex: none; }
+
       /* Mobile compact */
+      @media (max-width: 920px) {
+        .acct-grid { grid-template-columns: 1fr; }
+        /* The connection row's Configure button is non-shrinking (flex: none);
+           on narrow screens the long status text pushes it past the viewport,
+           so drop it onto its own full-width line instead. */
+        .acct-conn-row { flex-wrap: wrap; }
+        .acct-conn-row .btn-action { flex: 1 1 100%; }
+      }
       @media (max-width: 920px) {
         .hero { padding: 24px 16px 28px; }
         .headline { font-size: clamp(34px, 10vw, 56px); line-height: 1.08; }
@@ -3170,22 +3353,115 @@
     </section>
 
     <section id="account-view" class="view view-account" aria-label="Account" role="region" tabindex="-1" data-view="account" hidden>
-      <div class="surface-card account-card">
-        <h2>Account</h2>
-        <div id="auth-signedout" style="margin-top: 8px;">
+      <div class="surface-card account-card" style="background:var(--surface-translucent);">
+        <header class="acct-head">
+          <p class="acct-eyebrow">Account</p>
+          <h2 class="acct-title">Your workspace, in one place.</h2>
+          <p class="acct-lead">Who you are signed in as, how much of your plan you have used this period, and what is connected to FlutterFlow.</p>
+        </header>
+
+        <div id="auth-signedout">
           <p style="color:var(--muted); margin-bottom: 18px; font-size: 14px;">Sign in to track usage and manage your subscription.</p>
           <button class="btn-action btn-run" onclick="openSignInModal()">Sign In</button>
         </div>
-        <div id="auth-signedin" class="hidden" style="margin-top: 8px;">
-          <div class="account-row"><span class="muted">Email</span><span id="auth-user-email">—</span></div>
-          <div class="account-row"><span class="muted">Plan</span><span id="subscription-tier-badge" class="inline-badge">Free</span></div>
-          <div class="account-row"><span class="muted">Usage</span><span id="usage-counter">0 / 2 runs this month</span></div>
-          <div class="account-actions">
-            <button class="btn-action btn-run" onclick="openApiKeysModal()">Configure API Keys</button>
-            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal(this)">Manage Subscription</button>
-            <button class="btn-action" style="background:transparent;color:var(--muted);border:1px solid var(--border);" onclick="handleSignOut()">Sign Out</button>
+
+        <div id="auth-signedin" class="hidden">
+          <div class="acct-grid">
+            <div class="acct-card acct-identity">
+              <div class="acct-who">
+                <span class="acct-avatar" id="acct-avatar" aria-hidden="true">?</span>
+                <div style="min-width:0;">
+                  <p class="acct-name" id="acct-name">—</p>
+                  <p class="acct-email" id="auth-user-email">—</p>
+                  <p class="acct-since" id="acct-since">Signed in by email magic link.</p>
+                </div>
+              </div>
+              <div class="acct-actions">
+                <button class="btn-action ghost" onclick="switchView('plans')">Change plan</button>
+                <button class="btn-action ghost" onclick="handleSignOut()">Sign out</button>
+              </div>
+            </div>
+
+            <div class="acct-card acct-plan">
+              <p class="acct-k">Current plan</p>
+              <p class="acct-v"><span id="acct-plan-tier">Free</span> <span class="acct-unit" id="acct-plan-price">$0 / month</span></p>
+              <p class="acct-n" id="acct-plan-note">No subscription.</p>
+              <p class="acct-n" id="acct-renewal">Renewal date not available yet.</p>
+              <span id="subscription-tier-badge" class="inline-badge" style="margin-top:12px;">Free</span>
+            </div>
+
+            <div class="acct-card acct-usage">
+              <p class="acct-k">Generations left this period</p>
+              <p class="acct-v"><span id="acct-left-count">—</span> <span class="acct-unit">of <span id="acct-left-limit">—</span></span></p>
+              <p class="acct-n" id="acct-reset-note">Runs reset at the start of each month.</p>
+            </div>
+          </div>
+
+          <div class="acct-card acct-usage-meter">
+            <div class="acct-card-head">
+              <h2>Usage this month</h2>
+              <span class="acct-meta" id="acct-meter-meta">—</span>
+            </div>
+            <div class="acct-meter">
+              <div class="acct-meter-track" role="img" id="acct-meter-track" aria-label="Usage this period">
+                <div class="acct-meter-fill" id="acct-meter-fill"></div>
+              </div>
+              <div class="acct-meter-meta">
+                <span><span class="acct-num" id="acct-used-count">0</span> generations used</span>
+                <span id="usage-counter" class="acct-counter">0 / 2 runs this month</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="acct-card acct-history" id="acct-history">
+            <div class="acct-card-head">
+              <h2>Generation history</h2>
+              <span class="acct-meta">not saved</span>
+            </div>
+            <div class="acct-empty" id="acct-no-history">
+              <p>Saved history isn't available yet.</p>
+              <p>Per-run records aren't persisted, so there is no past list to show. Your current result stays open in the <a href="#home" onclick="switchView('home'); return false;">generation workspace</a>.</p>
+            </div>
+          </div>
+
+          <div class="acct-card acct-connection">
+            <div class="acct-card-head">
+              <h2>FlutterFlow connection</h2>
+              <span class="acct-meta">API key</span>
+            </div>
+            <div class="acct-conn-row">
+              <span class="acct-dot" id="acct-ff-dot" aria-hidden="true"></span>
+              <span id="acct-ff-status">Checking…</span>
+              <span class="acct-conn-spacer"></span>
+              <button class="btn-action ghost sm" onclick="openApiKeysModal()">Configure</button>
+            </div>
+            <dl class="acct-kv">
+              <div class="acct-row"><dt>Endpoint</dt><dd id="acct-ff-endpoint">—</dd></div>
+              <div class="acct-row"><dt>Default project</dt><dd id="acct-ff-project">—</dd></div>
+            </dl>
+          </div>
+
+          <div class="acct-card acct-access">
+            <div class="acct-card-head">
+              <h2>Provider keys &amp; access</h2>
+              <span class="acct-meta">stored on this device</span>
+            </div>
+            <div class="acct-access-row">
+              <p>Sign-in method</p>
+              <p style="text-align:right;">Email magic link. No password is stored.</p>
+            </div>
+            <div class="acct-access-row">
+              <p>API keys</p>
+              <p style="text-align:right;">Provider and FlutterFlow keys are encrypted and kept in this browser.</p>
+            </div>
+            <div class="acct-actions">
+              <button class="btn-action ghost" onclick="openApiKeysModal()">Configure API Keys</button>
+              <button class="btn-action ghost" id="manage-billing-btn" onclick="openCustomerPortal(this)">Manage Subscription</button>
+              <button class="btn-action ghost" onclick="handleSignOut()">Sign Out</button>
+            </div>
           </div>
         </div>
+
         <div id="auth-guest-usage" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);">
           <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px;">
             <span style="font-size:14px; color:var(--muted);"><span id="guest-usage-text">0 / 2 generations used</span></span>
