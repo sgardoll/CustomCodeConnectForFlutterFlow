@@ -53,11 +53,11 @@ export const ENDPOINTS = {
 // fall back to the default 3000.
 const VITE_ORIGIN = `http://localhost:${process.env.CCC_TEST_PORT || 3000}`;
 
-function ok(body) {
+export function ok(body) {
   return { status: 200, body: JSON.stringify(body), contentType: "application/json" };
 }
 
-function err(status, body) {
+export function err(status, body) {
   return { status, body: typeof body === "string" ? body : JSON.stringify(body), contentType: "application/json" };
 }
 

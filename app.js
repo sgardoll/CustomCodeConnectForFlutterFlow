@@ -6087,13 +6087,14 @@ function renderSummaryDetail(presentation) {
         <div class="review-score-feedback">
           <span>Is the generated code correct?</span>
           <div class="review-score-feedback-controls">
-            <button class="feedback-btn" id="btn-feedback-up" onclick="submitResultsFeedback('up')" title="Yes">
+            <button type="button" class="feedback-btn" id="btn-feedback-up" aria-label="Yes, the generated code is correct" aria-pressed="false" onclick="submitResultsFeedback('up')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/></svg>
             </button>
-            <button class="feedback-btn" id="btn-feedback-down" onclick="submitResultsFeedback('down')" title="No">
+            <button type="button" class="feedback-btn" id="btn-feedback-down" aria-label="No, the generated code is not correct" aria-pressed="false" onclick="submitResultsFeedback('down')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/></svg>
             </button>
           </div>
+          <span id="results-feedback-status" class="sr-only" aria-live="polite"></span>
         </div>
       </div>
     </section>
@@ -6359,11 +6360,32 @@ function showResultsView(codeContent, auditContent) {
   updateSelectedArtifactPanels();
   updateDeployButtonVisibility();
 
-  // Reset feedback buttons
+  // Reset feedback state for the CURRENT generation: a new run must never
+  // carry a prior vote (visual, aria-pressed, pending lock or status) into
+  // code the user has not yet reviewed.
+  resetResultsFeedbackState();
+}
+
+function resetResultsFeedbackState() {
   const upBtn = document.getElementById("btn-feedback-up");
   const downBtn = document.getElementById("btn-feedback-down");
-  if (upBtn) upBtn.className = "feedback-btn";
-  if (downBtn) downBtn.className = "feedback-btn";
+  const statusEl = document.getElementById("results-feedback-status");
+  if (upBtn) {
+    upBtn.className = "feedback-btn";
+    upBtn.setAttribute("aria-pressed", "false");
+    upBtn.disabled = false;
+    upBtn.removeAttribute("aria-disabled");
+  }
+  if (downBtn) {
+    downBtn.className = "feedback-btn";
+    downBtn.setAttribute("aria-pressed", "false");
+    downBtn.disabled = false;
+    downBtn.removeAttribute("aria-disabled");
+  }
+  if (statusEl) {
+    statusEl.textContent = "";
+  }
+  resultsFeedbackPending = false;
 }
 
 function showDebugMultiArtifactResults() {
@@ -6563,22 +6585,63 @@ function copyResultsCode() {
   });
 }
 
-function submitResultsFeedback(direction) {
+let resultsFeedbackPending = false;
+
+async function submitResultsFeedback(direction) {
   const upBtn = document.getElementById("btn-feedback-up");
   const downBtn = document.getElementById("btn-feedback-down");
+  const statusEl = document.getElementById("results-feedback-status");
+  if (!upBtn || !downBtn) return;
+  // Ignore a rapid double-click (or a second direction) while a submission is
+  // still in flight so we never send a duplicate vote for the same generation.
+  if (resultsFeedbackPending) return;
 
-  // Toggle
-  if (direction === "up") {
-    upBtn.classList.toggle("active-up");
-    downBtn.classList.remove("active-down");
-  } else {
-    downBtn.classList.toggle("active-down");
-    upBtn.classList.remove("active-up");
-  }
+  const announce = (message) => {
+    if (!statusEl) return;
+    statusEl.textContent = "";
+    void statusEl.offsetWidth; // force reflow so repeated announcements re-fire
+    statusEl.textContent = message;
+  };
+
+  const setPending = (pending) => {
+    resultsFeedbackPending = pending;
+    [upBtn, downBtn].forEach((btn) => {
+      btn.disabled = pending;
+      btn.setAttribute("aria-disabled", String(pending));
+    });
+  };
 
   const feedbackType = direction === "up" ? "thumbsUp" : "thumbsDown";
-  callEndpoint(feedbackType, pipelineState.step2Result, pipelineState.step1Result);
-  trackEvent("Generation Feedback", { feedback: feedbackType });
+  setPending(true);
+  announce("Submitting review feedback…");
+
+  // Capture the CURRENT generation up front so a retry always sends the exact
+  // bundle + input the user reviewed — never a prior generation's payload.
+  const payload = { type: feedbackType, code: pipelineState.step2Result, input: pipelineState.step1Result };
+  try {
+    const result = await callEndpoint(payload.type, payload.code, payload.input);
+    if (!result || result.success === false) {
+      // A non-2xx response or network failure is never shown as saved.
+      setPending(false);
+      announce("Review feedback could not be sent. Tap again to retry.");
+      return;
+    }
+
+    // Only a confirmed submission marks the vote saved; the chosen direction
+    // becomes pressed and the other is cleared (mutually exclusive).
+    upBtn.classList.toggle("active-up", direction === "up");
+    downBtn.classList.toggle("active-down", direction === "down");
+    upBtn.setAttribute("aria-pressed", String(direction === "up"));
+    downBtn.setAttribute("aria-pressed", String(direction === "down"));
+    setPending(false);
+    announce("Review feedback saved.");
+    trackEvent("Generation Feedback", { feedback: feedbackType });
+  } catch (error) {
+    // callEndpoint swallows its own/rejection errors into { success:false },
+    // but a hard throw must also fail open without showing a saved vote.
+    setPending(false);
+    announce("Review feedback could not be sent. Tap again to retry.");
+  }
 }
 
 function showErrorInputPanel() {
