@@ -7,6 +7,14 @@
  * These are pure data objects. Use `applyDefaultRoutes(page)` to wire them into
  * Playwright request interception, or mix and match individual fixtures with
  * `routeFulfill(page, urlPattern, fixture)`.
+ *
+ * Routing policy (see applyDefaultRoutes): fixture responses are fulfilled,
+ * static assets index.html references are fulfilled with inert stubs, and
+ * only same-origin requests served by the local Vite dev server — plus the
+ * SRI-pinned static scripts the app needs at load — reach the network. Every
+ * other request is aborted, so an un-fixtured external call — a paid
+ * generation, a real project write, a newly added endpoint — fails the test
+ * loudly instead of silently escaping to the network.
  */
 
 const BUILDSHIP_BASE_URL = "https://4tgke4.buildship.run";
@@ -34,6 +42,11 @@ export const ENDPOINTS = {
     "https://api.flutterflow.io/v2/syncCustomCodeChanges",
   exchangeRates: "https://open.er-api.com/v6/latest/AUD",
 };
+
+// Origin of the local Vite dev server that playwright.config.js boots and
+// targets (webServer.url / baseURL). Its requests are the only ones allowed
+// to reach the network.
+const VITE_ORIGIN = "http://localhost:3000";
 
 function ok(body) {
   return { status: 200, body: JSON.stringify(body), contentType: "application/json" };
@@ -272,10 +285,67 @@ export async function routeFulfill(page, urlPredicate, fixture) {
   });
 }
 
+// Inert payloads for the third-party STATIC assets index.html references
+// WITHOUT a Subresource Integrity attribute. Aborting them would fail the
+// page load with resource errors; loading them for real would make tests
+// depend on live CDNs. The app's own inline stylesheet provides the
+// `.hidden { display: none !important }` utility the tests rely on, so an
+// empty Tailwind payload changes no assertion. Empty stylesheets keep their
+// @font-face rules from pulling font files, and an empty document keeps the
+// YouTube embeds from loading their player, ad and tracking scripts.
+const INERT_SCRIPT = { status: 200, body: "", contentType: "application/javascript" };
+const INERT_STYLESHEET = { status: 200, body: "", contentType: "text/css" };
+const INERT_DOCUMENT = {
+  status: 200,
+  body: "<!doctype html><html><body></body></html>",
+  contentType: "text/html; charset=utf-8",
+};
+
+// [urlPrefix, response] pairs for exactly the third-party assets index.html
+// loads at page load without SRI. Matched by prefix so URL normalization
+// (trailing slash) and query strings (fonts, YouTube start offsets) cannot
+// dodge a stub.
+const STATIC_ASSET_STUBS = [
+  ["https://cdn.tailwindcss.com", INERT_SCRIPT],
+  ["https://fonts.googleapis.com/css2", INERT_STYLESHEET],
+  ["https://www.youtube.com/embed/", INERT_DOCUMENT],
+];
+
+// The third-party static assets index.html references WITH a Subresource
+// Integrity attribute. A fulfilled stub can never match the pinned digest —
+// the browser blocks it with a console error — and app.js functionally needs
+// FingerprintJS to resolve identity, so these are the ONLY external requests
+// allowed through to the network. Each is pinned to an exact version and
+// verified byte-for-byte by the browser's SRI check.
+const SRI_PINNED_ASSET_PREFIXES = [
+  "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/dart.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css",
+  "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4.6.2/dist/fp.umd.min.js",
+];
+
 /**
- * Apply a safe default route map that isolates the test from external services.
- * Use this as the baseline in every browser journey, then override specific
- * endpoints to exercise auth, subscription or generation states.
+ * Apply the default route map that isolates the test from every external
+ * service, then override specific endpoints to exercise auth, subscription or
+ * generation states.
+ *
+ * Requests are handled in order:
+ * 1. A fixture keyed by the exact request URL (default or override) is
+ *    fulfilled — the only API responses a test ever sees.
+ * 2. A static third-party asset from index.html is fulfilled with an inert
+ *    stub, so a page load makes no unnecessary external requests.
+ * 3. An SRI-pinned static asset from index.html continues: a stub cannot
+ *    match the pinned digest and the app needs FingerprintJS at load, so
+ *    these version-locked, hash-verified assets are the only external
+ *    requests allowed through.
+ * 4. A same-origin request is served by the local Vite dev server — the
+ *    document, ES modules, Vite internals and public assets — and continues.
+ *    Paths under /api are the exception: vite.config.js proxies them to real
+ *    AI providers, so they are not local assets and fall through to abort.
+ * 5. Anything else is aborted. An un-fixtured external call must fail the
+ *    test loudly rather than silently reach a paid generation or a real
+ *    project.
  */
 export async function applyDefaultRoutes(page, overrides = {}) {
   const routes = {
@@ -298,12 +368,34 @@ export async function applyDefaultRoutes(page, overrides = {}) {
   };
 
   await page.route("**/*", async (route) => {
-    const url = route.request().url();
-    const fixture = routes[url];
+    const requestUrl = route.request().url();
+
+    const fixture = routes[requestUrl];
     if (fixture) {
       await route.fulfill(typeof fixture === "function" ? fixture() : fixture);
       return;
     }
-    await route.continue();
+
+    const staticStub = STATIC_ASSET_STUBS.find(([urlPrefix]) => requestUrl.startsWith(urlPrefix));
+    if (staticStub) {
+      await route.fulfill(staticStub[1]);
+      return;
+    }
+
+    const isSriPinnedAsset = SRI_PINNED_ASSET_PREFIXES.some((urlPrefix) =>
+      requestUrl.startsWith(urlPrefix),
+    );
+    if (isSriPinnedAsset) {
+      await route.continue();
+      return;
+    }
+
+    const { origin, pathname } = new URL(requestUrl);
+    if (origin === VITE_ORIGIN && !pathname.startsWith("/api")) {
+      await route.continue();
+      return;
+    }
+
+    await route.abort();
   });
 }
