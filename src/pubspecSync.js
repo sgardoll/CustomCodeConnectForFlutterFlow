@@ -104,6 +104,43 @@ function splitValueAndComment(rest) {
 }
 
 /**
+ * Reads the first key of a block-form dependency's own mapping.
+ *
+ * A block-form entry says where a package comes from on a following, more
+ * deeply indented line: `sdk:`, `git:`, `path:`, a nested `hosted:`, or a
+ * `version:` written on its own line. That key is the only thing that
+ * distinguishes a package the Flutter SDK supplies from one the analysis
+ * manifest cannot reproduce, so it is read here rather than guessed from the
+ * package's name. A name list cannot work: it goes stale the moment the SDK
+ * ships a package the list has not heard of, and every project declaring that
+ * package then reads it as unreproducible.
+ *
+ * @param {string[]} lines - pubspec.yaml split into lines
+ * @param {number} entryIndex - Index of the dependency entry's own line
+ * @param {number} endIndex - Exclusive end of the enclosing block
+ * @param {number} parentIndent - Indent of the dependency entry itself
+ * @returns {{key: string, value: string}|null} First own-key, or null if the
+ *   entry has no mapping below it
+ */
+function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
+  for (let i = entryIndex + 1; i < endIndex; i += 1) {
+    const line = lines[i];
+    if (isBlankOrComment(line)) continue;
+    // Shallower or equal indent means the entry's mapping has ended and this is
+    // a sibling dependency, so there is nothing of this entry's own to read.
+    if (indentOf(line) <= parentIndent) return null;
+    const trimmed = line.trim();
+    const key = parseDependencyName(trimmed);
+    if (!key) continue;
+    const { value } = splitValueAndComment(
+      trimmed.slice(trimmed.indexOf(":") + 1),
+    );
+    return { key, value };
+  }
+  return null;
+}
+
+/**
  * Reads every package declared under `dependencies:` with its constraint.
  *
  * A dependency written in block form (`sdk:`, `git:`, `path:`, or a nested
@@ -111,7 +148,7 @@ function splitValueAndComment(rest) {
  * it is reported with `isScalar: false`.
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
- * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean}>}
+ * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null}>}
  */
 export function parseExistingDependencies(yamlContent) {
   const lines = String(yamlContent || "").split("\n");
@@ -123,7 +160,8 @@ export function parseExistingDependencies(yamlContent) {
     const line = lines[i];
     if (isBlankOrComment(line)) continue;
     // Only direct children are dependency names; deeper lines describe a
-    // dependency's own keys (sdk:, git:, version:, ...).
+    // dependency's own keys (sdk:, git:, version:, ...), which
+    // readSourceDirective reads separately below.
     if (indentOf(line) !== block.childIndent.length) continue;
     const trimmed = line.trim();
     const name = parseDependencyName(trimmed);
@@ -132,11 +170,21 @@ export function parseExistingDependencies(yamlContent) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
+    const isScalar = value !== "";
+    // A block-form entry carries its source on the next line down. A scalar one
+    // has nothing deeper, and looking anyway would walk into whichever
+    // dependency follows.
+    const directive = isScalar
+      ? null
+      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+
     declared.set(name, {
       constraint: value,
       comment,
       lineIndex: i,
-      isScalar: value !== "",
+      isScalar,
+      sourceKey: directive ? directive.key : null,
+      sourceValue: directive ? directive.value : null,
     });
   }
   return declared;
@@ -158,7 +206,7 @@ export function parseExistingDependencies(yamlContent) {
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
  * @param {string} blockName - Top-level key, e.g. "dependency_overrides"
- * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean}>}
+ * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null}>}
  */
 export function parseDependencyBlock(yamlContent, blockName) {
   const lines = String(yamlContent || "").split("\n");
@@ -180,11 +228,21 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
+    const isScalar = value !== "";
+    // A block-form entry carries its source on the next line down. A scalar one
+    // has nothing deeper, and looking anyway would walk into whichever
+    // dependency follows.
+    const directive = isScalar
+      ? null
+      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+
     declared.set(name, {
       constraint: value,
       comment,
       lineIndex: i,
-      isScalar: value !== "",
+      isScalar,
+      sourceKey: directive ? directive.key : null,
+      sourceValue: directive ? directive.value : null,
     });
   }
   return declared;
