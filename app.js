@@ -6620,8 +6620,15 @@ async function submitResultsFeedback(direction) {
   const payload = { type: feedbackType, code: pipelineState.step2Result, input: pipelineState.step1Result };
   try {
     const result = await callEndpoint(payload.type, payload.code, payload.input);
-    if (!result || result.success === false) {
-      // A non-2xx response or network failure is never shown as saved.
+    // A vote is only claimed as saved after the endpoint positively confirms
+    // success. Requiring the explicit `success: true` the backend contract
+    // returns means a 2xx carrying an error-shaped body ({"error":"quota
+    // exceeded"} or {"ok":false}, with no truthy success field) is never
+    // announced as saved — a failed submission must stay retry-able instead
+    // of silently clearing the pending lock.
+    if (!result || result.success !== true) {
+      // A non-2xx response, network failure, or unconfirmed 2xx is never shown
+      // as saved.
       setPending(false);
       announce("Review feedback could not be sent. Tap again to retry.");
       return;

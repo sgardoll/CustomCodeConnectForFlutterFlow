@@ -97,6 +97,45 @@ test("up/down are keyboard operable, mutually exclusive, and announce success", 
   await expect(up).not.toHaveClass(/active-up/);
 });
 
+test("a 2xx with an error-shaped body is never shown as saved; retry re-sends", async ({ page }) => {
+  const captured = feedbackRequests(page);
+  // Endpoint returns HTTP 200 but the body carries no truthy success field:
+  // an error-shaped {"error": ...} body. This must behave like a failure, not
+  // a silent save (no pressed vote, no "saved" announcement, no cleared lock).
+  await applyDefaultRoutes(page, {
+    [ENDPOINTS.connectFeedback]: ok({ error: "quota exceeded" }),
+  });
+  await renderResults(page, bundleA, reviewA);
+
+  const up = page.locator("#btn-feedback-up");
+  await up.click();
+  await expect(up).toHaveAttribute("aria-pressed", "false");
+  await expect(up).not.toHaveClass(/active-up/);
+  await expect(up).toBeEnabled();
+  await expect(page.locator("#results-feedback-status")).toContainText("retry");
+  expect(captured.length).toBe(1);
+  expect(captured[0].body.type).toBe("thumbsUp");
+
+  // The {"ok":false} shape (with no top-level success) must also not save.
+  await routeFulfill(page, (url) => url.toString().includes("/connectFeedback"), ok({ ok: false, message: "quota exceeded" }));
+  await up.click();
+  await expect(up).toHaveAttribute("aria-pressed", "false");
+  await expect(up).not.toHaveClass(/active-up/);
+  await expect(up).toBeEnabled();
+  await expect(page.locator("#results-feedback-status")).toContainText("retry");
+  expect(captured.length).toBe(2);
+
+  // The endpoint recovers and genuinely confirms success: only now is the
+  // vote shown as saved, carrying the CURRENT generation's payload.
+  await routeFulfill(page, (url) => url.toString().includes("/connectFeedback"), ok({ success: true }));
+  await up.click();
+  await expect(up).toHaveAttribute("aria-pressed", "true");
+  await expect(up).toHaveClass(/active-up/);
+  await expect(page.locator("#results-feedback-status")).toContainText("saved");
+  expect(captured.length).toBe(3);
+  expect(captured[2].body.code).toBe(JSON.stringify(bundleA));
+});
+
 test("non-2xx is never shown as saved; retry sends the current generation payload", async ({ page }) => {
   const captured = feedbackRequests(page);
   // First attempt fails with HTTP 500.
