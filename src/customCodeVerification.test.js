@@ -119,6 +119,32 @@ test("a dependency from a git or path source is reported unrepresentable", () =>
   assert.deepEqual(manifest.unrepresentable, ["private_thing"]);
 });
 
+test("a hosted source stays unrepresentable when version is written first", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  // YAML mappings are order-independent: reading only the first nested key
+  // classified this entry as a plain pub.dev dependency with constraint
+  // "^1.0.0", so the scratch manifest would resolve hosted_thing from pub.dev
+  // while the project ships it from its own host.
+  assert.deepEqual(manifest.unrepresentable, ["hosted_thing"]);
+  assert.equal("hosted_thing" in manifest.dependencies, false);
+});
+
 test("a git dependency does not stop a class that never imports it", () => {
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
