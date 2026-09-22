@@ -37,6 +37,12 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run browser tests
+        run: npm run test:ui
+
       - name: Run deploy guard
         run: npm run test:deploy-guard
 
