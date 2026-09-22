@@ -145,24 +145,22 @@ dependencies:
   assert.equal("hosted_thing" in manifest.dependencies, false);
 });
 
-test("a git dependency does not stop a class that never imports it", () => {
+test("a git dependency stops even a class that never imports it, because resolution is shared", () => {
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
     PROJECT_PUBSPEC,
   );
 
-  // The project declares `private_thing` from git, which cannot be reproduced
-  // outside it - but this class does not import it, so the scratch package
-  // resolves everything it does use to the versions the project will, and the
-  // check still describes the code that ships. Deciding this once for the whole
-  // project left every class uncompiled over a dependency it never touched.
-  assert.deepEqual(plan.sources, [
-    {
-      fileName: "background_downloader_service.dart",
-      content: SELF_CONTAINED,
-    },
-  ]);
-  assert.deepEqual(plan.skipped, []);
+  // The project declares `private_thing` from git, which the scratch manifest
+  // cannot express. `background_downloader` may depend on it transitively -
+  // knowable only by resolving the graph - so compiling this class elsewhere
+  // could report a result that does not describe what ships. The skip says
+  // that instead of silently compiling against a differently-resolved graph.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.skipped[0].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[0].reason, /private_thing/);
+  assert.match(plan.skipped[0].reason, /BackgroundDownloaderService/);
 });
 
 test("a class that imports the unreproducible dependency is skipped, and named as the reason", () => {
@@ -179,15 +177,72 @@ class UsesPrivateThing {}
     PROJECT_PUBSPEC,
   );
 
-  assert.deepEqual(
-    plan.sources.map((entry) => entry.fileName),
-    ["background_downloader_service.dart"],
-  );
-  assert.equal(plan.skipped.length, 1);
+  // The direct import keeps its own reason: it names this class's own import,
+  // so it says what to do about this class.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 2);
   assert.equal(plan.skipped[0].className, "UsesPrivateThing");
-  // The reason names this class's own import, not the project's whole
-  // dependency set, so it says what to do about this class.
   assert.match(plan.skipped[0].reason, /it imports private_thing/);
+  // The sibling never imports it, but the shared graph still cannot be
+  // reproduced, so it is skipped with the transitive reason rather than
+  // compiled against a graph that differs from the project's.
+  assert.equal(plan.skipped[1].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[1].reason, /private_thing/);
+});
+
+test("a representable import is skipped when an override elsewhere is unrepresentable", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  background_downloader: ^8.5.0
+
+dependency_overrides:
+  intl:
+    git:
+      url: https://example.invalid/intl-fork.git
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+
+  // The class imports `background_downloader`, which the manifest can express,
+  // and never touches `intl` - but the git override of `intl` cannot be
+  // carried, and whether `background_downloader` depends on `intl`
+  // transitively is knowable only by resolving the graph. The conservative
+  // skip names the package and the class truthfully.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.skipped[0].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[0].reason, /intl/);
+  assert.match(plan.skipped[0].reason, /BackgroundDownloaderService/);
+});
+
+test("a class compiled from dart: alone still verifies beside a git dependency", () => {
+  const plan = planCustomCodeVerification(
+    [
+      {
+        className: "PureDartService",
+        content: "import 'dart:convert';\nclass PureDartService {}",
+      },
+    ],
+    PROJECT_PUBSPEC,
+  );
+
+  // `dart:` libraries come from the SDK rather than pub resolution, so a class
+  // importing nothing from `package:` compiles against exactly what the
+  // project will, whatever the project's sources are.
+  assert.deepEqual(
+    plan.sources.map((source) => source.fileName),
+    ["pure_dart_service.dart"],
+  );
+  assert.deepEqual(plan.skipped, []);
 });
 
 test("an SDK package no list has heard of is reproduced from its pubspec source", () => {
