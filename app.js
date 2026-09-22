@@ -3275,6 +3275,9 @@ async function runPromptArchitect(userInput, images = []) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    // An exhausted allowance must keep its marker or the failure view loses
+    // the upgrade action and stage attribution.
+    if (error.isUsageLimit) throw error
     // A cancelled request is a stale run, not a stage failure.
     if (error.isPipelineCancel) throw error
     throw new Error(`Prompt Architect failed: ${error.message}`)
@@ -3327,6 +3330,9 @@ async function runCodeReview(code, architectOutput = null) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    // An exhausted allowance must keep its marker or the failure view loses
+    // the upgrade action and stage attribution.
+    if (error.isUsageLimit) throw error
     if (error.isPipelineCancel) throw error
     throw new Error(`Code Review failed: ${error.message}`)
   }

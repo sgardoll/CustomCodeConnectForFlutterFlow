@@ -197,6 +197,24 @@ test.describe("Recoverable failure states", () => {
     });
   }
 
+  for (const [step, stageName] of [
+    [1, "architect"],
+    [3, "review"],
+  ]) {
+    test(`a ${stageName} quota rejection keeps the upgrade action`, async ({ page }) => {
+      await openHome(page);
+      await routePipelineStages(page, { responses: { [stageName]: quotaExhausted } });
+
+      await page.locator("#hero-send").click();
+
+      await expect(failure(page)).toBeVisible();
+      await expect(failure(page)).toHaveAttribute("data-kind", "quota");
+      await expect(failure(page).locator('button[data-action="upgrade"]')).toBeVisible();
+      await expect(stage(page, step)).toHaveAttribute("data-state", "failed");
+      await expect(failure(page).locator('button[data-action="retry"]')).toHaveCount(0);
+    });
+  }
+
   test("a terminated run focuses a usable action and can be walked by keyboard", async ({ page }) => {
     await openHome(page);
     await routePipelineStages(page, { responses: { generator: providerError } });
