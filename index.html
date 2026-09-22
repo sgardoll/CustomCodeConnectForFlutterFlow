@@ -33,6 +33,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/designTokens.css" />
     <link rel="stylesheet" href="/src/sharedControls.css" />
+    <link rel="stylesheet" href="/src/heroMarkField.css" />
     <style>
       :root {
         /* Layout constants preserved until the shell change that owns them. */
@@ -2881,6 +2882,12 @@
   <main class="viewport" id="viewport">
     <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" tabindex="-1" data-view="home">
       <div class="hero" id="hero">
+        <div class="hero-field" aria-hidden="true">
+          <canvas class="fx-grid" id="fx-grid" aria-hidden="true" tabindex="-1"></canvas>
+          <div class="fx-mask fx-mask-top"></div>
+          <div class="fx-mask fx-mask-bottom"></div>
+          <div class="fx-mask fx-mask-hero"></div>
+        </div>
         <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
         <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
 

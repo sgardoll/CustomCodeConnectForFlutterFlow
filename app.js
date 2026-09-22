@@ -48,6 +48,7 @@ import {
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
+import { initHeroMarkField } from "./src/heroMarkField.js";
 import {
   applyDependencyOverrides,
   mergeDependenciesIntoYaml,
@@ -5069,6 +5070,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Initialize welcome video
   initializeWelcomeVideo();
+
+  // Decorative hero mark field (WebGL with 2D fallback); no dependency on generation state.
+  window.__heroField = initHeroMarkField();
 
   await initializeAuth();
   handleCheckoutRedirect();
