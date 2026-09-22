@@ -925,6 +925,7 @@ function getFlutterFlowEndpoint() {
 
 function setFlutterFlowEndpoint(endpoint) {
   localStorage.setItem("flutterflow_api_endpoint", endpoint);
+  invalidateStaleProjectSelection();
   return true;
 }
 
@@ -949,6 +950,15 @@ let commitTargetProjectId = null;
 // modal's dropdown when the modal is closed/reopened before the fetch returns.
 let confirmProjectToken = 0;
 
+// Canonical account-connection state for the account connection card. It is
+// derived from the outcome of a real FlutterFlow projects fetch — never from
+// the presence of stored bytes alone and never from the placeholder token
+// "set". 'connected' is only reachable from an actual listProjects response
+// that returned at least one project.
+// kind: 'not-configured' | 'validating' | 'connected' | 'no-projects'
+//       | 'unauthorized' | 'network-error'
+let ffConnectionState = "not-configured";
+
 async function initializeApiKeys() {
   // Remove an exportable key left by an earlier version even if its encrypted
   // credentials were already cleared.
@@ -959,6 +969,16 @@ async function initializeApiKeys() {
   flutterflowProjectId = await getApiKey("flutterflow_project_id");
   updateApiKeyStatusIndicators();
   updateDeployButtonVisibility();
+
+  // If a FlutterFlow key is stored, confirm the real connection even before
+  // the settings modal is opened, so the account connection card is truthful
+  // on load. Non-blocking; runs once per initialize.
+  if (flutterflowApiKey) {
+    validateFlutterFlowConnection();
+  } else {
+    ffConnectionState = "not-configured";
+    renderApiKeyConnection();
+  }
 }
 
 // --- API KEY UI FUNCTIONS ---
@@ -1265,6 +1285,139 @@ function validateFlutterFlowProjectId(projectId) {
   return /^[a-zA-Z0-9-]+$/.test(projectId);
 }
 
+/**
+ * Renders the account connection card from the canonical connection state.
+ * Not-config/validating/connected/no-projects/unauthorized/network-error are
+ * derived from ffConnectionState, which is only ever set from a real
+ * listProjects outcome. No raw or masked API key is ever written into a status
+ * label here.
+ */
+function renderApiKeyConnection() {
+  const dot = document.getElementById("acct-ff-dot");
+  const status = document.getElementById("acct-ff-status");
+  const endpoint = document.getElementById("acct-ff-endpoint");
+  const project = document.getElementById("acct-ff-project");
+
+  // Endpoint and default project always mirror the stored configuration (the
+  // same value the deploy confirmation pre-selects).
+  if (endpoint) {
+    const ep = getFlutterFlowEndpoint();
+    endpoint.textContent = ep && ep.includes("staging") ? "Staging" : "Production";
+  }
+  if (project) {
+    project.textContent = flutterflowProjectId || "—";
+  }
+  if (!status) return;
+
+  let label;
+  let tone;
+  if (!hasStoredKey("flutterflow")) {
+    label = "Not connected — add your FlutterFlow API key";
+    tone = "";
+  } else {
+    switch (ffConnectionState) {
+      case "connected":
+        label = "Connected to FlutterFlow";
+        tone = "ok";
+        break;
+      case "no-projects":
+        label = "Key accepted — no projects found";
+        tone = "warn";
+        break;
+      case "unauthorized":
+        label = "API key rejected (401/403) — re-enter your key";
+        tone = "bad";
+        break;
+      case "network-error":
+        label = "Could not reach FlutterFlow — check your network";
+        tone = "bad";
+        break;
+      case "validating":
+      default:
+        label = "Checking connection…";
+        tone = "warn";
+        break;
+    }
+  }
+  status.textContent = label;
+  if (dot) dot.className = `acct-dot${tone ? " " + tone : ""}`;
+}
+
+/**
+ * Refreshes the canonical connection state by calling the real FlutterFlow
+ * projects endpoint with the stored key. A returned empty list and a 401/403
+ * are distinct outcomes; both differ from a network failure. Used at startup
+ * and after saving/clearing so the account connection card is truthful.
+ * @returns {Promise<Array|null>} the loaded projects, or null on error.
+ */
+async function validateFlutterFlowConnection() {
+  const apiKey = await getApiKey("flutterflow");
+  if (!apiKey || !hasStoredKey("flutterflow")) {
+    ffConnectionState = "not-configured";
+    renderApiKeyConnection();
+    return null;
+  }
+
+  ffConnectionState = "validating";
+  renderApiKeyConnection();
+
+  try {
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
+    const projects = await client.listProjects();
+    ffConnectionState = projects && projects.length > 0
+      ? "connected"
+      : "no-projects";
+    renderApiKeyConnection();
+    return projects;
+  } catch (error) {
+    const msg = String((error && error.message) || "");
+    ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
+      ? "unauthorized"
+      : "network-error";
+    renderApiKeyConnection();
+    return null;
+  }
+}
+
+/**
+ * Clears the currently selected FlutterFlow project so a stale selection
+ * (belonging to a different endpoint, or a removed key) is never reused as a
+ * deploy/sync default. Storage, the in-memory value and the dropdown mirror
+ * each other: the account connection card and the deploy confirmation read the
+ * same stored value, so invalidating it keeps them consistent.
+ */
+function clearStoredProjectSelection() {
+  flutterflowProjectId = "";
+  localStorage.removeItem(STORAGE_KEY_PREFIX + "flutterflow_project_id");
+  sessionStorage.removeItem(SESSION_STORAGE_KEY_PREFIX + "flutterflow_project_id");
+}
+
+/**
+ * Endpoint changes serve a different project set, so the previously selected
+ * project is no longer a trustworthy target. Invalidate the stale selection and
+ * re-fetch the project list for the new endpoint when a key is configured.
+ */
+function invalidateStaleProjectSelection() {
+  clearStoredProjectSelection();
+  const select = document.getElementById("flutterflow-projects-select");
+  if (select) {
+    select.innerHTML = '<option value="">Enter your API key to load projects</option>';
+    select.value = "";
+  }
+  if (hasStoredKey("flutterflow")) {
+    ffConnectionState = "validating";
+    fetchProjects(flutterflowApiKey);
+  } else {
+    ffConnectionState = "not-configured";
+  }
+  renderApiKeyConnection();
+}
+
 function updateInputValidationState(inputId, isValid) {
   const input = document.getElementById(inputId);
   if (!input) return;
@@ -1334,15 +1487,32 @@ async function fetchProjects(apiKey) {
   select.innerHTML = '<option value="">Loading projects...</option>';
   if (errorElement) errorElement.classList.add("hidden");
 
+  // A real request is in flight; the account connection card shows validating
+  // until the outcome is known (never "connected" from storage alone).
+  if (hasStoredKey("flutterflow") || apiKey) {
+    ffConnectionState = "validating";
+  }
+  renderApiKeyConnection();
+
   try {
     // Create temporary client instance (no project ID needed)
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
 
     if (!projects || projects.length === 0) {
+      ffConnectionState = "no-projects";
+      renderApiKeyConnection();
       select.innerHTML = '<option value="">No projects found</option>';
       return;
     }
+
+    ffConnectionState = "connected";
+    renderApiKeyConnection();
 
     // Populate dropdown
     select.innerHTML = '<option value="">Select a project...</option>';
@@ -1360,6 +1530,11 @@ async function fetchProjects(apiKey) {
     }
   } catch (error) {
     console.error("Failed to fetch projects:", error);
+    const msg = String((error && error.message) || "");
+    ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
+      ? "unauthorized"
+      : "network-error";
+    renderApiKeyConnection();
     select.innerHTML = '<option value="">Error loading projects</option>';
     if (errorElement) {
       errorElement.textContent = `Failed to load projects: ${error.message}`;
@@ -5330,30 +5505,8 @@ function renderAccountOverview() {
     else meterTrack.setAttribute("aria-label", `${count} of ${limit} generations used`);
   }
 
-  // --- FlutterFlow connection (real stored credential state) ---
-  const connKeyConfigured = hasStoredKey("flutterflow");
-  const connProjectConfigured = hasStoredKey("flutterflow_project_id");
-  const ffDot = document.getElementById("acct-ff-dot");
-  const ffStatus = document.getElementById("acct-ff-status");
-  const ffEndpoint = document.getElementById("acct-ff-endpoint");
-  const ffProject = document.getElementById("acct-ff-project");
-  if (ffStatus) {
-    if (connKeyConfigured && connProjectConfigured) {
-      ffStatus.textContent = "Connected to FlutterFlow";
-      if (ffDot) { ffDot.className = "acct-dot ok"; }
-    } else if (connKeyConfigured) {
-      ffStatus.textContent = "API key set — pick a project";
-      if (ffDot) { ffDot.className = "acct-dot warn"; }
-    } else {
-      ffStatus.textContent = "Not connected — add your FlutterFlow API key";
-      if (ffDot) { ffDot.className = "acct-dot"; }
-    }
-  }
-  if (ffEndpoint) {
-    const endpoint = getFlutterFlowEndpoint();
-    ffEndpoint.textContent = endpoint && endpoint.includes("staging") ? "Staging" : "Production";
-  }
-  if (ffProject) ffProject.textContent = flutterflowProjectId || "—";
+  // --- FlutterFlow connection (real response-driven state) ---
+  renderApiKeyConnection();
 }
 
 function updateUsageDisplay() {
@@ -5961,7 +6114,12 @@ async function populateConfirmProjectSelect() {
   select.disabled = false;
   select.innerHTML = '<option value="">Loading projects…</option>';
   try {
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
     if (!isCurrent()) return;
 
@@ -6678,6 +6836,7 @@ window.openModelSelector = openModelSelector;
 window.handlePromptImageSelect = handlePromptImageSelect;
 window.removePromptImage = removePromptImage;
 window.saveApiKeys = saveApiKeys;
+window.validateFlutterFlowConnection = validateFlutterFlowConnection;
 window.clearAllApiKeys = clearAllApiKeys;
 window.toggleKeyVisibility = toggleKeyVisibility;
 window.handleWelcomeVideoEnd = handleWelcomeVideoEnd;

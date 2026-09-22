@@ -338,6 +338,19 @@ export const sampleProjectList = () =>
     }),
   });
 
+// Deliberately different from sampleProjectList so a test asserts which host
+// actually answered. Used to prove the connection check and project fetch
+// honour the configured staging endpoint rather than the production default.
+export const stagingProjectList = () =>
+  ok({
+    success: true,
+    value: JSON.stringify({
+      entries: [
+        { id: "proj-stg-789", project: { name: "Staging Project Gamma" } },
+      ],
+    }),
+  });
+
 export const projectExport = () =>
   ok({
     success: true,
