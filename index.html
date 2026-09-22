@@ -2431,12 +2431,9 @@
       .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
       .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.01em; }
       .topnav {
-        display: none;
+        display: flex;
         align-items: center;
         gap: 6px;
-      }
-      @media (min-width: 680px) {
-        .topnav { display: flex; }
       }
       .nav-link {
         padding: 8px 14px;
@@ -2497,6 +2494,21 @@
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
+      }
+      /* Below the inline-nav breakpoint the nav wraps to its own topbar row
+         with touch-sized targets, so every surface stays reachable instead
+         of being hidden. */
+      @media (max-width: 679px) {
+        :root { --topbar-h: 100px; }
+        .topbar { flex-wrap: wrap; align-content: center; row-gap: 2px; padding: 10px 12px; }
+        .topnav { order: 3; width: 100%; gap: 4px; }
+        .topnav .nav-link {
+          flex: 1 1 0;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
       }
 
       .viewport {
@@ -2867,7 +2879,7 @@
   </header>
 
   <main class="viewport" id="viewport">
-    <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" data-view="home">
+    <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" tabindex="-1" data-view="home">
       <div class="hero" id="hero">
         <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
         <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
@@ -3101,7 +3113,7 @@
       </div>
     </section>
 
-    <section id="account-view" class="view view-account" aria-label="Account" role="region" data-view="account" hidden>
+    <section id="account-view" class="view view-account" aria-label="Account" role="region" tabindex="-1" data-view="account" hidden>
       <div class="surface-card account-card">
         <h2>Account</h2>
         <div id="auth-signedout" style="margin-top: 8px;">
@@ -3131,7 +3143,7 @@
       </div>
     </section>
 
-    <section id="plans-view" class="view view-plans" aria-label="Plans" role="region" data-view="plans" hidden>
+    <section id="plans-view" class="view view-plans" aria-label="Plans" role="region" tabindex="-1" data-view="plans" hidden>
       <div class="surface-card plans-card">
         <h2>Choose a plan</h2>
         <p style="color:var(--muted); font-size:14px; margin-bottom: 22px;">Unlock more generations and advanced features.</p>
