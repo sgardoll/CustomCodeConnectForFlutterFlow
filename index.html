@@ -192,11 +192,9 @@
       .sb-advanced-sub { margin-top: 16px; }
       .sb-advanced-sub:first-of-type { margin-top: 18px; }
 
+      /* Active views handle mobile layout; old sidebar/main shell rules removed. */
       @media (max-width: 768px) {
-        body { overflow-y: auto; height: auto; min-height: 100dvh; }
-        .app-shell { flex-direction: column; }
-        .sidebar { width: 100%; max-width: 100%; height: auto; min-height: 100dvh; overflow-y: visible; border-right: none; }
-        .main-content { display: none; }
+        body { height: auto; min-height: 100dvh; }
       }
 
       textarea {
@@ -2376,249 +2374,559 @@
         .pm-header { padding: 24px 20px 0; }
         .pm-cards { padding: 0 16px; }
       }
+
+      /* ===== Shell / hero overrides (STU-375) ===== */
+      :root {
+        --topbar-h: 64px;
+      }
+      @media (min-width: 921px) {
+        :root { --topbar-h: 88px; }
+      }
+
+      html, body {
+        height: auto;
+        min-height: 100vh;
+      }
+      body {
+        overflow-x: hidden;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .topbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--topbar-h);
+        padding: 0 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        background: var(--bg);
+        border-bottom: 1px solid var(--border);
+        z-index: 100;
+      }
+      @media (min-width: 921px) {
+        .topbar { padding: 0 40px; border-bottom: 0; }
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: var(--fg);
+        text-decoration: none;
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        flex-shrink: 0;
+      }
+      .brand-mark {
+        width: 32px;
+        height: 32px;
+        color: var(--fg);
+        flex-shrink: 0;
+      }
+      .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
+      .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.01em; }
+      .topnav {
+        display: none;
+        align-items: center;
+        gap: 6px;
+      }
+      @media (min-width: 680px) {
+        .topnav { display: flex; }
+      }
+      .nav-link {
+        padding: 8px 14px;
+        border-radius: var(--radius-nav);
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 500;
+        text-decoration: none;
+        transition: color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
+      }
+      .nav-link:hover, .nav-link[aria-current="page"] {
+        color: var(--fg);
+        background: var(--fill-hover);
+      }
+      .topbar-account {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .topbar-credits {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 32px;
+        padding: 0 10px 0 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-translucent);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .topbar-credits svg { width: 13px; height: 13px; color: var(--accent); }
+      .topbar-plan {
+        height: 22px;
+        padding: 0 8px;
+        border-radius: 6px;
+        display: inline-flex;
+        align-items: center;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+        border: 1px solid var(--border);
+        background: var(--surface-translucent);
+      }
+      .topbar-avatar {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: var(--avatar);
+        border: 1px solid var(--border);
+        color: var(--fg);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .viewport {
+        position: relative;
+        top: var(--topbar-h);
+        min-height: calc(100vh - var(--topbar-h));
+      }
+
+      .view {
+        display: none;
+        opacity: 0;
+        transform: translateY(10px);
+        transition: opacity var(--t-reveal) var(--ease), transform var(--t-reveal) var(--ease);
+      }
+      .view.is-active {
+        display: flex;
+        opacity: 1;
+        transform: none;
+      }
+
+      /* Home view */
+      .view-home {
+        flex-direction: column;
+        min-height: calc(100vh - var(--topbar-h));
+      }
+      .hero {
+        position: relative;
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        padding: 28px 20px 36px;
+        flex: 1;
+        justify-content: center;
+      }
+      .headline {
+        font-family: var(--font-display);
+        font-size: clamp(40px, 6vw, 80px);
+        line-height: 1.05;
+        font-weight: 560;
+        letter-spacing: -0.035em;
+        color: var(--fg);
+      }
+      .headline em { font-style: normal; color: var(--accent); }
+      .headline .headline-sub { display: block; margin-top: 2px; font-size: inherit; font-weight: inherit; letter-spacing: inherit; line-height: inherit; }
+      .sub {
+        margin-top: 22px;
+        font-size: clamp(15px, 1.6vw, 20px);
+        line-height: 1.45;
+        font-weight: 400;
+        color: var(--muted);
+        max-width: 680px;
+      }
+
+      .composer {
+        position: relative;
+        margin-top: 34px;
+        width: min(760px, calc(100% - 24px));
+        height: 160px;
+        background: var(--surface);
+        border-radius: 20px;
+        border: 2px solid oklch(from var(--accent) l c h / 0.85);
+        box-shadow: var(--shadow-composer);
+        text-align: left;
+      }
+      .composer .field {
+        position: absolute;
+        left: 20px;
+        right: 64px;
+        top: 18px;
+        height: 72px;
+        padding: 0;
+        margin: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        resize: none;
+        font: inherit;
+        font-size: 17px;
+        line-height: 1.5;
+        color: var(--fg);
+        font-weight: 500;
+        letter-spacing: -0.005em;
+        caret-color: var(--accent);
+        overflow: hidden;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        z-index: 1;
+      }
+      .composer .field::placeholder { color: var(--muted-2); }
+      .composer .ghost {
+        position: absolute;
+        left: 20px;
+        right: 64px;
+        top: 18px;
+        height: 72px;
+        overflow: hidden;
+        font: inherit;
+        font-size: 17px;
+        line-height: 1.5;
+        font-weight: 500;
+        letter-spacing: -0.005em;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        pointer-events: none;
+        color: transparent;
+      }
+      .composer .ghost .typed { color: transparent; }
+      .composer .ghost .suggest {
+        color: oklch(80% 0.012 260);
+        opacity: 0;
+        transition: opacity var(--t-fast) var(--ease);
+      }
+      .composer.has-suggest .ghost .suggest { opacity: 1; }
+      .composer .tab-hint {
+        position: absolute;
+        right: 64px;
+        bottom: 22px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 6px;
+        border: 0;
+        background: transparent;
+        border-radius: 6px;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        color: var(--muted);
+        opacity: 0;
+        transform: translateY(2px);
+        transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+        pointer-events: none;
+      }
+      .composer .tab-hint kbd {
+        font: inherit;
+        padding: 1px 6px;
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--fg);
+      }
+      .composer.has-suggest .tab-hint { opacity: 1; transform: none; pointer-events: auto; }
+      .composer .tab-hint[hidden] { display: none; }
+      .composer .tab-hint:hover { color: var(--fg); background: oklch(96% 0.01 260); }
+      .composer .tab-hint:hover kbd { border-color: oklch(80% 0.02 260); }
+      .composer:focus-within {
+        border-color: var(--accent);
+        box-shadow:
+          0 0 0 3px var(--accent-soft),
+          0 1px 2px oklch(20% 0.03 260 / 0.06),
+          0 0 48px -8px oklch(from var(--accent) l c h / 0.2),
+          0 20px 52px -20px oklch(from var(--accent) l c h / 0.22);
+      }
+      .composer .tools {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        display: flex;
+        gap: 4px;
+      }
+      .icon-btn {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        border: 0;
+        background: transparent;
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .icon-btn svg { width: 18px; height: 18px; }
+      .icon-btn:hover { background: oklch(95% 0.01 260); color: var(--fg); }
+      .send {
+        position: absolute;
+        right: 12px;
+        bottom: 12px;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        border: 0;
+        background: var(--fg);
+        color: var(--surface);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        box-shadow: 0 2px 6px oklch(20% 0.03 260 / 0.25);
+      }
+      .send svg { width: 18px; height: 18px; }
+      .send .send-spin { display: none; }
+      .send:hover:not(:disabled) { background: oklch(from var(--fg) calc(l + 0.08) c h); }
+      .send:disabled { background: var(--disabled-bg); color: var(--disabled-fg); box-shadow: none; cursor: not-allowed; }
+      .send.is-busy .send-arrow { display: none; }
+      .send.is-busy .send-spin { display: block; animation: spin 900ms linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .chips {
+        margin-top: 18px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        max-width: min(760px, calc(100% - 24px));
+      }
+      .chip {
+        height: 32px;
+        padding: 0 14px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface-translucent);
+        color: var(--muted);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .chip:hover { color: var(--fg); border-color: var(--border-strong); background: var(--surface); }
+      .chip.is-active { color: var(--fg); border-color: var(--fg); background: var(--surface); }
+
+      .hero-settings {
+        margin-top: 22px;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        width: min(760px, calc(100% - 24px));
+      }
+      .hero-settings select {
+        max-width: 220px;
+        padding: 10px 36px 10px 14px;
+      }
+      .settings-link {
+        font-size: 13px;
+        color: var(--muted);
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .settings-link:hover { color: var(--fg); }
+
+      .generation-stage {
+        display: none;
+        position: fixed;
+        inset: var(--topbar-h) 0 0;
+        background: var(--bg);
+        z-index: 40;
+        opacity: 0;
+        transition: opacity var(--t-reveal) var(--ease);
+      }
+      .generation-stage.is-active {
+        display: flex;
+        opacity: 1;
+      }
+      body.results-fullscreen .generation-stage {
+        display: flex;
+        opacity: 1;
+      }
+      body.results-fullscreen .hero { display: none; }
+      .generation-stage .main-stage {
+        position: relative;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      /* Account / Plans surfaces */
+      .view-account, .view-plans {
+        padding: 28px 20px 48px;
+        justify-content: flex-start;
+      }
+      .surface-card {
+        width: min(720px, 100%);
+        margin: 0 auto;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 28px;
+        box-shadow: var(--shadow-md);
+      }
+      .surface-card h2 {
+        font-family: var(--font-display);
+        font-size: var(--fs-h2);
+        font-weight: var(--fw-bold);
+        letter-spacing: var(--ls-heading);
+        margin-bottom: 20px;
+      }
+      .account-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .account-row .muted { color: var(--muted); font-size: 14px; }
+      .account-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 24px; }
+      .account-actions button { flex: 1 1 180px; }
+      .inline-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      /* Mobile compact */
+      @media (max-width: 920px) {
+        .hero { padding: 24px 16px 28px; }
+        .headline { font-size: clamp(34px, 10vw, 56px); line-height: 1.08; }
+        .composer {
+          width: 100%;
+          max-width: 520px;
+          height: 148px;
+          border-radius: 16px;
+        }
+        .composer .field, .composer .ghost { left: 16px; right: 56px; top: 14px; height: 68px; font-size: 16px; }
+        .composer .tools { left: 8px; bottom: 8px; }
+        .icon-btn { width: 44px; height: 44px; }
+        .send { right: 8px; bottom: 8px; width: 44px; height: 44px; }
+        .chips { max-width: 520px; }
+        .chip { height: 36px; }
+      }
+      @media (max-width: 640px) {
+        .surface-card { padding: 20px; border-radius: var(--radius-md); }
+        .topbar-credits { display: none; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .view, .generation-stage { transition: none; }
+      }
     </style>
   </head>
   <body>
-    <div class="app-shell">
+  <header class="topbar" role="banner">
+    <a class="brand" href="#home" aria-label="Custom Code Connect — Home">
+      <svg class="brand-mark" viewBox="0 0 44 44" fill="none" aria-hidden="true" focusable="false">
+        <rect width="44" height="44" rx="10" fill="currentColor"/>
+        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)"/>
+        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)" transform="rotate(180 22 22)"/>
+      </svg>
+      <span class="wordmark"><span>FlutterFlow</span>Custom Code Connect</span>
+    </a>
 
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <div class="sidebar-brand-super">FlutterFlow</div>
-          <div class="sidebar-brand-main">
-            <div class="sidebar-brand-icon">
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5"/>
+    <nav class="topnav" aria-label="Main">
+      <a href="#home" class="nav-link" data-view="home" aria-current="page">Home</a>
+      <a href="#account" class="nav-link" data-view="account">Account</a>
+      <a href="#plans" class="nav-link" data-view="plans">Plans</a>
+    </nav>
+
+    <div class="topbar-account">
+      <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Credits remaining" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/>
+        </svg>
+        <span id="topbar-credits-count">—</span>
+      </button>
+      <span class="topbar-plan" id="topbar-plan" aria-label="Current plan">Free</span>
+      <button class="topbar-avatar" id="topbar-avatar" type="button" aria-label="Open account" onclick="switchView('account')">?</button>
+    </div>
+  </header>
+
+  <main class="viewport" id="viewport">
+    <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" data-view="home">
+      <div class="hero" id="hero">
+        <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
+        <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
+
+        <div class="composer" id="composer">
+          <label class="sr-only" for="pipeline-input">Describe the widget or action you need</label>
+          <div class="ghost" aria-hidden="true"><span class="typed"></span><span class="suggest"></span></div>
+          <textarea id="pipeline-input" class="field" rows="3" spellcheck="false" aria-describedby="suggest-status" placeholder="Describe the widget or action you need">A circular progress gauge with a gradient stroke</textarea>
+          <span id="suggest-status" class="sr-only" aria-live="polite"></span>
+          <button class="tab-hint" type="button" id="tab-hint" tabindex="-1" hidden=""><kbd aria-hidden="true">Tab</kbd><span class="tab-hint-label">to accept</span></button>
+          <div class="tools">
+            <button class="icon-btn" type="button" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
               </svg>
-            </div>
-            <div class="sidebar-brand-text">Custom Code <span>Connect</span></div>
-          </div>
-          <button
-            onclick="openWalkthroughModal()"
-            title="Help"
-            class="absolute top-1/2 right-4 -translate-y-1/2 w-7 h-7 rounded-full border border-gray-200 bg-white flex items-center justify-center cursor-pointer text-gray-500 hover:text-gray-700"
-          >
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-          </button>
-        </div>
-
-        <div class="sidebar-scroll">
-
-          <!-- 01. Prompt FlutterFlow Custom Code -->
-          <div class="sb-section">
-            <div class="sb-section-head">
-              <span class="sb-section-title">Prompt FlutterFlow Custom Code</span>
-              <span class="sb-section-badge">01</span>
-            </div>
-            <textarea
-              id="pipeline-input"
-              rows="6"
-              placeholder="Describe your custom widget or action...&#10;&#10;e.g. A circular progress gauge with gradient stroke and animated percentage text."
-            ></textarea>
-            <div id="prompt-image-upload" class="hidden">
-              <div id="prompt-image-thumbnails" class="flex flex-wrap gap-2 mt-2"></div>
-              <button
-                type="button"
-                id="btn-add-images"
-                class="image-upload-btn mt-2"
-                onclick="document.getElementById('prompt-image-input').click()"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
-                </svg>
-                <span id="prompt-image-btn-label">Add images</span>
-              </button>
-              <input
-                type="file"
-                id="prompt-image-input"
-                accept="image/png,image/jpeg,image/webp,image/gif"
-                multiple
-                class="hidden"
-                onchange="handlePromptImageSelect(event)"
-              />
-            </div>
-          </div>
-
-          <!-- Advanced Settings (collapsible) -->
-          <details id="advanced-settings" class="sb-section sb-advanced">
-            <summary class="sb-advanced-summary">
-              <span class="sb-section-title">Advanced</span>
-              <svg class="advanced-chevron w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </button>
+            <button class="icon-btn" type="button" aria-label="Generation settings" onclick="openApiKeysModal()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>
               </svg>
-            </summary>
-
-            <!-- API Keys subsection -->
-            <div class="sb-advanced-sub">
-              <span class="sb-sublabel">API Keys</span>
-              <button class="settings-btn" onclick="openApiKeysModal()">
-                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
-                </svg>
-                <span>Configure Keys</span>
-                <div id="api-keys-status" class="ml-auto flex gap-1">
-                  <div class="key-status-dot missing" title="FlutterFlow"></div>
-                </div>
-              </button>
-            </div>
-
-            <!-- Code Generation Model subsection -->
-            <div class="sb-advanced-sub">
-              <span class="sb-sublabel">Code Generation Model</span>
-              <div id="code-options-content">
-                <select id="code-generator-model">
-                  <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
-                  <option value="anthropic/claude-opus-5">Claude Opus 5</option>
-                  <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
-                  <option value="z-ai/glm-5.2">GLM 5.2</option>
-                  <option value="moonshotai/kimi-k3">Kimi K3</option>
-                  <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
-                  <option value="openrouter/free">OpenRouter: Free Models</option>
-                  <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
-                </select>
-              </div>
-            </div>
-          </details>
-
-          <!-- 02. Workflow -->
-          <div class="sb-section" style="border-bottom:none; padding-top:16px; padding-bottom:16px;">
-            <div class="sb-section-head" style="margin-bottom:10px;">
-              <span class="sb-section-title">Workflow</span>
-              <span class="sb-section-badge">02</span>
-            </div>
-
-            <div id="step1-item" class="workflow-item" onclick="selectWorkflowStep(1)">
-              <div class="flex flex-col gap-0.5 workflow-icon">
-                <div class="flex items-center gap-2.5">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                  </svg>
-                  <span class="workflow-label">Prompt Architect</span>
-                </div>
-              </div>
-              <div id="step1-status" class="status-icon">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-              </div>
-            </div>
-
-            <div id="step2-item" class="workflow-item" onclick="selectWorkflowStep(2)">
-              <div class="flex flex-col gap-0.5 workflow-icon">
-                <div class="flex items-center gap-2.5">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
-                  </svg>
-                  <span class="workflow-label">Code Generator</span>
-                </div>
-              </div>
-              <div id="step2-status" class="status-icon">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-              </div>
-            </div>
-
-            <div id="step3-item" class="workflow-item" onclick="selectWorkflowStep(3)">
-              <div class="flex flex-col gap-0.5 workflow-icon">
-                <div class="flex items-center gap-2.5">
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                  </svg>
-                  <span class="workflow-label">Code Review</span>
-                </div>
-              </div>
-              <div id="step3-status" class="status-icon">
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                </svg>
-              </div>
-            </div>
-          </div>
-
-          <a href="https://github.com/sgardoll/CustomCodeConnectForFlutterFlow/issues/new?template=code_feedback.md" target="_blank" rel="noopener noreferrer" class="feedback-link">
-            <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6H9.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9"/>
-            </svg>
-            Report generated code
-          </a>
-        </div>
-
-        <div class="sidebar-footer">
-          <button id="btn-run-pipeline" class="btn-action btn-run" onclick="runThinkingPipeline()">
-            <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-            Run Pipeline
-          </button>
-          <div id="auth-signedout" style="margin-top: 10px;">
-            <button class="flex items-center justify-center gap-2 text-xs text-gray-400 hover:text-gray-600 transition-colors w-full" style="background:none; border:none; cursor:pointer; font-family:inherit; padding:0;" id="auth-signin-btn" onclick="openSignInModal()">
-              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-              </svg>
-              Sign in for usage tracking
             </button>
           </div>
-          <div id="auth-guest-usage" style="margin-top:8px;">
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-              <span style="font-size:11px; color:#8a8f9c;"><span id="guest-usage-text">0 / 2 generations used</span></span>
-              <span style="font-size:11px; font-weight:500; color:#64748b;">Free</span>
-            </div>
-            <div style="display:flex; gap:6px;">
-              <button onclick="openSignInModal()" style="flex:1; text-align:center; font-size:11px; background:none; color:#64748b; padding:5px 12px; border-radius:6px; border:1px solid #e2e8f0; cursor:pointer; font-family:inherit; font-weight:500; transition:all 0.15s;">Sign In</button>
-              <button onclick="openPricingModal()" style="flex:1; text-align:center; font-size:11px; background:#3b82f6; color:white; padding:5px 12px; border-radius:6px; border:none; cursor:pointer; font-family:inherit; font-weight:500;">Upgrade</button>
-            </div>
-          </div>
-          <div id="auth-signedin" class="hidden" style="margin-top: 10px;">
-            <div style="display:flex; align-items:center; justify-content:space-between;">
-              <span id="auth-user-email" style="font-size:11px; color:#8a8f9c; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"></span>
-              <button onclick="handleSignOut()" style="font-size:11px; color:#8a8f9c; background:none; border:none; cursor:pointer; font-family:inherit; white-space:nowrap; padding:0;">Sign out</button>
-            </div>
-            <div style="display:flex; align-items:center; justify-content:space-between; margin-top:4px;">
-              <div style="display:flex; align-items:center; gap:8px;">
-                <span id="subscription-tier-badge">Free</span>
-                <span id="usage-counter" style="font-size:11px; color:#8a8f9c;">0 / 50 runs this month</span>
-              </div>
-              <button id="manage-billing-btn" onclick="openCustomerPortal()" class="hidden" style="font-size:11px; color:#3b82f6; background:none; border:none; cursor:pointer; font-family:inherit; padding:0;">Manage</button>
-            </div>
-            <div id="upgrade-prompt" class="hidden" style="margin-top:6px;">
-              <button onclick="openPricingModal()" style="width:100%; text-align:center; font-size:11px; background:#3b82f6; color:white; padding:6px 12px; border-radius:6px; border:none; cursor:pointer; font-family:inherit; font-weight:500;">Upgrade plan</button>
-            </div>
-          </div>
+          <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
+          <button class="send" id="hero-send" type="button" aria-label="Generate" onclick="runThinkingPipeline()">
+            <svg class="send-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19V5M5 12l7-7 7 7"></path>
+            </svg>
+            <svg class="send-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 3a9 9 0 0 1 9 9"></path>
+            </svg>
+          </button>
         </div>
-      </aside>
 
-      <main class="main-content">
-        <div class="w-full h-full overflow-hidden px-4" style="display:flex; flex-direction:column;">
-          <div style="display:flex; flex-direction:column; align-items:center; height:100%; min-height:0;">
-            <div style="display:flex; flex-direction:column; width:100%; max-width:820px; height:100%; min-height:0; padding:24px 0 20px;">
-              <div class="text-center" style="flex-shrink:0; margin-bottom:16px;">
-                <h1 style="font-family: 'Delight', 'Outfit', sans-serif; font-size: 32px; font-weight: 600; color: var(--fg); letter-spacing: -0.03em; line-height: 1.15; margin-bottom: 8px;">FlutterFlow Custom Code, Solved.</h1>
-                <h2 style="font-family: 'Delight', 'DM Sans', sans-serif; font-size: 15px; font-weight: 400; color: var(--muted); line-height: 1.55; max-width: 560px; margin: 0 auto;">We speak Dart with a FlutterFlow accent.<br/>Custom widgets and actions tailored to your project, fully reviewed and deployed in one click</h2>
-              </div>
-              <div id="preview-frame-container" class="preview-frame-wrapper w-full">
-              <div class="preview-frame">
-                <video id="welcome-video-player" autoplay muted loop playsinline>
-                  <source src="/CCC.mp4" type="video/mp4" />
-                </video>
-              </div>
-            </div>
+        <div class="chips reveal" id="example-chips">
+          <button class="chip" type="button" data-prompt="An animated 5-star rating bar with a fill-on-drag gesture">Animated rating bar</button>
+          <button class="chip" type="button" data-prompt="Implement the 'pdf' pub.dev package">Implement the 'pdf' pub.dev package</button>
+          <button class="chip" type="button" data-prompt="A signature pad that exports a transparent PNG">Signature pad</button>
+        </div>
 
-            <div id="tutorials-section" style="flex-shrink:0; width:100%; margin-top:16px; opacity:0.9; position:relative; z-index:0;" class="transition-opacity hover:opacity-100">
-              <h3 class="text-xs font-bold text-gray-400 tracking-widest mb-3 uppercase text-center" style="font-family: 'Delight', 'Outfit', sans-serif;">Watch the Tutorials</h3>
-              <div class="grid grid-cols-2 gap-4">
-                <div class="aspect-video rounded-xl overflow-hidden shadow-md border border-[#e2e8f0] bg-white transform transition duration-300 hover:-translate-y-1 hover:shadow-xl">
-                  <iframe width="100%" height="100%" src="https://www.youtube.com/embed/aFTUqLSkAGY" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-                </div>
-                <div class="aspect-video rounded-xl overflow-hidden shadow-md border border-[#e2e8f0] bg-white transform transition duration-300 hover:-translate-y-1 hover:shadow-xl">
-                  <iframe width="100%" height="100%" src="https://www.youtube.com/embed/zRjexvW58IQ?start=4" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-                </div>
-              </div>
-            </div>
+        <div class="hero-settings reveal" id="hero-settings">
+          <div id="code-options-content" style="display:contents">
+            <label class="sr-only" for="code-generator-model">Code generation model</label>
+            <select id="code-generator-model" onchange="updateModelInfo(this.value)">
+              <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
+              <option value="anthropic/claude-opus-5">Claude Opus 5</option>
+              <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="z-ai/glm-5.2">GLM 5.2</option>
+              <option value="moonshotai/kimi-k3">Kimi K3</option>
+              <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
+              <option value="openrouter/free">OpenRouter: Free Models</option>
+              <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
+            </select>
           </div>
+          <button class="settings-link" type="button" onclick="openApiKeysModal()">Configure API Keys</button>
         </div>
       </div>
 
-      <div class="main-stage" id="main-stage-container">
+      <div class="generation-stage" id="generation-stage" aria-label="Generation results" inert hidden>
+<div class="main-stage" id="main-stage-container">
           <!-- Ready / Paywall states -->
           <div class="main-stage-body" id="main-stage" style="flex:1;display:flex;flex-direction:column;">
 
@@ -2789,10 +3097,110 @@
 
           </div>
         </div>
-      </main>
+      
+      </div>
+    </section>
+
+    <section id="account-view" class="view view-account" aria-label="Account" role="region" data-view="account" hidden>
+      <div class="surface-card account-card">
+        <h2>Account</h2>
+        <div id="auth-signedout" style="margin-top: 8px;">
+          <p style="color:var(--muted); margin-bottom: 18px; font-size: 14px;">Sign in to track usage and manage your subscription.</p>
+          <button class="btn-action btn-run" onclick="openSignInModal()">Sign In</button>
+        </div>
+        <div id="auth-signedin" class="hidden" style="margin-top: 8px;">
+          <div class="account-row"><span class="muted">Email</span><span id="auth-user-email">—</span></div>
+          <div class="account-row"><span class="muted">Plan</span><span id="subscription-tier-badge" class="inline-badge">Free</span></div>
+          <div class="account-row"><span class="muted">Usage</span><span id="usage-counter">0 / 2 runs this month</span></div>
+          <div class="account-actions">
+            <button class="btn-action btn-run" onclick="openApiKeysModal()">Configure API Keys</button>
+            <button class="btn-action btn-deploy" id="manage-billing-btn" onclick="openCustomerPortal()">Manage Subscription</button>
+            <button class="btn-action" style="background:transparent;color:var(--muted);border:1px solid var(--border);" onclick="handleSignOut()">Sign Out</button>
+          </div>
+        </div>
+        <div id="auth-guest-usage" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 12px;">
+            <span style="font-size:14px; color:var(--muted);"><span id="guest-usage-text">0 / 2 generations used</span></span>
+            <span style="font-size:12px; font-weight:500; color:var(--muted);">Free</span>
+          </div>
+          <div style="display:flex; gap: 12px; flex-wrap: wrap;">
+            <button class="btn-action" style="flex:1; min-width:120px; background:transparent; color:var(--fg); border:1px solid var(--border);" onclick="openSignInModal()">Sign In</button>
+            <button class="btn-action btn-deploy" style="flex:1; min-width:120px;" onclick="openPricingModal()">Upgrade</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="plans-view" class="view view-plans" aria-label="Plans" role="region" data-view="plans" hidden>
+      <div class="surface-card plans-card">
+        <h2>Choose a plan</h2>
+        <p style="color:var(--muted); font-size:14px; margin-bottom: 22px;">Unlock more generations and advanced features.</p>
+        <div class="pm-cards" style="padding:0;">
+          <div class="pm-card">
+            <div class="pm-card-name">Free</div>
+            <div class="pm-card-price">$0<span class="price-suffix">/mo</span></div>
+            <div class="pm-price-note">&nbsp;</div>
+            <ul class="pm-features">
+              <li>2 generations/month</li>
+              <li>Gemini model only</li>
+              <li>Code Review</li>
+            </ul>
+            <div id="plans-free-current" class="pm-current-plan-indicator">Current plan</div>
+          </div>
+
+          <div class="pm-card pm-card-pro">
+            <div class="pm-popular-badge">Popular</div>
+            <div class="pm-card-name">Pro</div>
+            <div class="pm-card-label">For FlutterFlow Professionals</div>
+            <div class="pm-card-price"><span id="plans-pro-price">A$11</span><span class="price-suffix">/mo</span></div>
+            <div id="plans-pro-price-note" class="pm-price-note">billed monthly</div>
+            <ul class="pm-features">
+              <li>50 generations/month</li>
+              <li>All models</li>
+              <li>Code Regeneration</li>
+            </ul>
+            <button id="plans-checkout-btn-professional" onclick="startCheckout('professional')" class="pm-subscribe-btn pm-subscribe-btn-pro">Subscribe</button>
+          </div>
+
+          <div class="pm-card pm-card-power">
+            <div class="pm-card-name">Power</div>
+            <div class="pm-card-label">For Agencies &amp; Enterprise</div>
+            <div class="pm-card-price"><span id="plans-power-price">A$49</span><span class="price-suffix">/mo</span></div>
+            <div id="plans-power-price-note" class="pm-price-note">billed monthly</div>
+            <ul class="pm-features">
+              <li>2000 generations/month</li>
+              <li>All models + early access</li>
+              <li>BYOK support</li>
+              <li>API &amp; MCP Access</li>
+              <li>Code Review</li>
+            </ul>
+            <button id="plans-checkout-btn-power" onclick="startCheckout('power')" class="pm-subscribe-btn pm-subscribe-btn-power">Subscribe</button>
+          </div>
+        </div>
+        <p class="pm-footer-note">Plans billed monthly. Prices vary by region.</p>
+      </div>
+    </section>
+  </main>
+
+    <!-- Credits Modal -->
+    <div id="credits-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeCreditsModal" onclick="closeCreditsModal(event)">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
+        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
+          <h2 class="font-semibold text-base text-gray-900">Credits</h2>
+          <button onclick="closeCreditsModal()" class="modal-close">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="p-6 space-y-4" style="overflow-y:auto; flex:1;">
+          <p class="text-sm text-gray-600">Your available balance for creating custom code.</p>
+          <div id="credits-balance" class="text-2xl font-semibold text-gray-900">—</div>
+          <p class="text-xs text-gray-400">Usage history and top-ups are managed through your subscription.</p>
+          <button class="btn-action btn-run" id="credits-manage-btn" style="width:100%;" onclick="openCustomerPortal(); closeCreditsModal();">Manage Subscription</button>
+        </div>
+      </div>
     </div>
 
-    <!-- API Keys Modal -->
+<!-- API Keys Modal -->
     <div id="api-keys-modal" class="modal-overlay" data-modal-close-handler="closeApiKeysModal" onclick="closeApiKeysModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="display:flex; flex-direction:column; max-height:calc(100vh - 64px);">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">

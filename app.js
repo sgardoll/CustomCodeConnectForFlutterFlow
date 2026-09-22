@@ -4241,7 +4241,7 @@ async function initializeAuth() {
   const magicToken = params.get('token')
 
   if (magicToken) {
-    window.history.replaceState({}, '', window.location.pathname)
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     try {
       const { email, sessionToken } = await verifyMagicLink(magicToken)
       saveSession(email, sessionToken)
@@ -4542,6 +4542,7 @@ function hidePaywallExhausted() {
 }
 
 function showPaywallExhausted(count, limit, options = {}) {
+  setGenerationStageVisible(true);
   const walkthroughModal = document.getElementById('walkthrough-modal')
   if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
 
@@ -4916,11 +4917,11 @@ function handleCheckoutRedirect() {
   const params = new URLSearchParams(window.location.search)
   const checkout = params.get('checkout')
   if (checkout === 'success') {
-    window.history.replaceState({}, '', window.location.pathname)
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     clearSubscriptionCache()
     showToast('Subscription active! Welcome aboard.', 'success')
   } else if (checkout === 'cancel') {
-    window.history.replaceState({}, '', window.location.pathname)
+    window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     showToast('Checkout cancelled.', 'info')
   }
 }
@@ -4956,6 +4957,7 @@ function updateSubscriptionUI() {
   updateModelSelectorGating()
   updatePromptImageAvailability()
   updateUsageDisplay()
+  updateShellUI()
 }
 
 function updatePricingModalState(tier) {
@@ -4985,15 +4987,23 @@ function updatePricingDisplay() {
   const currency = detectUserCurrency()
   const proEl = document.getElementById('pro-price')
   const powerEl = document.getElementById('power-price')
+  const plansProEl = document.getElementById('plans-pro-price')
+  const plansPowerEl = document.getElementById('plans-power-price')
   const proNote = document.getElementById('pro-price-note')
   const powerNote = document.getElementById('power-price-note')
+  const plansProNote = document.getElementById('plans-pro-price-note')
+  const plansPowerNote = document.getElementById('plans-power-price-note')
 
   if (proEl) proEl.textContent = formatPrice(BASE_PRICES_AUD.professional, currency)
   if (powerEl) powerEl.textContent = formatPrice(BASE_PRICES_AUD.power, currency)
+  if (plansProEl) plansProEl.textContent = formatPrice(BASE_PRICES_AUD.professional, currency)
+  if (plansPowerEl) plansPowerEl.textContent = formatPrice(BASE_PRICES_AUD.power, currency)
 
   const note = 'billed monthly'
   if (proNote) proNote.textContent = note
   if (powerNote) powerNote.textContent = note
+  if (plansProNote) plansProNote.textContent = note
+  if (plansPowerNote) plansPowerNote.textContent = note
 }
 
 function openPricingModal() {
@@ -5107,6 +5117,9 @@ document.addEventListener("DOMContentLoaded", async () => {
       setTimeout(hideCommitProgress, 1000);
     }
   });
+
+  bindHeroChips();
+  restoreViewFromHash();
 });
 
 // --- WELCOME VIDEO FUNCTIONS ---
@@ -5759,6 +5772,7 @@ let pipelineStartTime = null;
 const PIPELINE_ESTIMATED_DURATION = 120; // seconds
 
 function showPipelineProgress() {
+  setGenerationStageVisible(true);
   const progress = document.getElementById("pipeline-progress");
   const resultsView = document.getElementById("results-view");
   const readyState = document.getElementById("ready-state");
@@ -6151,6 +6165,7 @@ function updateSelectedArtifactPanels() {
 }
 
 function showResultsView(codeContent, auditContent) {
+  setGenerationStageVisible(true);
   if (!pipelineState.selectedArtifactId) {
     pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
   }
@@ -6350,9 +6365,146 @@ function hideErrorInputPanel() {
   }
 }
 
+// --- VIEW ROUTER & SHELL UI (STU-375) ---
+
+function setGenerationStageVisible(visible) {
+  const stage = document.getElementById("generation-stage");
+  if (!stage) return;
+  if (visible) {
+    stage.hidden = false;
+    stage.inert = false;
+    requestAnimationFrame(() => stage.classList.add("is-active"));
+  } else {
+    stage.classList.remove("is-active");
+    stage.inert = true;
+    setTimeout(() => {
+      if (!stage.classList.contains("is-active")) stage.hidden = true;
+    }, 260);
+  }
+}
+
+function updateShellUI() {
+  const signedIn = authState.isVerified && !!authState.email;
+  const tier = subscriptionState.tier || "free";
+  const loading = signedIn && isSubscriptionLoading();
+  const resolved = !signedIn || isSubscriptionResolved();
+
+  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const planLabel = loading ? "Checking…" : resolved ? labels[tier] || "Free" : "—";
+
+  const topbarPlan = document.getElementById("topbar-plan");
+  if (topbarPlan) topbarPlan.textContent = planLabel;
+
+  const avatar = document.getElementById("topbar-avatar");
+  if (avatar) avatar.textContent = (authState.email || "?")[0].toUpperCase();
+
+  const usage = getUsage();
+  const usageText = `${usage.count} / ${getRunLimit()} runs this month`;
+
+  const topbarCredits = document.getElementById("topbar-credits-count");
+  if (topbarCredits) topbarCredits.textContent = String(usage.count);
+
+  const creditsBalance = document.getElementById("credits-balance");
+  if (creditsBalance) creditsBalance.textContent = usageText;
+
+  // Plans view current-plan indicators
+  const freeCurrent = document.getElementById("plans-free-current");
+  if (freeCurrent) freeCurrent.classList.toggle("hidden", tier !== "free" || !resolved);
+
+  const proBtn = document.getElementById("plans-checkout-btn-professional");
+  if (proBtn) {
+    const isCurrent = tier === "professional" && resolved;
+    proBtn.disabled = isCurrent;
+    proBtn.textContent = isCurrent ? "Current plan" : "Subscribe";
+  }
+  const powerBtn = document.getElementById("plans-checkout-btn-power");
+  if (powerBtn) {
+    const isCurrent = tier === "power" && resolved;
+    powerBtn.disabled = isCurrent;
+    powerBtn.textContent = isCurrent ? "Current plan" : "Subscribe";
+  }
+}
+
+function openCreditsModal() {
+  updateShellUI();
+  const modal = document.getElementById("credits-modal");
+  if (modal) openModal(modal);
+}
+
+function closeCreditsModal(event) {
+  if (event && event.target !== event.currentTarget) return;
+  const modal = document.getElementById("credits-modal");
+  if (modal) closeModal(modal);
+}
+
+function switchView(view, pushState = true) {
+  view = ["home", "account", "plans"].includes(view) ? view : "home";
+  const views = document.querySelectorAll(".view[data-view]");
+  views.forEach((el) => {
+    const isTarget = el.dataset.view === view;
+    if (isTarget) {
+      el.hidden = false;
+      el.removeAttribute("inert");
+      requestAnimationFrame(() => el.classList.add("is-active"));
+    } else {
+      el.classList.remove("is-active");
+      el.setAttribute("inert", "true");
+      setTimeout(() => {
+        if (!el.classList.contains("is-active")) el.hidden = true;
+      }, 260);
+    }
+  });
+
+  // Generation overlay only belongs to the home surface.
+  if (view !== "home") setGenerationStageVisible(false);
+  else {
+    const stage = document.getElementById("main-stage-container");
+    if (stage && stage.classList.contains("visible")) setGenerationStageVisible(true);
+  }
+
+  document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
+    const active = link.dataset.view === view;
+    link.setAttribute("aria-current", active ? "page" : null);
+    if (!active) link.removeAttribute("aria-current");
+  });
+
+  if (pushState) {
+    const hash = view === "home" ? "" : `#${view}`;
+    if (window.location.hash !== hash) window.history.pushState({ view }, "", hash || "#");
+  }
+}
+
+function restoreViewFromHash() {
+  const raw = window.location.hash.replace(/^#/, "");
+  switchView(raw || "home", false);
+}
+
+window.addEventListener("popstate", (event) => {
+  restoreViewFromHash();
+});
+
+window.addEventListener("hashchange", () => {
+  restoreViewFromHash();
+});
+
+function bindHeroChips() {
+  const chips = document.querySelectorAll("#example-chips .chip");
+  const input = document.getElementById("pipeline-input");
+  chips.forEach((chip) => {
+    chip.addEventListener("click", () => {
+      if (input) input.value = chip.dataset.prompt || "";
+      input?.focus();
+    });
+  });
+}
+
 window.copyResultsCode = copyResultsCode;
 window.selectArtifact = selectArtifact;
 window.selectResultsSummary = selectResultsSummary;
 window.submitResultsFeedback = submitResultsFeedback;
 window.showErrorInputPanel = showErrorInputPanel;
 window.hideErrorInputPanel = hideErrorInputPanel;
+window.setGenerationStageVisible = setGenerationStageVisible;
+window.switchView = switchView;
+window.openCreditsModal = openCreditsModal;
+window.closeCreditsModal = closeCreditsModal;
