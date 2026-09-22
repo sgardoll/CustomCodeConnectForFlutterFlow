@@ -34,6 +34,7 @@
     <link rel="stylesheet" href="/src/designTokens.css" />
     <link rel="stylesheet" href="/src/sharedControls.css" />
     <link rel="stylesheet" href="/src/heroMarkField.css" />
+    <link rel="stylesheet" href="/src/logoMotion.css" />
     <style>
       :root {
         /* Layout constants preserved until the shell change that owns them. */
@@ -919,6 +920,99 @@
       .results-action-bar .btn-error-regen {
         flex-grow: 1.45;
       }
+      .results-action-scope {
+        flex: 0 0 auto;
+        display: block;
+        margin: 10px 24px 4px;
+        font-size: 11px;
+        color: var(--muted, #64748b);
+        text-align: center;
+      }
+      .results-replacement-error {
+        border: 1px solid #fbbf24;
+        background: #fffbeb;
+        border-radius: var(--radius-lg, 16px);
+        margin: 0 24px 12px;
+        padding: 12px 14px;
+      }
+      .results-replacement-error-body {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .results-replacement-error-icon {
+        width: 20px;
+        height: 20px;
+        flex: 0 0 20px;
+        color: #d97706;
+      }
+      .results-replacement-error-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1 1 200px;
+        min-width: 180px;
+      }
+      .results-replacement-error-text strong {
+        color: #b45309;
+        font-size: 12.5px;
+      }
+      .results-replacement-error-text span {
+        color: #92400e;
+        font-size: 12px;
+      }
+      .results-replacement-error .btn-header-action {
+        min-height: 36px;
+        padding: 6px 14px;
+      }
+      /* The shared .btn-header-action sets display:flex, which would otherwise
+         override the hidden attribute; the replacement banner shows only the
+         action that can resolve the failure (upgrade vs retry). */
+      .results-replacement-error .btn-header-action[hidden] {
+        display: none;
+      }
+
+      /* Shared-control styling for the pasted-build-error input overlay. */
+      .error-input-card {
+        background: var(--surface, #fff);
+        border: 1px solid var(--border, #e5e7eb);
+        border-radius: var(--radius-lg, 16px);
+        box-shadow: 0 16px 48px -12px rgba(0, 0, 0, 0.18);
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .error-input-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .error-input-textarea {
+        width: 100%;
+        min-height: 160px;
+        resize: vertical;
+        background: #fffbf0;
+        border-color: #fcd34d;
+        color: #78350f;
+        font-family: "DM Mono", "SFMono-Regular", ui-monospace, monospace;
+        font-size: 12.5px;
+        line-height: 1.6;
+      }
+      .error-input-textarea:focus-visible {
+        border-color: #f59e0b;
+        box-shadow: 0 0 0 3px color-mix(in srgb, #f59e0b 35%, transparent);
+      }
+      .btn-error-input-cancel {
+        background: transparent;
+        color: var(--muted, #64748b);
+        border: 1px solid var(--border, #e5e7eb);
+      }
+      .btn-error-input-cancel:hover:not(:disabled) {
+        background: var(--surface-sunken, #f1f5f9);
+      }
       .btn-deploy-results {
         background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
         color: #fff;
@@ -1694,6 +1788,189 @@
         background: #22c55e;
       }
 
+      /* ── Pipeline: real stage, note and failure states (STU-377) ── */
+      .pipeline-progress {
+        overflow-y: auto;
+        gap: 0;
+      }
+      .pipeline-prompt-recap {
+        width: 100%;
+        max-width: 400px;
+        margin-bottom: 24px;
+        text-align: left;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md, 12px);
+        background: var(--surface);
+      }
+      .pipeline-prompt-kicker {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: var(--ls-mono);
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .pipeline-prompt-text {
+        font-size: 14px;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-prompt-edit {
+        margin-top: 8px;
+        padding: 0;
+        min-height: 44px;
+        background: none;
+        border: none;
+        color: var(--accent);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      /* A finished or failed run has nothing left to spin for. */
+      .pipeline-progress[data-run-state="failed"] .pipeline-progress-icon::after,
+      .pipeline-progress[data-run-state="settled"] .pipeline-progress-icon::after {
+        animation: none;
+        border-top-color: var(--border);
+      }
+      .pipeline-progress[data-run-state="failed"] .progress-fill {
+        animation: none;
+        background: var(--bad);
+      }
+
+      .progress-steps-dots {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 4px;
+      }
+      .progress-stage {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        min-height: 44px;
+        padding: 6px 10px;
+        background: none;
+        border: none;
+        font: inherit;
+        font-size: 11px;
+        color: var(--muted-2);
+        cursor: pointer;
+      }
+      .progress-stage:disabled {
+        cursor: default;
+      }
+      .progress-stage[data-state="active"] .progress-dot {
+        background: #6366f1;
+        box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+      }
+      .progress-stage[data-state="done"] .progress-dot {
+        background: #22c55e;
+      }
+      .progress-stage[data-state="failed"] .progress-dot {
+        background: var(--bad);
+      }
+      .progress-stage[data-state="active"] .progress-stage-label,
+      .progress-stage[data-state="done"] .progress-stage-label {
+        color: var(--fg);
+      }
+      .progress-stage[aria-pressed="true"] .progress-stage-label {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      .pipeline-note {
+        margin-top: 16px;
+        max-width: 400px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+
+      .pipeline-failure {
+        margin-top: 24px;
+        width: 100%;
+        max-width: 420px;
+        text-align: left;
+        padding: 16px;
+        border: 1px solid var(--bad);
+        border-radius: var(--radius-md, 12px);
+        background: var(--bad-soft);
+      }
+      .pipeline-failure-title {
+        font-family: var(--font-display);
+        font-size: 15px;
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        margin-bottom: 6px;
+      }
+      .pipeline-failure-message,
+      .pipeline-failure-hint {
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-failure-hint {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .pipeline-failure-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .pipeline-failure-actions button {
+        flex: 1 1 140px;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: var(--radius-md, 12px);
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13.5px;
+        font-weight: var(--fw-ui);
+        cursor: pointer;
+      }
+      .pipeline-failure-actions button[data-variant="primary"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      /* The authored coral outline that morphs the composer into the pipeline
+         panel, and the pipeline panel into the expanded Results view. */
+      /* The composer's send button carries its own busy spinner, so the shared
+         control spinner must not double it up. */
+      .send[aria-busy="true"]::after { content: none; }
+
+      /* Outline only: the destination surface is already in place underneath,
+         so the morph never hides real state while it plays. */
+      .composer-morph {
+        position: fixed;
+        z-index: 45;
+        pointer-events: none;
+        border: 2px solid var(--accent);
+        border-radius: 20px;
+        box-shadow: var(--shadow-composer);
+        background: transparent;
+      }
+
+      @media (max-width: 640px) {
+        .pipeline-progress { padding: 24px 16px 32px; justify-content: flex-start; }
+        .pipeline-progress-icon { width: 56px; height: 56px; margin-bottom: 18px; }
+        .pipeline-failure-actions button { flex: 1 1 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pipeline-progress-icon::after,
+        .progress-fill { animation: none; }
+        .composer-morph { display: none; }
+      }
+
       /* ── Modals ────────────────────────────────────────── */
       .modal-overlay {
         position: fixed;
@@ -1764,6 +2041,80 @@
         color: #94a3b8;
         font-family: "Delight", "DM Sans", sans-serif;
       }
+
+      /* ── Sign In Modal ─────────────────────────────────── */
+      .signin-modal-content {
+        max-width: 420px;
+        border-radius: var(--radius-xl);
+        background: var(--surface);
+      }
+      .signin-modal-body {
+        padding: clamp(24px, 5vw, 32px);
+      }
+      .signin-modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .signin-modal-header h2 {
+        font-family: var(--font-display);
+        font-size: var(--fs-h4);
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        letter-spacing: var(--ls-heading);
+        margin-bottom: 6px;
+      }
+      .signin-modal-header p {
+        font-size: var(--fs-small);
+        color: var(--muted-2);
+        line-height: var(--lh-body);
+      }
+      .signin-label {
+        display: block;
+        font-size: var(--fs-caption);
+        font-weight: var(--fw-ui);
+        color: var(--muted);
+        margin-bottom: 8px;
+      }
+      .signin-input {
+        width: 100%;
+        min-height: var(--control-h);
+        padding: 12px 16px;
+        margin-bottom: 18px;
+        font-family: var(--font-body);
+        font-size: var(--fs-body);
+        color: var(--fg);
+        background: var(--surface-sunken);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-control);
+        transition: border-color var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+      }
+      .signin-input::placeholder { color: var(--muted-2); }
+      .signin-input:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 4px var(--accent-soft);
+      }
+      .signin-input[aria-invalid="true"] {
+        border-color: var(--bad);
+        box-shadow: 0 0 0 4px var(--bad-soft);
+      }
+      .signin-submit {
+        width: 100%;
+        font-size: var(--fs-body);
+      }
+      .signin-message {
+        min-height: 1.5em;
+        margin-top: 16px;
+        text-align: center;
+        font-size: var(--fs-small);
+        line-height: var(--lh-body);
+        color: var(--muted-2);
+      }
+      .signin-message-success { color: var(--ok); }
+      .signin-message-error { color: var(--bad); }
 
       #usage-counter { font-size: 12px; color: var(--muted-2); }
       #subscription-tier-badge {
@@ -3208,24 +3559,58 @@
 
             <!-- Pipeline Progress View -->
             <div id="pipeline-progress" class="pipeline-progress">
-              <div class="pipeline-progress-icon">
+              <!-- Decorative authored two-piece mark loop (STU-390); never
+                   gates completion - progress depends only on backend events. -->
+              <div class="pipeline-glyph logo-loop" aria-hidden="true">
+                <span class="loop-shadow"></span>
+                <span class="loop-mark">
+                  <span class="loop-halo"></span>
+                  <span class="loop-piece loop-piece-a"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z"></path></svg></span>
+                  <span class="loop-piece loop-piece-b"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" transform="rotate(180 22 22)"></path></svg></span>
+                </span>
+              </div>
+              <div class="pipeline-prompt-recap">
+                <p class="pipeline-prompt-kicker">Your prompt</p>
+                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
+                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
+              </div>
+              <div class="pipeline-progress-icon" id="pipeline-progress-icon">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                 </svg>
               </div>
-              <h3 id="progress-title-text">Generating your code...</h3>
-              <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              <div class="pipeline-status" id="pipeline-status" role="status" aria-live="polite">
+                <h3 id="progress-title-text">Understanding your prompt</h3>
+                <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              </div>
               <div class="progress-track">
                 <div class="progress-fill" id="pipeline-progress-fill"></div>
               </div>
               <div class="progress-meta">
                 <span id="progress-elapsed">0s</span>
-                <span id="progress-estimate">~120s</span>
+                <span id="progress-stage-count">Step 1 of 3</span>
               </div>
-              <div class="progress-steps-dots">
-                <div class="progress-dot" id="pdot-1"></div>
-                <div class="progress-dot" id="pdot-2"></div>
-                <div class="progress-dot" id="pdot-3"></div>
+              <div class="progress-steps-dots" id="pipeline-stage-nav">
+                <button class="progress-stage" type="button" id="pdot-1" data-step="1" data-state="pending" disabled onclick="selectPipelineStage(1)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Architect</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-2" data-step="2" data-state="pending" disabled onclick="selectPipelineStage(2)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Generator</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-3" data-step="3" data-state="pending" disabled onclick="selectPipelineStage(3)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Review</span>
+                </button>
+              </div>
+              <p class="pipeline-note" id="pipeline-note" hidden></p>
+
+              <div class="pipeline-failure" id="pipeline-failure" role="alert" hidden>
+                <h4 class="pipeline-failure-title" id="pipeline-failure-title"></h4>
+                <p class="pipeline-failure-message" id="pipeline-failure-message"></p>
+                <p class="pipeline-failure-hint" id="pipeline-failure-hint" hidden></p>
+                <div class="pipeline-failure-actions" id="pipeline-failure-actions"></div>
               </div>
             </div>
 
@@ -3236,6 +3621,24 @@
                   <h2 id="results-title">Generation Results</h2>
                 </div>
                 <span id="results-file-count" class="results-file-count">0 files</span>
+              </div>
+
+              <!-- Persistent error + retry UI for a failed refinement /
+                   build-error replacement. The previous successful result stays
+                   visible and copyable beneath it; this is not a toast. -->
+              <div id="results-replacement-error" class="results-replacement-error" role="alert" tabindex="-1" hidden>
+                <div class="results-replacement-error-body">
+                  <svg class="results-replacement-error-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M10.3 3.6 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z"/>
+                    <path d="M12 9v4m0 4h.01"/>
+                  </svg>
+                  <div class="results-replacement-error-text">
+                    <strong id="results-replacement-error-title">Regeneration failed</strong>
+                    <span id="results-replacement-error-message"></span>
+                  </div>
+                  <button id="results-replacement-error-upgrade" type="button" class="btn-header-action btn-error-regen" hidden></button>
+                  <button id="results-replacement-error-retry" type="button" class="btn-header-action btn-error-regen"></button>
+                </div>
               </div>
 
               <div id="bundle-strip" class="bundle-strip">
@@ -3292,39 +3695,40 @@
                   <img class="flutterflow-deploy-icon" src="https://flutterflow.io/favicon.ico" alt="" />
                   Deploy to FlutterFlow
                 </button>
-                <button id="btn-error-regen-header" class="btn-header-action btn-error-regen" onclick="showErrorInputPanel()">
+                <button id="btn-error-regen-header" class="btn-header-action btn-error-regen" onclick="showErrorInputPanel()" title="Regenerate the whole bundle from pasted FlutterFlow build errors">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"/></svg>
                   Add FlutterFlow Build Errors &amp; Regenerate
                 </button>
-                <button id="btn-refine-header" class="btn-header-action btn-refine-regen btn-refine-action" onclick="runRefinement()">
+                <button id="btn-refine-header" class="btn-header-action btn-refine-regen btn-refine-action" onclick="runRefinement()" title="Regenerate the selected artifact, keeping the rest of the bundle">
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                   Refine &amp; Regenerate
                 </button>
               </div>
+              <p class="results-action-scope">Refine &amp; Regenerate acts on the <strong>selected artifact</strong>&nbsp;·&nbsp;build-error fixes regenerate the <strong>whole bundle</strong>.</p>
             </div>
 
             <!-- Error Input Panel (overlay on results) -->
             <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;">
-              <div style="width:100%;max-width:560px;">
-                <div class="flex items-center justify-between mb-4">
+              <div class="error-input-card" style="width:100%;max-width:560px;">
+                <div class="error-input-header">
                   <div class="flex items-center gap-2">
                     <svg class="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"/></svg>
                     <h3 class="text-base font-semibold text-gray-800">Paste FlutterFlow Build Errors</h3>
                   </div>
-                  <button onclick="hideErrorInputPanel()" class="text-gray-400 hover:text-gray-600 p-1">
+                  <button onclick="hideErrorInputPanel()" class="modal-close text-gray-400 hover:text-gray-600 p-1" aria-label="Close build error input">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                   </button>
                 </div>
-                <p class="text-sm text-gray-500 mb-4">Paste the raw Dart compiler output below — the AI will analyse every error and regenerate fixed code.</p>
+                <p class="text-sm text-gray-500 mb-4">Paste the raw Dart compiler output below — the AI will analyse every error and regenerate fixed code for the <strong>whole bundle</strong>.</p>
                 <textarea
                   id="ff-error-paste-input"
+                  class="control-field error-input-textarea"
                   rows="8"
-                  style="background:#fffbf0; border-color:#fcd34d; color:#78350f;"
                   placeholder="Paste FlutterFlow / Dart build errors here..."
                   spellcheck="false"
                 ></textarea>
                 <div class="flex items-center justify-between mt-4">
-                  <button onclick="clearErrorInput(); hideErrorInputPanel();" class="text-sm text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
+                  <button id="btn-error-input-cancel" onclick="hideErrorInputPanel()" class="btn-header-action btn-error-input-cancel">Cancel</button>
                   <button id="btn-fix-from-errors" onclick="regenerateFromPastedErrors()" class="btn-header-action btn-error-regen">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                     Fix Errors &amp; Regenerate
@@ -3840,18 +4244,21 @@
 
     <!-- Sign In Modal -->
     <div id="signin-modal" class="modal-overlay" data-modal-close-handler="closeSignInModal" onclick="closeSignInModal(event)">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
-        <div style="padding:32px;">
-          <div class="flex items-start justify-between mb-5">
+      <div class="modal-content signin-modal-content" role="document" onclick="event.stopPropagation()">
+        <div class="signin-modal-body">
+          <div class="signin-modal-header">
             <div>
-              <h2 style="font-size:18px;font-weight:600;color:#131820;margin-bottom:4px;">Sign in</h2>
-              <p style="font-size:13px;color:#9aa0ad;line-height:1.5;">Enter your email and we'll send you a sign-in link.</p>
+              <h2>Sign in</h2>
+              <p id="signin-modal-description">Enter your email and we'll send you a secure sign-in link.</p>
             </div>
-            <button onclick="closeSignInModal()" class="modal-close ml-4 flex-shrink-0"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+            <button onclick="closeSignInModal()" class="modal-close" aria-label="Close sign-in dialog">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
           </div>
-          <input id="signin-email-input" type="email" placeholder="you@example.com" class="api-key-input mb-3" style="font-family:'Delight',sans-serif;font-size:14px;padding:11px 14px;" onkeydown="if(event.key==='Enter') handleMagicLinkRequest()" />
-          <button id="signin-submit-btn" onclick="handleMagicLinkRequest()" class="btn-action btn-run" style="font-size:14px;">Send Sign-in Link</button>
-          <p id="signin-message" role="status" class="text-sm text-gray-400 mt-3 text-center min-h-[1.25rem]"></p>
+          <label class="signin-label" for="signin-email-input">Email address</label>
+          <input id="signin-email-input" type="email" autocomplete="email" placeholder="you@example.com" class="signin-input" aria-describedby="signin-message signin-modal-description" onkeydown="if(event.key==='Enter') handleMagicLinkRequest()" />
+          <button id="signin-submit-btn" onclick="handleMagicLinkRequest()" class="btn-action btn-run signin-submit">Send Sign-in Link</button>
+          <p id="signin-message" class="signin-message" role="status" aria-live="polite" aria-atomic="true"></p>
         </div>
       </div>
     </div>

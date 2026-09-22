@@ -1,0 +1,90 @@
+/* Pipeline arena: authored 120 s, twelve-beat logo loop (STU-390).
+   Decorative only. Two-piece FlutterFlow mark geometry ported from the
+   canonical hero - the mark holds two rotated C pieces plus a halo and a soft
+   ground shadow. Only transform and opacity are animated (by the logo-motion
+   module), so these are pure layout styles. Reduced motion keeps the mark at
+   its static rest frame (the module paints pose(0)); nothing here animates. */
+
+.pipeline-glyph.logo-loop {
+  position: relative;
+  width: 100%;
+  height: 88px;
+  margin: 0 0 12px;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--fg);
+}
+
+.loop-mark,
+.loop-shadow {
+  position: absolute;
+}
+
+.loop-mark {
+  left: 0;
+  top: 50%;
+  width: 52px;
+  height: 52px;
+  margin: -26px 0 0 0;
+  will-change: transform;
+}
+
+.loop-piece {
+  position: absolute;
+  inset: 0;
+  display: block;
+  will-change: transform, opacity;
+}
+
+.loop-piece svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.loop-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 74px;
+  height: 74px;
+  margin: -37px 0 0 -37px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in oklch, var(--accent) 60%, transparent), transparent 64%);
+  filter: blur(5px);
+  opacity: 0.09;
+  will-change: transform, opacity;
+}
+
+.loop-shadow {
+  left: var(--mark-c, 26px);
+  bottom: 13px;
+  width: 46px;
+  height: 6px;
+  margin-left: -23px;
+  border-radius: 50%;
+  background: color-mix(in oklch, var(--fg) 26%, transparent);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+@media (max-width: 920px) {
+  .pipeline-glyph.logo-loop {
+    height: 66px;
+    margin-bottom: 8px;
+  }
+  .loop-mark {
+    width: 40px;
+    height: 40px;
+    margin: -20px 0 0 0;
+  }
+  .loop-halo {
+    width: 58px;
+    height: 58px;
+    margin: -29px 0 0 -29px;
+  }
+  .loop-shadow {
+    bottom: 6px;
+  }
+}
