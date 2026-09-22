@@ -48,6 +48,7 @@ import {
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
+import { initHeroMarkField } from "./src/heroMarkField.js";
 import {
   applyDependencyOverrides,
   mergeDependenciesIntoYaml,
@@ -1108,11 +1109,7 @@ function updateDeployButtonVisibility() {
     pipelineState.step2Result && pipelineState.step2Result.length > 0;
 
   const deployBtn = document.getElementById("btn-deploy-to-ff");
-  const runBtn = document.getElementById("btn-run-pipeline");
 
-  // Run Pipeline stays visible next to Deploy so a generation can be restarted
-  // without closing the results.
-  if (runBtn) runBtn.classList.remove("hidden");
   if (deployBtn) {
     deployBtn.classList.toggle("hidden", !hasGeneratedCode);
   }
@@ -4711,37 +4708,93 @@ function updateModelSelectorGating() {
   updateModelInfo(select.value)
 }
 
-function updateUsageDisplay() {
-  const el = document.getElementById('usage-counter')
-  if (!el) return
+/**
+ * Single source of truth for the monthly-usage presentation shown in the
+ * topbar allowance and the usage/billing dialog. Reads the metered count, the
+ * resolved tier limit and the auth/subscription state, then writes every usage
+ * surface (topbar, dialog, account row, guest counter) consistently. Remaining
+ * runs are clamped to zero and an unresolved plan never surfaces a fake balance.
+ */
+function renderUsageSurfaces() {
+  const signedIn = authState.isVerified && !!authState.email;
+  const loading = signedIn && isSubscriptionLoading();
+  const resolved = !signedIn || isSubscriptionResolved();
 
-  if (authState.isVerified && isSubscriptionLoading()) {
-    el.textContent = 'Checking plan…'
-    el.className = 'text-xs text-gray-500'
-    updateGuestUsageCounter()
-    hidePaywallExhausted()
-    return
+  const usage = getUsage();
+  const count = resolved ? usage.count : 0;
+  const limit = resolved ? getRunLimit() : 0;
+  const remaining = Math.max(0, limit - count);
+  const usedLimitText = `${count} / ${limit} runs this month`;
+  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const tier = resolved ? (subscriptionState.tier || "free") : null;
+
+  const topbarCredits = document.getElementById("topbar-credits-count");
+  if (topbarCredits) {
+    if (loading) topbarCredits.textContent = "…";
+    else if (!resolved) topbarCredits.textContent = "—";
+    else topbarCredits.textContent = String(remaining);
   }
 
-  if (authState.isVerified && !isSubscriptionResolved()) {
-    el.textContent = 'Plan check failed'
-    el.className = 'text-xs text-red-600 font-medium'
-    updateGuestUsageCounter()
+  const balance = document.getElementById("credits-balance");
+  if (balance) {
+    if (loading) balance.textContent = "Checking plan…";
+    else if (!resolved) balance.textContent = "Plan check failed";
+    else balance.textContent = usedLimitText;
+  }
+
+  const dialogTier = document.getElementById("usage-dialog-tier");
+  if (dialogTier) {
+    if (loading) dialogTier.textContent = "Checking…";
+    else if (!resolved) dialogTier.textContent = "Unavailable";
+    else dialogTier.textContent = labels[tier] || "Free";
+  }
+
+  const dialogStatus = document.getElementById("usage-dialog-status");
+  if (dialogStatus) {
+    if (loading) dialogStatus.textContent = "Verifying your subscription…";
+    else if (!resolved) dialogStatus.textContent = "Could not verify your subscription. Try again or sign out.";
+    else dialogStatus.textContent = "Runs reset at the start of each month.";
+  }
+
+  const counter = document.getElementById("usage-counter");
+  if (counter) {
+    if (loading && signedIn) {
+      counter.textContent = "Checking plan…";
+      counter.className = "text-xs text-gray-500";
+    } else if (!resolved && signedIn) {
+      counter.textContent = "Plan check failed";
+      counter.className = "text-xs text-red-600 font-medium";
+    } else {
+      counter.textContent = usedLimitText;
+      const pct = limit > 0 ? count / limit : 0;
+      counter.className = pct >= 1
+        ? "text-xs text-red-600 font-medium"
+        : pct >= 0.8
+          ? "text-xs text-yellow-600 font-medium"
+          : "text-xs text-gray-500";
+    }
+  }
+
+  if (!signedIn) {
+    const guestEl = document.getElementById("guest-usage-text");
+    if (guestEl) {
+      const g = getUsageData();
+      const gCount = g.month === getCurrentYearMonth() ? (g.count ?? 0) : 0;
+      guestEl.textContent = `${gCount} / ${TIER_LIMITS.free} generations used`;
+    }
+  }
+}
+
+function updateUsageDisplay() {
+  renderUsageSurfaces()
+
+  if (authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())) {
     hidePaywallExhausted()
     return
   }
 
   const { count } = getUsage()
   const limit = getRunLimit()
-  el.textContent = `${count} / ${limit} runs this month`
-  const pct = limit > 0 ? count / limit : 0
-  el.className = pct >= 1
-    ? 'text-xs text-red-600 font-medium'
-    : pct >= 0.8
-      ? 'text-xs text-yellow-600 font-medium'
-      : 'text-xs text-gray-500'
-  updateGuestUsageCounter()
-
   if (count >= limit && !pipelineState.isRunning) {
     showPaywallExhausted(count, limit)
   } else {
@@ -4750,12 +4803,7 @@ function updateUsageDisplay() {
 }
 
 function updateGuestUsageCounter() {
-  const el = document.getElementById('guest-usage-text')
-  if (!el) return
-  const usage = getUsageData()
-  const count = usage.month === getCurrentYearMonth() ? (usage.count ?? 0) : 0
-  const limit = TIER_LIMITS.free
-  el.textContent = `${count} / ${limit} generations used`
+  renderUsageSurfaces()
 }
 
 // --- STRIPE FUNCTIONS ---
@@ -4857,13 +4905,17 @@ async function startCheckout(tierId) {
   }
 }
 
-async function openCustomerPortal() {
+async function openCustomerPortal(trigger) {
   if (!authState.isVerified || !authState.sessionToken) {
     openSignInModal()
     return
   }
 
-  const btn = document.getElementById('manage-billing-btn')
+  // Every Manage Subscription / Manage Billing trigger shares this single
+  // portal request and its loading/error state, so only one fresh session URL
+  // is ever requested.
+  const btn = trigger || document.getElementById('manage-billing-btn')
+  const prevText = btn ? btn.textContent : ''
   if (btn) { btn.disabled = true; btn.textContent = 'Loading…' }
 
   try {
@@ -4879,7 +4931,7 @@ async function openCustomerPortal() {
     window.location.href = url
   } catch (err) {
     console.error('openCustomerPortal failed:', err)
-    if (btn) { btn.disabled = false; btn.textContent = 'Manage billing' }
+    if (btn) { btn.disabled = false; btn.textContent = prevText }
     showToast('Could not open billing portal. Please try again.', 'error')
   }
 }
@@ -5137,6 +5189,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Initialize welcome video
   initializeWelcomeVideo();
+
+  // Decorative hero mark field (WebGL with 2D fallback); no dependency on generation state.
+  window.__heroField = initHeroMarkField();
 
   await initializeAuth();
   handleCheckoutRedirect();
@@ -6481,6 +6536,19 @@ function renderSummaryDetail(presentation) {
       </ul>
     `
     : "";
+  // Bundle-level warnings (deploy ordering, compatibility findings) belong on
+  // the summary surface as a distinct class of message. They are NOT
+  // per-file issues and must never leak into a selected artifact's review.
+  const bundleWarnings = presentation.warnings.length
+    ? `
+      <section class="summary-bundle-warnings" aria-label="Bundle warnings">
+        <h4>${reviewStatusIcon("warning")} Bundle</h4>
+        <ul>
+          ${presentation.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+        </ul>
+      </section>
+    `
+    : "";
   const manualSteps = presentation.manualSteps.length
     ? `
       <section class="summary-manual-callout">
@@ -6503,6 +6571,7 @@ function renderSummaryDetail(presentation) {
       <div class="review-summary-copy">
         <p class="review-summary-text">${escapeHtml(presentation.summary)}</p>
         ${findings}
+        ${bundleWarnings}
         ${manualSteps}
       </div>
       <div class="review-score-column">
@@ -6628,12 +6697,22 @@ function renderBundleControls(presentation) {
   const tabs = document.getElementById("artifact-tabs");
   const count = document.getElementById("results-file-count");
   if (summaryTab) {
-    summaryTab.classList.toggle("active", pipelineState.resultsViewMode === "summary");
+    const isSummary = pipelineState.resultsViewMode === "summary";
+    summaryTab.classList.toggle("active", isSummary);
+    summaryTab.setAttribute("role", "tab");
+    summaryTab.setAttribute("aria-selected", String(isSummary));
+    summaryTab.setAttribute("aria-controls", "results-summary-detail");
+    summaryTab.tabIndex = isSummary ? 0 : -1;
+  }
+  if (tabs) {
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Artifacts in this bundle");
   }
   if (!presentation.artifacts.length) {
     if (count) count.textContent = "0 files";
     if (strip) strip.classList.remove("visible");
     if (tabs) tabs.innerHTML = "";
+    ensureResultsTabKeyboard();
     return;
   }
 
@@ -6642,11 +6721,19 @@ function renderBundleControls(presentation) {
     count.textContent = `${fileCount} ${fileCount === 1 ? "file" : "files"}`;
   }
   if (tabs) {
-    tabs.innerHTML = presentation.artifacts.map((artifact) => `
+    tabs.innerHTML = presentation.artifacts.map((artifact) => {
+      const isSelected = pipelineState.resultsViewMode === "file"
+        && artifact.id === pipelineState.selectedArtifactId;
+      return `
       <button
         type="button"
-        class="artifact-tab${pipelineState.resultsViewMode === "file" && artifact.id === pipelineState.selectedArtifactId ? " active" : ""}"
+        id="artifact-tab-${escapeAttr(artifact.id)}"
+        role="tab"
+        aria-selected="${isSelected ? "true" : "false"}"
+        aria-controls="artifact-results-split"
+        class="artifact-tab${isSelected ? " active" : ""}"
         data-artifact-id="${escapeAttr(artifact.id)}"
+        tabindex="${isSelected ? 0 : -1}"
         title="${escapeAttr(`${reviewStatusLabel(artifact.status)} · ${artifact.fileName || artifact.artifactName}`)}"
       >
         <span class="artifact-tab-status status-${escapeAttr(artifact.status)}">${reviewStatusIcon(artifact.status)}</span>
@@ -6655,16 +6742,59 @@ function renderBundleControls(presentation) {
           <span class="artifact-tab-meta">${escapeHtml(artifact.artifactType)}</span>
         </span>
       </button>
-    `).join("");
+    `;
+    }).join("");
     tabs.onclick = (event) => {
       const tab = event.target.closest(".artifact-tab");
       if (tab?.dataset?.artifactId) {
         selectArtifact(tab.dataset.artifactId);
       }
     };
+    ensureResultsTabKeyboard();
   }
 
   if (strip) strip.classList.add("visible");
+}
+
+// WAI-ARIA tabs pattern: ArrowRight/ArrowLeft move focus through the tablist,
+// Home/End jump to the first/last tab. The selected tab is activated and focus
+// is re-applied after the render so keyboard focus survives the re-render that
+// refreshArtifactTabs performs on selection change.
+function ensureResultsTabKeyboard() {
+  const tablist = document.getElementById("bundle-strip");
+  if (!tablist || tablist.dataset.tabKeyboard === "bound") return;
+  tablist.dataset.tabKeyboard = "bound";
+  tablist.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const tabs = [
+      document.getElementById("results-summary-tab"),
+      ...Array.from(document.querySelectorAll("#artifact-tabs .artifact-tab")),
+    ].filter(Boolean);
+    if (!tabs.length || !tabs.includes(document.activeElement)) return;
+
+    let targetIndex = -1;
+    const currentIndex = tabs.indexOf(document.activeElement);
+    if (event.key === "ArrowRight") targetIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") targetIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") targetIndex = 0;
+    else if (event.key === "End") targetIndex = tabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    const target = tabs[targetIndex];
+    if (!target) return;
+    if (target.id === "results-summary-tab") {
+      selectResultsSummary();
+    } else {
+      const artifactId = target.dataset.artifactId;
+      if (artifactId) selectArtifact(artifactId);
+    }
+    // Re-apply focus to the freshly rendered tab after the selection re-render.
+    const freshTab = target.id === "results-summary-tab"
+      ? document.getElementById("results-summary-tab")
+      : document.querySelector(`#artifact-tabs .artifact-tab[data-artifact-id="${target.dataset.artifactId}"]`);
+    if (freshTab) freshTab.focus();
+  });
 }
 
 function updateSelectedArtifactPanels() {
@@ -6677,6 +6807,22 @@ function updateSelectedArtifactPanels() {
   const artifactSplit = document.getElementById("artifact-results-split");
   const presentation = getReviewPresentation();
   const selectedCode = getSelectedArtifactCode();
+
+  // Harden the summary/file tabpanel semantics for the WAI-ARIA tabs pattern.
+  if (summaryDetail) {
+    summaryDetail.setAttribute("role", "tabpanel");
+    summaryDetail.setAttribute("aria-labelledby", "results-summary-tab");
+  }
+  if (artifactSplit) {
+    artifactSplit.setAttribute("role", "tabpanel");
+    const selectedArtifact = presentation?.artifacts?.find(
+      (artifact) => artifact.id === pipelineState.selectedArtifactId,
+    );
+    artifactSplit.setAttribute(
+      "aria-labelledby",
+      selectedArtifact ? `artifact-tab-${selectedArtifact.id}` : "results-summary-tab",
+    );
+  }
 
   renderSummaryDetail(presentation);
   renderBundleControls(presentation);
@@ -6843,11 +6989,58 @@ function selectResultsSummary() {
   updateSelectedArtifactPanels();
 }
 
+// Test/diagnostic hook used by the browser suite to render an arbitrary
+// bundle + review without running paid generation. Mirrors the debug path so
+// the Results Summary / artifact inspection surfaces can be asserted in
+// isolation. Gated on import.meta.env.DEV so the hook (and its ability to
+// force the results view with arbitrary content) is tree-shaken out of the
+// production bundle: it exists only under the Vite dev server, which is what
+// the Playwright suite runs against.
+if (import.meta.env.DEV) {
+  function renderResultsPreview(bundle, review) {
+    const readyState = document.getElementById("ready-state");
+    if (readyState) readyState.classList.add("hidden");
+    const stageContainer = document.getElementById("main-stage-container");
+    if (stageContainer) stageContainer.classList.add("visible");
+    hidePipelineProgress?.();
+    const paywallEl = document.getElementById("paywall-exhausted");
+    if (paywallEl) paywallEl.classList.add("hidden");
+
+    pipelineState.step3Result = typeof review === "string" ? review : JSON.stringify(review);
+    pipelineState.step2Result = typeof bundle === "string" ? bundle : JSON.stringify(bundle);
+    pipelineState.artifactBundle = normalizeArtifactBundle(bundle, {
+      id: bundle?.id,
+      title: bundle?.title,
+      description: bundle?.description,
+    });
+    pipelineState.bundleSpec = pipelineState.artifactBundle;
+    updateBundleReviewFromReviewResult();
+    pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
+    showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
+  }
+  window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
+}
+
 function copyResultsCode() {
   const btn = document.getElementById("btn-copy-results");
+  const statusEl = document.getElementById("results-copy-status");
   const rawCode = getSelectedArtifactCode();
+  const setStatus = (message, ok) => {
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.classList.toggle("ok", Boolean(ok));
+    statusEl.classList.toggle("fail", !ok);
+  };
+
+  if (!navigator.clipboard?.writeText) {
+    // The Clipboard API is unavailable (non-secure context or unsupported).
+    // Surface a non-blocking notice; the results view stays usable.
+    setStatus("Copying isn't supported in this browser.", false);
+    return;
+  }
 
   navigator.clipboard.writeText(rawCode).then(() => {
+    setStatus("Copied to clipboard", true);
     if (btn) {
       btn.classList.add("copied");
       const label = btn.querySelector("span");
@@ -6860,6 +7053,10 @@ function copyResultsCode() {
         }, 2000);
       }
     }
+  }).catch(() => {
+    // Permission denied or transient clipboard failure. This must never block
+    // the results view — the user can still read and select the code.
+    setStatus("Clipboard permission was denied. Select the code to copy it manually.", false);
   });
 }
 
@@ -6932,14 +7129,7 @@ function updateShellUI() {
   const avatar = document.getElementById("topbar-avatar");
   if (avatar) avatar.textContent = (authState.email || "?")[0].toUpperCase();
 
-  const usage = getUsage();
-  const usageText = `${usage.count} / ${getRunLimit()} runs this month`;
-
-  const topbarCredits = document.getElementById("topbar-credits-count");
-  if (topbarCredits) topbarCredits.textContent = String(usage.count);
-
-  const creditsBalance = document.getElementById("credits-balance");
-  if (creditsBalance) creditsBalance.textContent = usageText;
+  renderUsageSurfaces();
 
   // Plans view current-plan indicators
   const freeCurrent = document.getElementById("plans-free-current");
