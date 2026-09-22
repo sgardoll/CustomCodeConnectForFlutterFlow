@@ -3480,44 +3480,30 @@
         <h2>Choose a plan</h2>
         <p style="color:var(--muted); font-size:14px; margin-bottom: 22px;">Unlock more generations and advanced features.</p>
         <div class="pm-cards" style="padding:0;">
-          <div class="pm-card">
+          <div class="pm-card" data-tier="free">
             <div class="pm-card-name">Free</div>
             <div class="pm-card-price">$0<span class="price-suffix">/mo</span></div>
             <div class="pm-price-note">&nbsp;</div>
-            <ul class="pm-features">
-              <li>2 generations/month</li>
-              <li>Gemini model only</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <div id="plans-free-current" class="pm-current-plan-indicator">Current plan</div>
           </div>
 
-          <div class="pm-card pm-card-pro">
+          <div class="pm-card pm-card-pro" data-tier="professional">
             <div class="pm-popular-badge">Popular</div>
             <div class="pm-card-name">Pro</div>
             <div class="pm-card-label">For FlutterFlow Professionals</div>
             <div class="pm-card-price"><span id="plans-pro-price">A$11</span><span class="price-suffix">/mo</span></div>
             <div id="plans-pro-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>50 generations/month</li>
-              <li>All models</li>
-              <li>Code Regeneration</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="plans-checkout-btn-professional" onclick="startCheckout('professional')" class="pm-subscribe-btn pm-subscribe-btn-pro">Subscribe</button>
           </div>
 
-          <div class="pm-card pm-card-power">
+          <div class="pm-card pm-card-power" data-tier="power">
             <div class="pm-card-name">Power</div>
             <div class="pm-card-label">For Agencies &amp; Enterprise</div>
             <div class="pm-card-price"><span id="plans-power-price">A$49</span><span class="price-suffix">/mo</span></div>
             <div id="plans-power-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>2000 generations/month</li>
-              <li>All models + early access</li>
-              <li>BYOK support</li>
-              <li>API &amp; MCP Access</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="plans-checkout-btn-power" onclick="startCheckout('power')" class="pm-subscribe-btn pm-subscribe-btn-power">Subscribe</button>
           </div>
         </div>
@@ -3895,46 +3881,32 @@
         <!-- Plan Cards -->
         <div class="pm-cards">
           <!-- Free -->
-          <div class="pm-card">
+          <div class="pm-card" data-tier="free">
             <div class="pm-card-name">Free</div>
             <div class="pm-card-price">$0<span class="price-suffix">/mo</span></div>
             <div class="pm-price-note">&nbsp;</div>
-            <ul class="pm-features">
-              <li>2 generations/month</li>
-              <li>Gemini model only</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <div id="free-tier-current" class="pm-current-plan-indicator">Current plan</div>
           </div>
 
           <!-- Pro -->
-          <div class="pm-card pm-card-pro">
+          <div class="pm-card pm-card-pro" data-tier="professional">
             <div class="pm-popular-badge">Popular</div>
             <div class="pm-card-name">Pro</div>
             <div class="pm-card-label">For FlutterFlow Professionals</div>
             <div class="pm-card-price"><span id="pro-price">A$11</span><span class="price-suffix">/mo</span></div>
             <div id="pro-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>50 generations/month</li>
-              <li>All models</li>
-              <li>Code Regeneration</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="checkout-btn-professional" onclick="startCheckout('professional')" class="pm-subscribe-btn pm-subscribe-btn-pro">Subscribe</button>
           </div>
 
           <!-- Power -->
-          <div class="pm-card pm-card-power">
+          <div class="pm-card pm-card-power" data-tier="power">
             <div class="pm-card-name">Power</div>
             <div class="pm-card-label">For Agencies &amp; Enterprise</div>
             <div class="pm-card-price"><span id="power-price">A$49</span><span class="price-suffix">/mo</span></div>
             <div id="power-price-note" class="pm-price-note">billed monthly</div>
-            <ul class="pm-features">
-              <li>2000 generations/month</li>
-              <li>All models + early access</li>
-              <li>BYOK support</li>
-              <li>API &amp; MCP Access</li>
-              <li>Code Review</li>
-            </ul>
+            <ul class="pm-features"></ul>
             <button id="checkout-btn-power" onclick="startCheckout('power')" class="pm-subscribe-btn pm-subscribe-btn-power">Subscribe</button>
           </div>
         </div>
