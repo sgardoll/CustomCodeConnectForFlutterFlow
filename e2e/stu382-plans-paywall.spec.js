@@ -147,10 +147,12 @@ test.describe("STU-382 plans surface and paywall states", () => {
     });
     await page.goto("/");
 
-    // The design's mock "preview" purchase-success dialogs must not ship.
-    const pageText = await page.locator("body").innerText();
-    for (const mock of ["Subscription confirmed", "no charge was made", "Redirecting to checkout"]) {
-      expect(pageText).not.toContain(mock);
+    // The design's mock "preview" purchase-success dialogs must not ship,
+    // even hidden in the pricing modal. Scan the full document source so an
+    // inert/hidden mock cannot dodge the assertion.
+    const pageHtml = await page.content();
+    for (const mock of ["Subscription confirmed", "no charge was made", "Redirecting to checkout", "This is where the Stripe session would open"]) {
+      expect(pageHtml).not.toContain(mock);
     }
 
     // Upgrade goes to the real checkout endpoint — and never locally writes a
