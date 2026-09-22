@@ -164,7 +164,7 @@ test.describe("Magic-link sign-in", () => {
     // auto-purchase or auto-deploy is triggered by this flow.
     await expect(page.locator("#auth-signedin")).toBeVisible();
     await expect(page.locator("#auth-user-email")).toContainText("test@example.com");
-    await expect(page.locator("#subscription-tier-badge")).toContainText("Professional");
+    await expect(page.locator("#subscription-tier-badge")).toContainText("Pro");
     await expect(page.locator("#signin-modal")).not.toHaveClass(/open/);
   });
 
