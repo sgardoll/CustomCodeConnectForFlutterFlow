@@ -106,6 +106,42 @@ test("navigation switches surfaces and hidden surfaces are not focusable", async
   expect(accountInert).toBe(true);
 });
 
+test("keyboard focus follows view navigation", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  await expect(page.locator("#home-view")).toBeVisible();
+
+  // Initial load must leave focus on the document, not steal it into a view.
+  const focusedViewOnLoad = await page.evaluate(() => document.activeElement?.closest(".view")?.id ?? null);
+  expect(focusedViewOnLoad).toBeNull();
+
+  // Keyboard activation of a nav link moves focus into the revealed surface.
+  await page.focus('a[data-view="account"]');
+  await page.keyboard.press("Enter");
+  await expect(page.locator("#account-view")).toBeVisible();
+  await expect(page.locator("#account-view")).toBeFocused();
+
+  // The hidden surface keeps its controls out of the focus order.
+  const hiddenFocusableHome = await page.locator("#home-view").evaluate((el) => {
+    const focusable = el.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    return Array.from(focusable).filter((n) => !n.hidden && n.offsetParent !== null).length;
+  });
+  expect(hiddenFocusableHome).toBe(0);
+
+  // Pointer navigation moves focus into the revealed surface too.
+  await page.click('a[data-view="plans"]');
+  await expect(page.locator("#plans-view")).toBeVisible();
+  await expect(page.locator("#plans-view")).toBeFocused();
+
+  // Reloading a deep link restores the surface without stealing focus.
+  await page.reload();
+  await expect(page.locator("#plans-view")).toBeVisible();
+  const focusedViewAfterReload = await page.evaluate(() => document.activeElement?.closest(".view")?.id ?? null);
+  expect(focusedViewAfterReload).toBeNull();
+});
+
 test("back, forward and reload restore the current surface", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");

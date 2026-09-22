@@ -6437,7 +6437,7 @@ function closeCreditsModal(event) {
   if (modal) closeModal(modal);
 }
 
-function switchView(view, pushState = true) {
+function switchView(view, pushState = true, moveFocus = true) {
   view = ["home", "account", "plans"].includes(view) ? view : "home";
   const views = document.querySelectorAll(".view[data-view]");
   views.forEach((el) => {
@@ -6445,7 +6445,11 @@ function switchView(view, pushState = true) {
     if (isTarget) {
       el.hidden = false;
       el.removeAttribute("inert");
-      requestAnimationFrame(() => el.classList.add("is-active"));
+      requestAnimationFrame(() => {
+        el.classList.add("is-active");
+        // Land keyboard focus in the revealed surface once it is visible.
+        if (moveFocus) el.focus({ preventScroll: true });
+      });
     } else {
       el.classList.remove("is-active");
       el.setAttribute("inert", "true");
@@ -6474,9 +6478,14 @@ function switchView(view, pushState = true) {
   }
 }
 
+let hasRestoredInitialView = false;
 function restoreViewFromHash() {
   const raw = window.location.hash.replace(/^#/, "");
-  switchView(raw || "home", false);
+  // The first restore is the initial page load, so focus stays wherever the
+  // browser put it; every later hash change is user-driven navigation and
+  // may move focus into the revealed surface.
+  switchView(raw || "home", false, hasRestoredInitialView);
+  hasRestoredInitialView = true;
 }
 
 window.addEventListener("popstate", (event) => {
