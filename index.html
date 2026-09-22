@@ -2431,12 +2431,9 @@
       .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
       .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.01em; }
       .topnav {
-        display: none;
+        display: flex;
         align-items: center;
         gap: 6px;
-      }
-      @media (min-width: 680px) {
-        .topnav { display: flex; }
       }
       .nav-link {
         padding: 8px 14px;
@@ -2497,6 +2494,21 @@
         font-size: 13px;
         font-weight: 600;
         cursor: pointer;
+      }
+      /* Below the inline-nav breakpoint the nav wraps to its own topbar row
+         with touch-sized targets, so every surface stays reachable instead
+         of being hidden. */
+      @media (max-width: 679px) {
+        :root { --topbar-h: 100px; }
+        .topbar { flex-wrap: wrap; align-content: center; row-gap: 2px; padding: 10px 12px; }
+        .topnav { order: 3; width: 100%; gap: 4px; }
+        .topnav .nav-link {
+          flex: 1 1 0;
+          min-height: 44px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
       }
 
       .viewport {

@@ -32,6 +32,32 @@ for (const { name, width, height } of viewports) {
   });
 }
 
+test("mobile topbar keeps Home, Account and Plans separately reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.goto("/");
+
+  for (const view of ["home", "account", "plans"]) {
+    const link = page.locator(`.topnav a[data-view="${view}"]`);
+    await expect(link).toBeVisible();
+    const box = await link.boundingBox();
+    expect(box.height, `${view} nav link should offer a 44px touch target`).toBeGreaterThanOrEqual(44);
+    expect(box.width, `${view} nav link should offer a 44px touch target`).toBeGreaterThanOrEqual(44);
+  }
+
+  await page.click('.topnav a[data-view="account"]');
+  await expect(page.locator("#account-view")).toBeVisible();
+
+  await page.click('.topnav a[data-view="plans"]');
+  await expect(page.locator("#plans-view")).toBeVisible();
+  await expect(page.locator("#home-view")).toBeHidden();
+
+  const hasOverflow = await page.evaluate(() => {
+    const html = document.documentElement;
+    return html.scrollWidth > html.clientWidth + 1;
+  });
+  expect(hasOverflow, "mobile nav should not force horizontal scrolling").toBe(false);
+});
+
 test("200% zoom keeps controls readable and on-screen", async ({ page }) => {
   await page.setViewportSize({ width: 720, height: 900 });
   await page.goto("/");
