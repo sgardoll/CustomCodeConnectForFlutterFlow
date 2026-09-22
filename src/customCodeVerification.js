@@ -160,6 +160,18 @@ function skipReason(className, unresolvableImports, missingPackages) {
 }
 
 /**
+ * The reason a class is skipped over a package it never names itself.
+ *
+ * @param {string} className - The class being skipped
+ * @param {string[]} unrepresentablePackages - Packages the project declares
+ *   from sources the manifest cannot express
+ * @returns {string} User-facing reason naming both
+ */
+function transitiveSkipReason(className, unrepresentablePackages) {
+  return `${className} was not compiled before deploying: your project declares ${unrepresentablePackages.join(", ")} from a source that cannot be reproduced outside it, and whether the packages ${className} imports depend on one of them transitively cannot be checked before the deploy, so package resolution could not be matched exactly.`;
+}
+
+/**
  * Plans the compile check that runs before custom classes are pushed.
  *
  * Classes whose imports all resolve from a pubspec are compiled for real by
@@ -168,18 +180,25 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * FlutterFlow. Classes that depend on the generated app are reported in
  * `skipped` so the deploy can say plainly what it did not verify.
  *
- * A dependency that cannot be reproduced outside the project - a `git:` or
- * `path:` source - stops only a class that imports it. For that class the
- * scratch package would resolve different code from the project, and a check
- * against the wrong versions reports a result that does not describe what
- * ships, so it is left out of `sources` and named in `skipped`. A class that
- * does not import it resolves everything it uses to the same versions the
- * project will, so it is verified normally.
+ * A dependency that cannot be reproduced outside the project - a `git:`,
+ * `path:`, or custom-`hosted:` source - stops any class whose compilation
+ * shares a package graph with it. Importing it directly is the clear case and
+ * names itself in `skipped`. But a class that imports only representable
+ * packages can still be affected: pub resolution is one shared graph, so a
+ * representable import may depend on the unrepresentable package transitively,
+ * and whether it does is knowable only by resolving the graph, which cannot
+ * happen here. The scratch manifest omits the package, so `pub get` resolves
+ * that transitive slot differently there and the check could report a result
+ * that does not describe what ships. When the project declares any
+ * unrepresentable source, every class that imports a `package:` URI is
+ * therefore skipped and named with that reason; a class compiled from
+ * `dart:` alone does not touch package resolution and verifies normally.
  *
- * That scoping is the point. Deciding it once for the whole project meant a
- * single `git:` entry - or a package the SDK supplied but a hand-kept name list
- * had not heard of - left every class in the deploy uncompiled, including the
- * ones that never touched it.
+ * A project with no unrepresentable sources verifies exactly as before, and
+ * the class that directly imports such a package is still told so plainly.
+ * The earlier scoping - skipping only the classes that directly imported it -
+ * kept classes compiling that shared a graph with a package they never named,
+ * which was not a check on what ships.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
@@ -204,9 +223,8 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
 
     const importedPackages = extractPackageImports(content);
 
-    // Scoped to this class's own imports. A dependency the project declares
-    // from a source the manifest cannot express is only a problem for a class
-    // that actually imports it.
+    // A direct import of a dependency the manifest cannot express is this
+    // class's own problem, and the reason names it as such.
     const unresolvablePackages = importedPackages.filter((name) =>
       unrepresentable.includes(name),
     );
@@ -228,6 +246,25 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
       skipped.push({
         className,
         reason: skipReason(className, unresolvableImports, missingPackages),
+      });
+      continue;
+    }
+
+    // The transitive hole: pub resolves one shared graph, so even a class
+    // whose every import is representable may reach a package the manifest
+    // omits through the dependencies of what it does import. Reachability is
+    // knowable only by resolving the graph, so while the project declares
+    // any unrepresentable source the class is skipped rather than compiled
+    // against a graph that differs from the project's. A class importing
+    // nothing from `package:` never touches pub resolution and compiles
+    // against exactly what the project will.
+    if (
+      unrepresentable.length > 0 &&
+      extractImportUris(content).some((uri) => uri.startsWith("package:"))
+    ) {
+      skipped.push({
+        className,
+        reason: transitiveSkipReason(className, unrepresentable),
       });
       continue;
     }
