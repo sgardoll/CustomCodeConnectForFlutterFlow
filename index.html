@@ -3398,6 +3398,20 @@
       .acct-access-row:last-child { border-bottom: 0; }
       .acct-access-row p { margin: 0; color: var(--muted); }
       .acct-access-row p:first-child { color: var(--fg); font-weight: 500; flex: none; }
+      .acct-access-action { align-items: center; }
+      .acct-access-action .btn-action { flex: none; }
+      .acct-access-desc { font-size: 12px !important; line-height: 1.45; }
+      .acct-access-msg {
+        min-height: 1.25rem; margin: 0 0 10px 0; padding-top: 2px;
+        font-size: 12.5px; color: var(--muted);
+      }
+      .acct-access-msg.error { color: var(--bad); }
+      .acct-danger-zone {
+        border: 1px solid var(--bad-soft);
+        background: color-mix(in oklab, var(--bad-soft), transparent 55%);
+      }
+      .acct-danger-zone .acct-card-head h2 { color: var(--bad); }
+      .acct-danger-note { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 0 0 14px 0; max-width: 52ch; }
 
       /* Mobile compact */
       @media (max-width: 920px) {
@@ -3865,6 +3879,54 @@
               <button class="btn-action ghost" onclick="handleSignOut()">Sign Out</button>
             </div>
           </div>
+
+          <div class="acct-card acct-access">
+            <div class="acct-card-head">
+              <h2>Access &amp; data</h2>
+              <span class="acct-meta">session and local cache</span>
+            </div>
+            <div class="acct-access-row">
+              <p>Sign-in method</p>
+              <p style="text-align:right;">Email magic link. No password is stored.</p>
+            </div>
+            <div class="acct-access-row acct-access-action">
+              <div style="min-width:0;">
+                <p>Send new link</p>
+                <p class="acct-access-desc">Email a fresh sign-in link to <span id="access-signed-email">you</span>.</p>
+              </div>
+              <button class="btn-action ghost sm" id="send-new-link-btn" type="button" onclick="handleSendNewLink()">Send new link</button>
+            </div>
+            <p id="send-new-link-msg" class="acct-access-msg" role="status" aria-live="polite"></p>
+            <div class="acct-access-row acct-access-action">
+              <div style="min-width:0;">
+                <p>Local usage cache</p>
+                <p class="acct-access-desc">Clears disposable UI caches only. Your run count, identity and stored keys are kept.</p>
+              </div>
+              <button class="btn-action ghost sm" id="clear-cache-btn" type="button" onclick="handleClearCache()">Clear cache</button>
+            </div>
+            <div class="acct-access-row acct-access-action">
+              <div style="min-width:0;">
+                <p>Sign out of this device</p>
+                <p class="acct-access-desc">Ends the session here. Other devices keep their own session.</p>
+              </div>
+              <button class="btn-action ghost sm" id="sign-out-btn" type="button" onclick="handleSignOut()">Sign out</button>
+            </div>
+          </div>
+
+          <div class="acct-card acct-access acct-danger-zone">
+            <div class="acct-card-head">
+              <h2>Delete account</h2>
+              <span class="acct-meta">not available</span>
+            </div>
+            <p class="acct-danger-note">
+              Account deletion isn't available yet. There is no server-side deletion
+              contract in this build, so deleting would be a lie this surface can't tell.
+              Nothing is ever removed from a toast, a local clear, or this control.
+            </p>
+            <div class="acct-actions">
+              <button class="btn-action ghost sm" id="delete-account-btn" type="button" onclick="handleDeleteAccount()">Why can't I delete my account?</button>
+            </div>
+          </div>
         </div>
 
         <div id="auth-guest-usage" style="margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border);">
@@ -4259,6 +4321,27 @@
           <input id="signin-email-input" type="email" autocomplete="email" placeholder="you@example.com" class="signin-input" aria-describedby="signin-message signin-modal-description" onkeydown="if(event.key==='Enter') handleMagicLinkRequest()" />
           <button id="signin-submit-btn" onclick="handleMagicLinkRequest()" class="btn-action btn-run signin-submit">Send Sign-in Link</button>
           <p id="signin-message" class="signin-message" role="status" aria-live="polite" aria-atomic="true"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Account deletion unavailable (truthful, keyboard-discoverable; never destructive) -->
+    <div id="delete-unavailable-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeDeleteUnavailableModal" onclick="closeDeleteUnavailableModal(event)">
+      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:460px;">
+        <div style="padding:28px;">
+          <div class="flex items-start justify-between mb-4">
+            <h2 id="delete-unavailable-title" style="font-size:18px;font-weight:600;color:#131820;margin-bottom:4px;">Account deletion isn't available yet</h2>
+            <button onclick="closeDeleteUnavailableModal()" class="modal-close ml-4 flex-shrink-0"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg></button>
+          </div>
+          <p style="font-size:13.5px;line-height:1.6;color:#5a6270;margin:0 0 20px;">
+            Account deletion is not available yet. There is no server-side deletion contract
+            in this build, so nothing &mdash; account, subscription, or generation history &mdash;
+            could be deleted here. To ask us to close your account, contact support.
+            <strong>Nothing has been removed.</strong>
+          </p>
+          <div class="flex justify-end gap-3">
+            <button type="button" class="btn-action ghost sm" data-modal-initial-focus="true" onclick="closeDeleteUnavailableModal()">Got it</button>
+          </div>
         </div>
       </div>
     </div>

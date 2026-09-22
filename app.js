@@ -50,6 +50,12 @@ import {
   PLUS_ALIAS_REJECTED_CODE,
   trimEmail,
 } from "./src/authMagicLink.js";
+import {
+  clearDisposableUiCaches,
+  createSendLinkController,
+  isDeleteAccountSupported,
+  performSignOut,
+} from "./src/accountAccess.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import {
   deployOutcomeOfStreamResult,
@@ -4970,10 +4976,88 @@ async function handleMagicLinkRequest() {
 }
 
 function handleSignOut() {
-  clearSession()
-  clearSubscriptionCache()
-  updateAuthUI()
-  updateSubscriptionUI()
+  // Reset in-memory auth/subscription state first so the immediate re-render
+  // below reflects a signed-out identity/plan.
+  authState.email = null
+  authState.sessionToken = null
+  authState.isVerified = false
+  subscriptionState = createSubscriptionState({ isResolved: true })
+  // Remove the session + subscription cache keys (scoped adapter) and then
+  // synchronously re-render every identity/plan surface.
+  performSignOut({
+    storage: window.localStorage,
+    onIdentityChanged: updateAuthUI,
+    onPlanChanged: updateSubscriptionUI,
+  })
+}
+
+// --- ACCOUNT ACCESS & DATA WIRING (STU-387) ---
+// One "Send new link" controller guards against duplicate requests and reflects
+// the actual response or failure into the row's status line.
+const accessSendNewLink = createSendLinkController({
+  sendLink: sendMagicLink,
+  getEmail: () => authState.email || "",
+  onState: renderSendNewLinkState,
+})
+
+function renderSendNewLinkState(state) {
+  const btn = document.getElementById("send-new-link-btn")
+  const msg = document.getElementById("send-new-link-msg")
+  if (!btn || !msg) return
+  if (state.status === "pending") {
+    btn.disabled = true
+    btn.textContent = "Sending…"
+    msg.className = "acct-access-msg"
+    msg.textContent = "Sending a fresh sign-in link…"
+    return
+  }
+  if (state.status === "sent") {
+    btn.disabled = false
+    btn.textContent = "Send new link"
+    msg.className = "acct-access-msg"
+    msg.textContent = getMagicLinkResultMessage(state.data, authState.email || "") || "Link sent — check your email."
+    return
+  }
+  // status === "error": surface the real failure, never a canned success. The
+  // propagated Error carries a user-safe reason (e.g. "HTTP 429", "HTTP 500")
+  // rather than raw server internals, and a rate-limit must not read identically
+  // to a server error. Fall back to the generic copy only when no reason escaped.
+  btn.disabled = false
+  btn.textContent = "Send new link"
+  msg.className = "acct-access-msg error"
+  const reason = state.error?.message
+    ? `Couldn't send a link right now. ${state.error.message}`
+    : "Couldn't send a link right now. Please try again."
+  msg.textContent = reason
+}
+
+async function handleSendNewLink() {
+  await accessSendNewLink()
+}
+
+function handleClearCache() {
+  // Scoped to the named disposable UI caches only — never usage, identity,
+  // credentials, or the active session, so it cannot hand out new runs.
+  const removed = clearDisposableUiCaches(window.localStorage)
+  const detail = removed.length
+    ? `Cleared disposable UI caches: ${removed.join(", ")}.`
+    : "Nothing disposable to clear."
+  showToast(`${detail} Your run count, identity and stored keys are kept.`, "info")
+}
+
+function handleDeleteAccount() {
+  // Truthful: no backend deletion contract exists in this slice, so this control
+  // only explains that deletion is unavailable. It performs no deletion and
+  // never resets usage, identity, credentials, or the session.
+  if (isDeleteAccountSupported()) return
+  const modal = document.getElementById("delete-unavailable-modal")
+  if (modal) openModal(modal, { trigger: document.activeElement })
+}
+
+function closeDeleteUnavailableModal(event) {
+  if (event && event.target !== event.currentTarget) return
+  const modal = document.getElementById("delete-unavailable-modal")
+  if (modal) closeModal(modal)
 }
 
 function updateAuthUI() {
@@ -4986,6 +5070,8 @@ function updateAuthUI() {
   if (guestUsage) guestUsage.classList.toggle('hidden', signedIn)
   const emailEl = document.getElementById('auth-user-email')
   if (emailEl) emailEl.textContent = authState.email || ''
+  const accessEmailEl = document.getElementById('access-signed-email')
+  if (accessEmailEl) accessEmailEl.textContent = authState.email || ''
   updateGuestUsageCounter()
   updateSubscriptionUI()
 }
@@ -6864,6 +6950,10 @@ window.openSignInModal = openSignInModal;
 window.closeSignInModal = closeSignInModal;
 window.handleMagicLinkRequest = handleMagicLinkRequest;
 window.handleSignOut = handleSignOut;
+window.handleSendNewLink = handleSendNewLink;
+window.handleClearCache = handleClearCache;
+window.handleDeleteAccount = handleDeleteAccount;
+window.closeDeleteUnavailableModal = closeDeleteUnavailableModal;
 window.startCheckout = startCheckout;
 window.openCustomerPortal = openCustomerPortal;
 window.openPricingModal = openPricingModal;
