@@ -2127,7 +2127,7 @@ async function provisionMissingCodeFiles(
 ) {
   const missingCodeFiles = findMissingCodeFiles(fileMap, remoteFiles);
   if (missingCodeFiles.length === 0) {
-    return { remoteFiles, syncFileMap: fileMap, unverified: [], approximate: [] };
+    return { remoteFiles, syncFileMap: fileMap, unverified: [] };
   }
 
   // The runner compiles these against the project's own package versions
@@ -2150,14 +2150,6 @@ async function provisionMissingCodeFiles(
   // deploys, but the warning has to precede the mutation it describes.
   const unverified = verificationPlan.skipped.map((entry) => entry.reason);
   unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));
-
-  // Classes that do not import an unrepresentable package directly are still
-  // checked, but against a scratch graph that omits it. That approximation is
-  // disclosed here - before the push - and returned alongside `unverified`,
-  // so it reaches the deploy result and is never mistaken for a full-graph
-  // check.
-  const approximate = verificationPlan.approximate;
-  approximate.forEach((notice) => console.warn(`[custom class deploy] ${notice}`));
 
   console.log(
     `Provisioning ${missingCodeFiles.length} new FlutterFlow custom code file(s) before sync.`,
@@ -2200,7 +2192,6 @@ async function provisionMissingCodeFiles(
     remoteFiles,
     syncFileMap: excludeProvisionedCodeFiles(fileMap, missingCodeFiles),
     unverified,
-    approximate,
   };
 }
 
@@ -2893,7 +2884,6 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       message: `Successfully committed ${fileName} to FlutterFlow project ${projectId}`,
       addedDependencies: pubspecMerge.added,
       unverified: provisioning.unverified,
-      approximate: provisioning.approximate,
       warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
     };
   } catch (error) {
@@ -3067,7 +3057,6 @@ async function executeCommit(code, options = {}) {
         metadata,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
-        approximate: provisioning.approximate,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
         elapsedTime: commitState.getElapsedTime(),
       };
@@ -3232,7 +3221,6 @@ async function executeBundleCommit(bundlePlan, options = {}) {
         metadata,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
-        approximate: provisioning.approximate,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
         elapsedTime: commitState.getElapsedTime(),
       };
@@ -5400,23 +5388,17 @@ function showCommitSuccessModal(result) {
   const warningsSection = document.getElementById("success-warnings-section");
   const warningsList = document.getElementById("success-warnings-list");
   // A class that could not be compiled before the push is reported here rather
-  // than left implicit, so "deployed" never reads as "checked". A class that
-  // was compiled against a reduced package graph is reported beside it: the
-  // check ran, but approximately, and that has to stay visible too.
+  // than left implicit, so "deployed" never reads as "checked".
   const unverified = result.unverified || [];
-  const approximate = result.approximate || [];
   const fileWarnings = result.warnings || [];
   if (
-    (fileWarnings.length > 0 || unverified.length > 0 || approximate.length > 0) &&
+    (fileWarnings.length > 0 || unverified.length > 0) &&
     warningsSection &&
     warningsList
   ) {
     warningsList.innerHTML = [
       ...unverified.map((reason) =>
         `<li><span class="font-medium">Not verified before deploying:</span> ${escapeHtml(String(reason))}</li>`
-      ),
-      ...approximate.map((notice) =>
-        `<li><span class="font-medium">Verified approximately:</span> ${escapeHtml(String(notice))}</li>`
       ),
       ...fileWarnings.map(([file, errs]) =>
         `<li><span class="font-medium">${escapeHtml(file)}:</span> ${escapeHtml(String(errs))}</li>`
