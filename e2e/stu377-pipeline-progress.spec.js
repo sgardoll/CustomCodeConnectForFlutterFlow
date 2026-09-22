@@ -325,6 +325,49 @@ test.describe("Recoverable failure states", () => {
     await expect(failure(page).locator('button[data-action="retry"]')).toHaveCount(0);
     expect(generatorCalls).toBe(2);
   });
+
+  test("a retry re-sends the submitted images unchanged", async ({ page }) => {
+    await openHome(page);
+    // The image endpoint answers with the external URL the pipeline receives.
+    await page.route("**/service/runpipeline-image", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          { index: 0, work: { type: "external-url", file: "https://img.example/ref.png" } },
+        ]),
+      }),
+    );
+    const pipeline = await routePipelineStages(page, {
+      responses: { architect: providerError },
+    });
+
+    const uploadDone = page.waitForResponse("**/service/runpipeline-image");
+    await page.locator("#prompt-image-input").setInputFiles({
+      name: "ref.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("89504e470d0a1a0a", "hex"),
+    });
+    await uploadDone;
+    // The upload job commits its entry a tick after the response lands.
+    await page.waitForTimeout(150);
+
+    await page.locator("#pipeline-input").fill("A dial from the sketch");
+    await page.locator("#hero-send").click();
+    await expect(failure(page)).toBeVisible();
+
+    // The architect request carried the uploaded image URL.
+    expect(pipeline.bodies[0].images).toEqual([{ url: "https://img.example/ref.png" }]);
+
+    const firstAttemptBodies = pipeline.bodies.length;
+    await failure(page).locator('button[data-action="retry"]').click();
+    await expect(failure(page)).toBeVisible();
+
+    // The retry sent the images as submitted, not whatever the composer holds now.
+    expect(pipeline.bodies[firstAttemptBodies].images).toEqual([
+      { url: "https://img.example/ref.png" },
+    ]);
+  });
 });
 
 test.describe("Stateful transitions stay isolated per run", () => {
@@ -402,8 +445,10 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await page.locator("#btn-refine-header").click();
 
     await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
-    // Re-entering at stage 2 never paints the untouched Architect as done.
+    // Re-entering at stage 2 never paints the untouched Architect as done,
+    // and a stage that never ran is not selectable either.
     await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");
+    await expect(stage(page, 1)).toBeDisabled();
     await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
     await expect(stage(page, 3)).toHaveAttribute("data-state", "pending");
 

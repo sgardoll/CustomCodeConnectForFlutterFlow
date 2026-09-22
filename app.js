@@ -1387,9 +1387,10 @@ let pipelineState = {
   // run's UI state (e.g. a slow first request resolving after the user
   // already retried).
   runId: 0,
-  // The prompt as submitted, so a retry re-runs exactly what the user sent and
-  // an edit returns it to the composer unchanged.
+  // The prompt and images as submitted, so a retry re-runs exactly what the
+  // user sent and an edit returns them to the composer unchanged.
   submittedPrompt: "",
+  submittedImages: [],
 };
 
 function resetPipelineResults() {
@@ -3787,6 +3788,7 @@ async function runThinkingPipeline() {
     // Reset state
     resetPipelineResults();
     pipelineState.submittedPrompt = userInput;
+    pipelineState.submittedImages = promptImages.slice();
 
     setRunPipelineButtonBusy(true);
 
@@ -6054,7 +6056,8 @@ function setPipelineStageState(step, state) {
   const button = pipelineStageButton(step);
   if (!button) return;
   button.dataset.state = state;
-  button.disabled = state === "pending";
+  // A stage that never ran is reported as such; there is nothing to select.
+  button.disabled = state === "pending" || state === "skipped";
   const stageName = PIPELINE_STAGE_LABELS[step];
   const stateLabels = {
     pending: "not started",
@@ -6109,7 +6112,7 @@ function renderPipelineStatus(step, { done = false } = {}) {
  * reached are reachable, so the control can never report an invented state.
  */
 function selectPipelineStage(step) {
-  if (pipelineStageStates[step] === "pending") return;
+  if (pipelineStageStates[step] === "pending" || pipelineStageStates[step] === "skipped") return;
   pipelineSelectedStage = step;
   [1, 2, 3].forEach((candidate) => {
     const button = pipelineStageButton(candidate);
@@ -6301,6 +6304,11 @@ function showPipelineProgress(options = {}) {
   }
 
   pipelineStartTime = Date.now();
+  // The elapsed counter is the only time-driven element: start each run at
+  // zero rather than showing the previous run's final reading until the
+  // first tick lands.
+  const elapsedEl = document.getElementById("progress-elapsed");
+  if (elapsedEl) elapsedEl.textContent = "0s";
   pipelineStageStates = { 1: "pending", 2: "pending", 3: "pending" };
   clearPipelineStageSelection();
   hidePipelineFailure();
@@ -6449,6 +6457,8 @@ function retryPipelineRun() {
   if (input && pipelineState.submittedPrompt) {
     input.value = pipelineState.submittedPrompt;
   }
+  promptImages = pipelineState.submittedImages.slice();
+  renderPromptImages();
   hidePipelineFailure();
   runThinkingPipeline();
 }
