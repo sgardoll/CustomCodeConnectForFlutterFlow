@@ -6501,6 +6501,7 @@ window.openModelSelector = openModelSelector;
 window.handlePromptImageSelect = handlePromptImageSelect;
 window.removePromptImage = removePromptImage;
 window.saveApiKeys = saveApiKeys;
+window.validateFlutterFlowConnection = validateFlutterFlowConnection;
 window.clearAllApiKeys = clearAllApiKeys;
 window.toggleKeyVisibility = toggleKeyVisibility;
 window.handleWelcomeVideoEnd = handleWelcomeVideoEnd;
