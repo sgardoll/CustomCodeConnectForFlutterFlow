@@ -416,6 +416,60 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await expect(stage(page, 3)).toHaveAttribute("data-state", "done");
     await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");
   });
+
+  test("a failed refinement keeps a recoverable failure state and Retry re-runs the refinement", async ({ page }) => {
+    await openHome(page);
+    await routePipelineStages(page);
+
+    await page.locator("#pipeline-input").fill("A progress ring");
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+
+    // The refinement's generator call fails: the run must land on the
+    // persistent failure panel, not a transient toast and a blank stage.
+    await routePipelineStages(page, { responses: { generator: providerError } });
+    await page.locator("#btn-refine-header").click();
+
+    await expect(failure(page)).toBeVisible();
+    await expect(failure(page)).toHaveAttribute("data-kind", "generic");
+    await expect(failure(page).locator('button[data-action="retry"]')).toBeVisible();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "failed");
+    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
+    await expect(page.locator("#results-view")).not.toHaveClass(/visible/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+
+    // Well past the hide window the failure is still on screen — a toast
+    // alone would have left an empty stage behind.
+    await page.waitForTimeout(700);
+    await expect(failure(page)).toBeVisible();
+
+    // Retry re-enters the same refinement flow (Generator then Review), not
+    // a brand-new pipeline run from the Architect.
+    const retryRun = await routePipelineStages(page);
+    await failure(page).locator('button[data-action="retry"]').click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    expect(retryRun.bodies.map((body) => body.step)).toEqual(["generator", "review"]);
+  });
+
+  test("a failed pasted-errors regeneration keeps a recoverable failure state", async ({ page }) => {
+    await openHome(page);
+    await routePipelineStages(page);
+
+    await page.locator("#pipeline-input").fill("A dial");
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+
+    await routePipelineStages(page, { responses: { generator: providerError } });
+    await page.locator("#btn-error-regen-header").click();
+    await page.locator("#ff-error-paste-input").fill("Widget build failed: missing return");
+    await page.locator("#btn-fix-from-errors").click();
+
+    await expect(failure(page)).toBeVisible();
+    await expect(failure(page)).toHaveAttribute("data-kind", "generic");
+    await expect(failure(page).locator('button[data-action="retry"]')).toBeVisible();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "failed");
+    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
+  });
 });
 
 test.describe("Motion is decorative and settles safely", () => {

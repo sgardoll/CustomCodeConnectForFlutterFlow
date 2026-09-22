@@ -3582,8 +3582,21 @@ async function runRefinement() {
   } catch (error) {
     console.error("Refinement failed:", error);
     if (!isCurrentPipelineRun(runId)) return;
-    hidePipelineProgress();
-    showToast(getPipelineErrorMessage(error, "Refinement failed"), "error");
+
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    });
+
+    if (error.isUsageLimit) {
+      updateUsageDisplay();
+    }
+
+    selectWorkflowStep(errorStep);
+    showStepLoading(errorStep, false);
+    showPipelineFailure(error, { stage: errorStep, runId, retry: runRefinement });
+    updateStepIndicator(errorStep, "error");
   } finally {
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false;
@@ -3706,8 +3719,21 @@ async function regenerateFromPastedErrors() {
   } catch (error) {
     console.error("Fix from errors failed:", error)
     if (!isCurrentPipelineRun(runId)) return
-    hidePipelineProgress()
-    showToast(getPipelineErrorMessage(error, "Failed to fix errors"), "error")
+
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    })
+
+    if (error.isUsageLimit) {
+      updateUsageDisplay()
+    }
+
+    selectWorkflowStep(errorStep)
+    showStepLoading(errorStep, false)
+    showPipelineFailure(error, { stage: errorStep, runId, retry: regenerateFromPastedErrors })
+    updateStepIndicator(errorStep, "error")
   } finally {
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false
@@ -4154,8 +4180,25 @@ async function regenerateWithErrors(originalError, errorMap) {
   } catch (error) {
     console.error("Regeneration failed:", error);
     if (!isCurrentPipelineRun(runId)) return;
-    hidePipelineProgress();
-    showToast(getPipelineErrorMessage(error, "Regeneration failed"), "error");
+
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    });
+
+    if (error.isUsageLimit) {
+      updateUsageDisplay();
+    }
+
+    selectWorkflowStep(errorStep);
+    showStepLoading(errorStep, false);
+    showPipelineFailure(error, {
+      stage: errorStep,
+      runId,
+      retry: () => regenerateWithErrors(originalError, errorMap),
+    });
+    updateStepIndicator(errorStep, "error");
   } finally {
     if (isCurrentPipelineRun(runId)) {
       pipelineState.isRunning = false;
@@ -6301,7 +6344,7 @@ function completePipelineStage(step, runId) {
 }
 
 /** Render the persistent failure state for a terminated run. */
-function showPipelineFailure(error, { stage = 1, runId } = {}) {
+function showPipelineFailure(error, { stage = 1, runId, retry = retryPipelineRun } = {}) {
   if (!isCurrentPipelineRun(runId)) return;
 
   stopProgressTimer();
@@ -6348,7 +6391,7 @@ function showPipelineFailure(error, { stage = 1, runId } = {}) {
   // exhausted allowance will not change on a bare retry.
   const actions = [
     failure.canUpgrade && { id: "upgrade", label: "View plans", variant: "primary", onClick: () => openPricingModal() },
-    failure.canRetry && { id: "retry", label: "Retry", variant: failure.canUpgrade ? "secondary" : "primary", onClick: retryPipelineRun },
+    failure.canRetry && { id: "retry", label: "Retry", variant: failure.canUpgrade ? "secondary" : "primary", onClick: retry },
     failure.canEdit && { id: "edit", label: "Edit prompt", variant: "secondary", onClick: editPipelinePrompt },
   ].filter(Boolean);
   // A terminated run must always leave a way back to usable controls, even
