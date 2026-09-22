@@ -273,9 +273,87 @@ test.describe("STU-383 account overview", () => {
     );
   });
 
-  test("screenshots for desktop and mobile reference comparisons", async ({ page }) => {
-    // Captures the surfaces the criteria name — long email, zero/max usage and
-    // an unresolved subscription — at 1440x900 and 360x800 for reference diffing.
+  /**
+   * Seeds real stored FlutterFlow credentials into the same encrypted-at-rest
+   * format the app writes (AES-256-GCM under a session-migrated JWK) so the
+   * connected branch of the account connection card is exercised through the
+   * app's genuine decryption + render path, not a mocked DOM.
+   */
+  async function makeStoredCredentials() {
+    const key = await crypto.subtle.generateKey(
+      { name: "AES-GCM", length: 256 },
+      true,
+      ["encrypt", "decrypt"],
+    );
+    const jwk = await crypto.subtle.exportKey("jwk", key);
+    const encrypt = async (plaintext) => {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const data = new TextEncoder().encode(plaintext);
+      const buf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, data);
+      const combined = new Uint8Array(12 + buf.byteLength);
+      combined.set(iv);
+      combined.set(new Uint8Array(buf), 12);
+      return Buffer.from(combined).toString("base64");
+    };
+    return {
+      jwk: JSON.stringify(jwk),
+      apiKey: await encrypt("ff-live-key-123"),
+      projectId: await encrypt("demo-proj-9f2a"),
+    };
+  }
+
+  test("connection card renders the connected state from stored FlutterFlow credentials", async ({ page }) => {
+    const creds = await makeStoredCredentials();
+    await seedSession(page);
+    await page.addInitScript(({ jwk, apiKey, projectId }) => {
+      sessionStorage.setItem("ccc_encryption_key", jwk);
+      localStorage.setItem("ccc_api_key_flutterflow", apiKey);
+      localStorage.setItem("ccc_api_key_flutterflow_project_id", projectId);
+    }, creds);
+    await applyDefaultRoutes(page, {
+      ...refreshOverride(),
+      [ENDPOINTS.identity]: identityWithUsage({ email: undefined, count: 1 }),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+    });
+    await page.goto("/");
+    await openAccount(page);
+
+    // Both a key and a project are stored: the card reads as fully connected.
+    await expect(page.locator("#acct-ff-status")).toHaveText("Connected to FlutterFlow");
+    await expect(page.locator("#acct-ff-dot")).toHaveClass(/ok/);
+    await expect(page.locator("#acct-ff-project")).toHaveText("demo-proj-9f2a");
+    await expect(page.locator("#acct-ff-endpoint")).toHaveText("Production");
+  });
+
+  test("capture account screenshots for human visual review (layout asserted, pixels not compared)", async ({ page }) => {
+    // Human-review artifact: produces the account surfaces the criteria name —
+    // long email, zero/max usage and an unresolved subscription — at 1440x900
+    // and 360x800 as committed PNGs for a person to eyeball. No pixel diff is
+    // run here, so the name says so. The one genuine render gate below fails on
+    // a broken layout: the surface must lay out inside the viewport with no
+    // horizontal overflow and a positively-sized account card.
+    const assertAccountLayout = async () => {
+      await expect(page.locator("#account-view")).toBeVisible();
+      const layout = await page.evaluate(() => {
+        const card = document.querySelector("#account-view .account-card");
+        const cardRect = card ? card.getBoundingClientRect() : null;
+        return {
+          docScrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+          cardLeft: cardRect ? Math.round(cardRect.left) : null,
+          cardRight: cardRect ? Math.round(cardRect.right) : null,
+          cardHeight: cardRect ? Math.round(cardRect.height) : 0,
+        };
+      });
+      expect(layout.cardHeight, "account card must render non-empty").toBeGreaterThan(0);
+      expect(
+        layout.docScrollWidth,
+        "no horizontal overflow on the account view",
+      ).toBeLessThanOrEqual(layout.clientWidth);
+      expect(layout.cardRight, "account card must stay inside the viewport right edge")
+        .toBeLessThanOrEqual(layout.clientWidth);
+    };
+
     const scenarios = [
       {
         name: "professional-31-50-long-email",
@@ -304,6 +382,7 @@ test.describe("STU-383 account overview", () => {
         });
         await page.goto("/");
         await openAccount(page);
+        await assertAccountLayout();
         await page.screenshot({ path: `${outDir}/account-${s.name}-${viewport.name}.png`, fullPage: true });
       }
       // Unresolved subscription reference.
@@ -318,6 +397,7 @@ test.describe("STU-383 account overview", () => {
       await page.goto("/", { waitUntil: "domcontentloaded" });
       await openAccount(page);
       await expect(page.locator("#acct-plan-tier")).toHaveText("Plan unavailable");
+      await assertAccountLayout();
       await page.screenshot({ path: `${outDir}/account-unresolved-${viewport.name}.png`, fullPage: true });
     }
   });

@@ -3045,6 +3045,11 @@
       /* Mobile compact */
       @media (max-width: 920px) {
         .acct-grid { grid-template-columns: 1fr; }
+        /* The connection row's Configure button is non-shrinking (flex: none);
+           on narrow screens the long status text pushes it past the viewport,
+           so drop it onto its own full-width line instead. */
+        .acct-conn-row { flex-wrap: wrap; }
+        .acct-conn-row .btn-action { flex: 1 1 100%; }
       }
       @media (max-width: 920px) {
         .hero { padding: 24px 16px 28px; }
@@ -3346,7 +3351,7 @@
       <div class="surface-card account-card" style="background:var(--surface-translucent);">
         <header class="acct-head">
           <p class="acct-eyebrow">Account</p>
-          <h1 class="acct-title">Your workspace, in one place.</h1>
+          <h2 class="acct-title">Your workspace, in one place.</h2>
           <p class="acct-lead">Who you are signed in as, how much of your plan you have used this period, and what is connected to FlutterFlow.</p>
         </header>
 
