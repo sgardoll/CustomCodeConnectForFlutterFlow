@@ -76,16 +76,17 @@ function collect(declared, into, sdkPackages) {
       continue;
     }
 
-    // A block-form entry's first own-key says where the package comes from.
-    // `sdk:` is the Flutter SDK, which the runner reproduces from the name
-    // alone as `name: {sdk: flutter}`. A nested `version:` is simply a
-    // constraint written on its own line.
+    // A block-form entry's own keys say where the package comes from, in
+    // whatever order YAML allows. `sdk:` is the Flutter SDK, which the runner
+    // reproduces from the name alone as `name: {sdk: flutter}`. A mapping
+    // whose only own key is `version:` is a normal pub.dev dependency with
+    // its constraint written on its own line.
     if (info.sourceKey === "sdk") {
       sdkPackages.add(name);
       continue;
     }
-    if (info.sourceKey === "version") {
-      into[name] = unquoteConstraint(info.sourceValue);
+    if (info.sourceKey === null && info.version) {
+      into[name] = unquoteConstraint(info.version);
       continue;
     }
 
