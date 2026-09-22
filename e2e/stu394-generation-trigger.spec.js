@@ -54,16 +54,27 @@ test.describe("Generation trigger (STU-394)", () => {
     await page.goto("/");
   });
 
-  test("clicking Generate starts a run instead of throwing", async ({ page }) => {
+  test("clicking Generate starts a real run instead of throwing", async ({ page }) => {
     const pageErrors = [];
     page.on("pageerror", (error) => pageErrors.push(error.message));
+
+    // The busy state alone only proves execution reached the button setup; a
+    // caught failure before the request would still set it and still be
+    // restored by the finally block. Count actual pipeline requests so the
+    // test fails unless generation was genuinely asked for.
+    const pipelineRequests = [];
+    page.on("request", (request) => {
+      if (request.url() === ENDPOINTS.pipeline) pipelineRequests.push(request.url());
+    });
 
     await observeSendBusy(page);
     await page.fill("#pipeline-input", PROMPT);
     await page.click("#hero-send");
 
-    // The run must genuinely have begun...
+    // The run must genuinely have begun: the control goes busy...
     await expect.poll(() => sendBusySeen(page)).toBe(true);
+    // ...and the pipeline is actually requested.
+    await expect.poll(() => pipelineRequests.length).toBeGreaterThan(0);
 
     // ...without an uncaught error, and without needing the element the
     // redesign deleted.
