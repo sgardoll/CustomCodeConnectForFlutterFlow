@@ -32,6 +32,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,300&family=DM+Mono:wght@400;500&family=Outfit:wght@200;300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/designTokens.css" />
+    <link rel="stylesheet" href="/src/sharedControls.css" />
     <style>
       :root {
         /* Layout constants preserved until the shell change that owns them. */
@@ -2792,7 +2793,7 @@
     </div>
 
     <!-- API Keys Modal -->
-    <div id="api-keys-modal" class="modal-overlay" onclick="closeApiKeysModal(event)">
+    <div id="api-keys-modal" class="modal-overlay" data-modal-close-handler="closeApiKeysModal" onclick="closeApiKeysModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="display:flex; flex-direction:column; max-height:calc(100vh - 64px);">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
           <h2 class="font-semibold text-base text-gray-900">API Keys</h2>
@@ -2860,7 +2861,7 @@
     </div>
 
     <!-- Walkthrough Modal -->
-    <div id="walkthrough-modal" class="modal-overlay" onclick="closeWalkthroughModal(event)">
+    <div id="walkthrough-modal" class="modal-overlay" data-modal-close-handler="closeWalkthroughModal" onclick="closeWalkthroughModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 640px; padding: 0; overflow: hidden;">
 
         <!-- Header -->
@@ -2967,7 +2968,7 @@
     </div>
 
     <!-- Commit Confirmation Modal -->
-    <div id="commit-confirm-modal" class="modal-overlay" onclick="closeCommitConfirmModal(event)">
+    <div id="commit-confirm-modal" class="modal-overlay" data-modal-close-handler="closeCommitConfirmModal" onclick="closeCommitConfirmModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 620px;">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 class="font-semibold text-base text-gray-900">Confirm Commit to FlutterFlow</h2>
@@ -3019,7 +3020,7 @@
     </div>
 
     <!-- Commit Success Modal -->
-    <div id="commit-success-modal" class="modal-overlay" onclick="closeCommitSuccessModal(event)">
+    <div id="commit-success-modal" class="modal-overlay" data-modal-close-handler="closeCommitSuccessModal" onclick="closeCommitSuccessModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width:480px;">
         <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 class="font-semibold text-base text-green-600 flex items-center gap-2">
@@ -3059,7 +3060,7 @@
     </div>
 
     <!-- Sign In Modal -->
-    <div id="signin-modal" class="modal-overlay" onclick="closeSignInModal(event)">
+    <div id="signin-modal" class="modal-overlay" data-modal-close-handler="closeSignInModal" onclick="closeSignInModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width:420px;">
         <div style="padding:32px;">
           <div class="flex items-start justify-between mb-5">
@@ -3077,7 +3078,7 @@
     </div>
 
     <!-- Pricing Modal -->
-    <div id="pricing-modal" class="modal-overlay" onclick="closePricingModal(event)">
+    <div id="pricing-modal" class="modal-overlay" data-modal-close-handler="closePricingModal" onclick="closePricingModal(event)">
       <div class="modal-content pm-inner" onclick="event.stopPropagation()" style="max-width:720px;">
 
         <!-- Header -->

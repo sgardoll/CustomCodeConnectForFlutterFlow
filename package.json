@@ -14,6 +14,7 @@
     "test:proxies": "php scripts/test-proxy-allowlist.php",
     "test:deploy-guard": "python3 scripts/test-deploy-guard.py",
     "test:key-storage": "npm run build && node scripts/test-key-storage.mjs",
+    "test:accessibility": "npm run build && node scripts/test-accessible-modals.mjs",
     "verify:buildship-mcp": "node scripts/verify-buildship-mcp.mjs",
     "audit:widget": "node scripts/audit-ff-widget.mjs"
   },

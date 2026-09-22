@@ -1,5 +1,11 @@
 import posthog from "posthog-js";
 import {
+  closeModal,
+  initializeModalShells,
+  openModal,
+  setModalPending,
+} from "./src/sharedControls.js";
+import {
   getPrimaryArtifact,
   normalizeArtifactBundle,
 } from "./src/artifactBundle.js";
@@ -934,7 +940,7 @@ async function initializeApiKeys() {
 
 function openApiKeysModal() {
   const modal = document.getElementById("api-keys-modal");
-  modal.classList.add("open");
+  openModal(modal);
 
   // Load current keys into inputs (masked)
   loadApiKeyInputs();
@@ -950,13 +956,13 @@ function closeApiKeysModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("api-keys-modal");
   if (modal) {
-    modal.classList.remove("open");
+    closeModal(modal);
   }
   // Show walkthrough again after closing API keys
   const walkthroughModal = document.getElementById("walkthrough-modal");
   if (walkthroughModal) {
     advanceWalkthrough();
-    walkthroughModal.classList.add("open");
+    openModal(walkthroughModal);
   }
 }
 
@@ -1022,7 +1028,7 @@ function openWalkthroughModal() {
   if (modal) {
     walkthroughStep = 1;
     updateWalkthroughUI();
-    modal.classList.add("open");
+    openModal(modal);
   }
 }
 
@@ -1030,7 +1036,7 @@ function closeWalkthroughModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("walkthrough-modal");
   if (modal) {
-    modal.classList.remove("open");
+    closeModal(modal);
   }
 
   const dontShow = document.getElementById("walkthrough-dont-show");
@@ -1049,7 +1055,7 @@ function showWalkthroughIfNeeded() {
     if (modal) {
       walkthroughStep = 1;
       updateWalkthroughUI();
-      modal.classList.add("open");
+      openModal(modal);
     }
   }
 }
@@ -4259,13 +4265,13 @@ async function initializeAuth() {
 
 function openSignInModal() {
   const modal = document.getElementById('signin-modal')
-  if (modal) modal.classList.add('open')
+  if (modal) openModal(modal)
 }
 
 function closeSignInModal(event) {
   if (event && event.target !== event.currentTarget) return
   const modal = document.getElementById('signin-modal')
-  if (modal) modal.classList.remove('open')
+  if (modal) closeModal(modal)
 }
 
 async function handleMagicLinkRequest() {
@@ -4537,7 +4543,7 @@ function hidePaywallExhausted() {
 
 function showPaywallExhausted(count, limit, options = {}) {
   const walkthroughModal = document.getElementById('walkthrough-modal')
-  if (walkthroughModal) walkthroughModal.classList.remove('open')
+  if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
 
   const readyState = document.getElementById('ready-state')
   if (readyState) readyState.classList.add('hidden')
@@ -4993,14 +4999,14 @@ function updatePricingDisplay() {
 function openPricingModal() {
   updatePricingDisplay()
   const modal = document.getElementById('pricing-modal')
-  if (modal) modal.classList.add('open')
+  if (modal) openModal(modal)
   fetchAudExchangeRates().then(() => updatePricingDisplay())
 }
 
 function closePricingModal(event) {
   if (event && event.target !== event.currentTarget) return
   const modal = document.getElementById('pricing-modal')
-  if (modal) modal.classList.remove('open')
+  if (modal) closeModal(modal)
 }
 
 function showToast(message, type = 'info') {
@@ -5018,6 +5024,8 @@ function showToast(message, type = 'info') {
 // --- INITIALIZATION ---
 
 document.addEventListener("DOMContentLoaded", async () => {
+  initializeModalShells();
+
   // Initialize highlight.js
   hljs.configure({
     tabReplace: "  ",
@@ -5065,7 +5073,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     pipelineInput.addEventListener("blur", () => {
       const walkthroughModal = document.getElementById("walkthrough-modal");
       if (walkthroughStep === 2 && walkthroughModal) {
-        walkthroughModal.classList.add("open");
+        openModal(walkthroughModal);
       }
     });
 
@@ -5074,7 +5082,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const walkthroughModal = document.getElementById("walkthrough-modal");
         if (walkthroughStep === 2 && walkthroughModal) {
           setTimeout(() => {
-            walkthroughModal.classList.add("open");
+            openModal(walkthroughModal);
           }, 100);
         }
       }
@@ -5261,7 +5269,7 @@ function openCommitConfirmModal(codeInfo, checks, deps, bundlePlan = null) {
 
   const modal = document.getElementById("commit-confirm-modal");
   if (modal) {
-    modal.classList.add("open");
+    openModal(modal);
   }
 }
 
@@ -5273,7 +5281,7 @@ function closeCommitConfirmModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("commit-confirm-modal");
   if (modal) {
-    modal.classList.remove("open");
+    closeModal(modal);
   }
   pendingCommitData = null;
 }
@@ -5286,7 +5294,7 @@ function closeCommitSuccessModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("commit-success-modal");
   if (modal) {
-    modal.classList.remove("open");
+    closeModal(modal);
   }
 
   // Reset success fields
@@ -5363,7 +5371,7 @@ function showCommitSuccessModal(result) {
   }
 
   const modal = document.getElementById("commit-success-modal");
-  if (modal) modal.classList.add("open");
+  if (modal) openModal(modal);
 }
 
 function showCommitFailureModal(result) {
@@ -5443,7 +5451,10 @@ const commitProgress = {
     this.sequence.push("package", "push", "done");
 
     const overlay = document.getElementById("commit-progress-overlay");
-    if (overlay) overlay.classList.add("open");
+    if (overlay) {
+      setModalPending(overlay, true, "Deploying to FlutterFlow");
+      openModal(overlay);
+    }
 
     this.set("prepare");
   },
@@ -5519,7 +5530,10 @@ const commitProgress = {
     this.timer = null;
     this.phaseId = null;
     const overlay = document.getElementById("commit-progress-overlay");
-    if (overlay) overlay.classList.remove("open");
+    if (overlay) {
+      setModalPending(overlay, false);
+      closeModal(overlay, { force: true, restoreFocus: false });
+    }
   },
 };
 
@@ -5716,6 +5730,7 @@ window.handleWelcomeVideoEnd = handleWelcomeVideoEnd;
 window.dismissWelcomeVideo = dismissWelcomeVideo;
 window.initiateCommitToFlutterFlow = initiateCommitToFlutterFlow;
 window.updateFlutterFlowCredentialStatus = updateFlutterFlowCredentialStatus;
+window.openCommitConfirmModal = openCommitConfirmModal;
 window.closeCommitConfirmModal = closeCommitConfirmModal;
 window.closeCommitSuccessModal = closeCommitSuccessModal
 window.showCommitSuccessModal = showCommitSuccessModal
@@ -6259,7 +6274,7 @@ function showDebugMultiArtifactResults() {
   const paywallEl = document.getElementById("paywall-exhausted");
   if (paywallEl) paywallEl.classList.add("hidden");
   const walkthroughModal = document.getElementById("walkthrough-modal");
-  if (walkthroughModal) walkthroughModal.classList.remove("open");
+  if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false });
   const readyState = document.getElementById("ready-state");
   if (readyState) readyState.classList.add("hidden");
   const stageContainer = document.getElementById("main-stage-container");
