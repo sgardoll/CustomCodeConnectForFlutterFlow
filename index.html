@@ -34,6 +34,7 @@
     <link rel="stylesheet" href="/src/designTokens.css" />
     <link rel="stylesheet" href="/src/sharedControls.css" />
     <link rel="stylesheet" href="/src/heroMarkField.css" />
+    <link rel="stylesheet" href="/src/logoMotion.css" />
     <style>
       :root {
         /* Layout constants preserved until the shell change that owns them. */
@@ -3464,6 +3465,16 @@
 
             <!-- Pipeline Progress View -->
             <div id="pipeline-progress" class="pipeline-progress">
+              <!-- Decorative authored two-piece mark loop (STU-390); never
+                   gates completion - progress depends only on backend events. -->
+              <div class="pipeline-glyph logo-loop" aria-hidden="true">
+                <span class="loop-shadow"></span>
+                <span class="loop-mark">
+                  <span class="loop-halo"></span>
+                  <span class="loop-piece loop-piece-a"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z"></path></svg></span>
+                  <span class="loop-piece loop-piece-b"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" transform="rotate(180 22 22)"></path></svg></span>
+                </span>
+              </div>
               <div class="pipeline-prompt-recap">
                 <p class="pipeline-prompt-kicker">Your prompt</p>
                 <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
