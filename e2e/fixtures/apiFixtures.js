@@ -9,13 +9,16 @@
  * `routeFulfill(page, urlPattern, fixture)`.
  *
  * Routing policy (see applyDefaultRoutes): fixture responses are fulfilled,
- * static assets index.html references are fulfilled with inert stubs, and
- * only same-origin requests served by the local Vite dev server — plus the
- * SRI-pinned static scripts the app needs at load — reach the network. Every
- * other request is aborted, so an un-fixtured external call — a paid
- * generation, a real project write, a newly added endpoint — fails the test
- * loudly instead of silently escaping to the network.
+ * static assets index.html references are fulfilled with inert stubs,
+ * SRI-pinned static assets are fulfilled with byte-identical vendored copies
+ * from ./vendor/, and the only requests that reach the network are the
+ * same-origin ones served by the local Vite dev server. Every other request
+ * is aborted, so an un-fixtured external call — a paid generation, a real
+ * project write, a newly added endpoint — fails the test loudly instead of
+ * silently escaping to the network.
  */
+
+import { readFileSync } from "node:fs";
 
 const BUILDSHIP_BASE_URL = "https://4tgke4.buildship.run";
 const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}/service/runpipeline`;
@@ -317,17 +320,51 @@ const STATIC_ASSET_STUBS = [
 ];
 
 // The third-party static assets index.html references WITH a Subresource
-// Integrity attribute. A fulfilled stub can never match the pinned digest —
-// the browser blocks it with a console error — and app.js functionally needs
-// FingerprintJS to resolve identity, so these are the ONLY external requests
-// allowed through to the network. Each is pinned to an exact version and
-// verified byte-for-byte by the browser's SRI check.
-const SRI_PINNED_ASSET_PREFIXES = [
-  "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/dart.min.js",
-  "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css",
-  "https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4.6.2/dist/fp.umd.min.js",
+// Integrity attribute. A stub can never match the pinned digest — the
+// browser blocks it with a console error — and app.js needs FingerprintJS
+// during page initialization, so these are fulfilled from byte-identical
+// local copies in ./vendor/. Because the bytes equal the pinned versions,
+// the browser's SRI check passes, the app loads exactly the production
+// code, and no request leaves the machine.
+//
+// Regenerate a vendored copy only when index.html pins a new version:
+// download the exact pinned URL, then verify the digest against the
+// integrity attribute index.html pins for it and stop on any mismatch.
+//
+//   curl -fsSL -o e2e/fixtures/vendor/jszip-3.10.1.min.js \
+//     https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
+//   curl -fsSL -o e2e/fixtures/vendor/highlight-11.9.0.min.js \
+//     https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js
+//   curl -fsSL -o e2e/fixtures/vendor/highlight-dart-11.9.0.min.js \
+//     https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/dart.min.js
+//   curl -fsSL -o e2e/fixtures/vendor/highlight-github-dark-11.9.0.css \
+//     https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css
+//   curl -fsSL -o e2e/fixtures/vendor/fingerprintjs-4.6.2.min.js \
+//     https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4.6.2/dist/fp.umd.min.js
+//
+// SRI check — sha512 for jszip, sha384 for the rest:
+//   openssl dgst -sha384 -binary < e2e/fixtures/vendor/highlight-11.9.0.min.js \
+//     | openssl base64 -A
+//   openssl dgst -sha512 -binary < e2e/fixtures/vendor/jszip-3.10.1.min.js \
+//     | openssl base64 -A
+function vendoredAsset(fileName, contentType) {
+  return {
+    status: 200,
+    body: readFileSync(new URL(`./vendor/${fileName}`, import.meta.url)),
+    contentType,
+  };
+}
+
+// [urlPrefix, response] pairs for the SRI-pinned assets, matched by prefix
+// like STATIC_ASSET_STUBS so URL normalization or query strings cannot
+// dodge a match. The bodies are raw Buffers read once at module load —
+// byte-identical to the vendored files and to the pinned digests.
+const VENDORED_SRI_ASSETS = [
+  ["https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", vendoredAsset("jszip-3.10.1.min.js", "application/javascript")],
+  ["https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js", vendoredAsset("highlight-11.9.0.min.js", "application/javascript")],
+  ["https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/dart.min.js", vendoredAsset("highlight-dart-11.9.0.min.js", "application/javascript")],
+  ["https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css", vendoredAsset("highlight-github-dark-11.9.0.css", "text/css")],
+  ["https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@4.6.2/dist/fp.umd.min.js", vendoredAsset("fingerprintjs-4.6.2.min.js", "application/javascript")],
 ];
 
 /**
@@ -340,10 +377,10 @@ const SRI_PINNED_ASSET_PREFIXES = [
  *    fulfilled — the only API responses a test ever sees.
  * 2. A static third-party asset from index.html is fulfilled with an inert
  *    stub, so a page load makes no unnecessary external requests.
- * 3. An SRI-pinned static asset from index.html continues: a stub cannot
- *    match the pinned digest and the app needs FingerprintJS at load, so
- *    these version-locked, hash-verified assets are the only external
- *    requests allowed through.
+ * 3. An SRI-pinned static asset from index.html is fulfilled with its
+ *    byte-identical copy vendored in ./vendor/: the bytes match the pinned
+ *    digest, so the browser's SRI check passes and the app loads the same
+ *    code as in production — without touching the network.
  * 4. A same-origin request is served by the local Vite dev server — the
  *    document, ES modules, Vite internals and public assets — and continues.
  *    Paths under /api are the exception: vite.config.js proxies them to real
@@ -387,11 +424,11 @@ export async function applyDefaultRoutes(page, overrides = {}) {
       return;
     }
 
-    const isSriPinnedAsset = SRI_PINNED_ASSET_PREFIXES.some((urlPrefix) =>
+    const vendoredAsset = VENDORED_SRI_ASSETS.find(([urlPrefix]) =>
       requestUrl.startsWith(urlPrefix),
     );
-    if (isSriPinnedAsset) {
-      await route.continue();
+    if (vendoredAsset) {
+      await route.fulfill(vendoredAsset[1]);
       return;
     }
 
