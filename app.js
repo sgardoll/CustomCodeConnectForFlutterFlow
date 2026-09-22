@@ -6438,29 +6438,34 @@ function selectResultsSummary() {
 // Test/diagnostic hook used by the browser suite to render an arbitrary
 // bundle + review without running paid generation. Mirrors the debug path so
 // the Results Summary / artifact inspection surfaces can be asserted in
-// isolation. Not part of the normal pipeline flow.
-function renderResultsPreview(bundle, review) {
-  const readyState = document.getElementById("ready-state");
-  if (readyState) readyState.classList.add("hidden");
-  const stageContainer = document.getElementById("main-stage-container");
-  if (stageContainer) stageContainer.classList.add("visible");
-  hidePipelineProgress?.();
-  const paywallEl = document.getElementById("paywall-exhausted");
-  if (paywallEl) paywallEl.classList.add("hidden");
+// isolation. Gated on import.meta.env.DEV so the hook (and its ability to
+// force the results view with arbitrary content) is tree-shaken out of the
+// production bundle: it exists only under the Vite dev server, which is what
+// the Playwright suite runs against.
+if (import.meta.env.DEV) {
+  function renderResultsPreview(bundle, review) {
+    const readyState = document.getElementById("ready-state");
+    if (readyState) readyState.classList.add("hidden");
+    const stageContainer = document.getElementById("main-stage-container");
+    if (stageContainer) stageContainer.classList.add("visible");
+    hidePipelineProgress?.();
+    const paywallEl = document.getElementById("paywall-exhausted");
+    if (paywallEl) paywallEl.classList.add("hidden");
 
-  pipelineState.step3Result = typeof review === "string" ? review : JSON.stringify(review);
-  pipelineState.step2Result = typeof bundle === "string" ? bundle : JSON.stringify(bundle);
-  pipelineState.artifactBundle = normalizeArtifactBundle(bundle, {
-    id: bundle?.id,
-    title: bundle?.title,
-    description: bundle?.description,
-  });
-  pipelineState.bundleSpec = pipelineState.artifactBundle;
-  updateBundleReviewFromReviewResult();
-  pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
-  showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
+    pipelineState.step3Result = typeof review === "string" ? review : JSON.stringify(review);
+    pipelineState.step2Result = typeof bundle === "string" ? bundle : JSON.stringify(bundle);
+    pipelineState.artifactBundle = normalizeArtifactBundle(bundle, {
+      id: bundle?.id,
+      title: bundle?.title,
+      description: bundle?.description,
+    });
+    pipelineState.bundleSpec = pipelineState.artifactBundle;
+    updateBundleReviewFromReviewResult();
+    pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
+    showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
+  }
+  window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
 }
-window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
 
 function copyResultsCode() {
   const btn = document.getElementById("btn-copy-results");
