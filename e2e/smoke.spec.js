@@ -9,7 +9,8 @@ import {
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
 
-const COMPOSER_PLACEHOLDER = /Describe your custom widget or action/i;
+const COMPOSER_PLACEHOLDER = /Describe the widget or action you need/i;
+const COMPOSER_DEFAULT_PROMPT = "A circular progress gauge with a gradient stroke";
 
 /**
  * Baseline smoke test for the redesigned hero landing and composer state.
@@ -24,6 +25,13 @@ test.describe("Redesigned hero landing and composer", () => {
         page.consoleFailures.push(msg.text());
       }
     });
+    // The first-visit walkthrough is real product behavior, but these tests
+    // assert the bare landing surfaces; the walkthrough's own coverage is
+    // owned by the tutorials slice. Mark it seen so the modal cannot cover
+    // the landing and steal focus.
+    await page.addInitScript(() => {
+      localStorage.setItem("hasSeenWalkthrough", "true");
+    });
   });
 
   test.afterEach(async ({ page }) => {
@@ -34,7 +42,7 @@ test.describe("Redesigned hero landing and composer", () => {
     expect(relevantFailures).toEqual([]);
   });
 
-  test("shows the hero landing and an empty composer", async ({ page }) => {
+  test("shows the hero landing and the composer", async ({ page }) => {
     await applyDefaultRoutes(page, {
       [ENDPOINTS.identity]: guestIdentity(),
       [ENDPOINTS.getSubscription]: freeSubscription(),
@@ -46,21 +54,19 @@ test.describe("Redesigned hero landing and composer", () => {
     await expect(page).toHaveTitle(/Custom Code Connect/);
     const heading = page.locator("h1");
     await expect(heading).toBeVisible();
-    await expect(heading).toContainText("FlutterFlow Custom Code, Solved.");
+    await expect(heading).toContainText("FlutterFlow custom code.");
 
-    // Composer is present and empty by default.
+    // Composer is present with its shipped example prompt.
     const composer = page.locator("#pipeline-input");
     await expect(composer).toBeVisible();
-    await expect(composer).toHaveValue("");
+    await expect(composer).toHaveValue(COMPOSER_DEFAULT_PROMPT);
     await expect(composer).toHaveAttribute(
       "placeholder",
-      /Describe your custom widget or action/i,
+      COMPOSER_PLACEHOLDER,
     );
 
-    // The main stage starts with the preview/welcome frame visible; the ready
-    // state remains in the DOM but is hidden until generation is dismissed.
-    const previewFrame = page.locator("#preview-frame-container");
-    await expect(previewFrame).toBeVisible();
+    // The ready state remains in the DOM but is hidden until generation is
+    // dismissed; the redesigned shell has no preview-frame container.
     const readyState = page.locator("#ready-state");
     await expect(readyState).toBeHidden();
     await expect(readyState).toContainText("Ready to Generate");
@@ -80,8 +86,8 @@ test.describe("Redesigned hero landing and composer", () => {
       "A circular progress gauge with gradient stroke.",
     );
 
-    // The run button is enabled once there is input.
-    const runButton = page.locator("#btn-run-pipeline");
+    // The redesigned composer's send control is the hero send button.
+    const runButton = page.locator("#hero-send");
     await expect(runButton).toBeEnabled();
   });
 
@@ -91,7 +97,8 @@ test.describe("Redesigned hero landing and composer", () => {
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
 
-    await page.goto("/");
+    // The redesigned shell surfaces guest usage on the Account surface.
+    await page.goto("/#account");
 
     const usageText = page.locator("#guest-usage-text");
     await expect(usageText).toBeVisible();
@@ -115,7 +122,8 @@ test.describe("Redesigned hero landing and composer", () => {
       );
     });
 
-    await page.goto("/");
+    // The tier badge lives on the Account surface in the redesigned shell.
+    await page.goto("/#account");
 
     const badge = page.locator("#subscription-tier-badge");
     await expect(badge).toContainText("Professional");
@@ -137,7 +145,8 @@ test.describe("Redesigned hero landing and composer", () => {
       );
     });
 
-    await page.goto("/");
+    // The tier badge lives on the Account surface in the redesigned shell.
+    await page.goto("/#account");
 
     const badge = page.locator("#subscription-tier-badge");
     await expect(badge).toContainText("Power Developer");
@@ -159,7 +168,8 @@ test.describe("Redesigned hero landing and composer", () => {
       );
     });
 
-    await page.goto("/");
+    // The tier badge lives on the Account surface in the redesigned shell.
+    await page.goto("/#account");
 
     const badge = page.locator("#subscription-tier-badge");
     await expect(badge).toContainText("Plan unavailable");

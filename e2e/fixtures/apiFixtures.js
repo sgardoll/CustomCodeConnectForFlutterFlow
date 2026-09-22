@@ -308,6 +308,20 @@ const INERT_DOCUMENT = {
   body: "<!doctype html><html><body></body></html>",
   contentType: "text/html; charset=utf-8",
 };
+const INERT_JSON = { status: 200, body: "{}", contentType: "application/json" };
+
+// Analytics must never leave the machine either, but unlike an un-fixtured
+// product endpoint it is not a failure of the journey: a checkout with a real
+// VITE_PUBLIC_POSTHOG_KEY in .env still initializes PostHog at load, and
+// aborting those requests surfaces as console errors that fail the smoke
+// suite's console assertion. Analytics requests are therefore stubbed inertly
+// — an empty script for the loader, an empty object for every API call — so
+// the app's analytics stays quiet and nothing reaches the network.
+const POSTHOG_PREFIXES = [
+  "https://us-assets.i.posthog.com/",
+  "https://us.i.posthog.com/",
+];
+
 
 // [urlPrefix, response] pairs for exactly the third-party assets index.html
 // loads at page load without SRI. Matched by prefix so URL normalization
@@ -415,6 +429,15 @@ export async function applyDefaultRoutes(page, overrides = {}) {
     const fixture = routes[requestUrl];
     if (fixture) {
       await route.fulfill(typeof fixture === "function" ? fixture() : fixture);
+      return;
+    }
+
+    if (
+      POSTHOG_PREFIXES.some((urlPrefix) => requestUrl.startsWith(urlPrefix))
+    ) {
+      await route.fulfill(
+        requestUrl.endsWith(".js") ? INERT_SCRIPT : INERT_JSON,
+      );
       return;
     }
 
