@@ -1108,11 +1108,7 @@ function updateDeployButtonVisibility() {
     pipelineState.step2Result && pipelineState.step2Result.length > 0;
 
   const deployBtn = document.getElementById("btn-deploy-to-ff");
-  const runBtn = document.getElementById("btn-run-pipeline");
 
-  // Run Pipeline stays visible next to Deploy so a generation can be restarted
-  // without closing the results.
-  if (runBtn) runBtn.classList.remove("hidden");
   if (deployBtn) {
     deployBtn.classList.toggle("hidden", !hasGeneratedCode);
   }
@@ -3702,17 +3698,20 @@ async function runThinkingPipeline() {
     inputLength: userInput.length
   });
 
-  const btn = document.getElementById("btn-run-pipeline");
+  // The redesign replaced the legacy Run Pipeline button with the hero send
+  // control. That button carries its own busy affordance in CSS (.send.is-busy
+  // swaps the arrow for a spinner), so we toggle the class rather than
+  // rewriting the button's markup.
+  const btn = document.getElementById("hero-send");
 
   // Reset state
   pipelineState.isRunning = true;
   resetPipelineResults();
 
-  btn.disabled = true;
-  btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-  </svg>
-  Running...`;
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add("is-busy");
+  }
 
   // Update model info
   updateModelInfo(effectiveModel);
@@ -3860,11 +3859,10 @@ async function runThinkingPipeline() {
     updateStepIndicator(errorStep, "error");
   } finally {
     pipelineState.isRunning = false;
-    btn.disabled = false;
-    btn.innerHTML = `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-      <path d="M8 5v14l11-7z"/>
-    </svg>
-    Run Pipeline`;
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove("is-busy");
+    }
 
     updateDeployButtonVisibility();
   }
