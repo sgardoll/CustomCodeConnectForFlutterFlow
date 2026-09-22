@@ -62,12 +62,29 @@ async function waitForWalkthroughOpen(page) {
       const overlay = document.getElementById("walkthrough-modal");
       if (!overlay || !overlay.classList.contains("open")) return false;
       if (overlay.getAttribute("aria-hidden") !== "false") return false;
+      if (getComputedStyle(overlay).opacity !== "1") return false;
       const content = overlay.querySelector(".modal-content");
       if (!content) return false;
+
+      // The open animation drives the content from `scale(0.96) translateY(8px)`
+      // to `scale(1) translateY(0)`, so a settled `.open` modal computes to the
+      // identity matrix. Do not match an exact string (a refactor that removes
+      // the transform yields `none`; a scale-authoring change yields a different
+      // matrix spelling): parse the 1:1 matrix and accept only a settled value.
+      // Mid-animation still returns false (scale < 1 or a translate is present),
+      // so a following click cannot land during the open transition. Unknown
+      // transform forms fall through to `true` so the wait can never deadlock.
       const transform = getComputedStyle(content).transform;
-      const settled =
-        !transform || transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
-      return settled && getComputedStyle(overlay).opacity === "1";
+      if (!transform || transform === "none") return true;
+      const m = /^matrix\(([^)]*)\)$/.exec(transform) || /^matrix3d\(([^)]*)\)$/.exec(transform);
+      if (!m) return true;
+      const nums = m[1].split(",").map((n) => parseFloat(n));
+      if (m[0].startsWith("matrix3d")) {
+        // matrix3d: scale X/Y at [0]/[5], translate at [12]/[13].
+        return nums[0] === 1 && nums[5] === 1 && nums[12] === 0 && nums[13] === 0;
+      }
+      // matrix(a,b,c,d,tx,ty): scale at [0]/[3], translate at [4]/[5].
+      return nums[0] === 1 && nums[3] === 1 && nums[4] === 0 && nums[5] === 0;
     },
     { timeout: 8000 },
   );
