@@ -4744,6 +4744,147 @@ function renderUsageSurfaces() {
       guestEl.textContent = `${gCount} / ${TIER_LIMITS.free} generations used`;
     }
   }
+
+  renderAccountOverview();
+}
+
+/**
+ * Renders the account overview: identity, plan, usage meter and available
+ * period information. This is the single presentation adapter for the account
+ * view and reads the same session, subscription and metered state as the
+ * topbar (renderUsageSurfaces), so sign-in/out and a usage refresh move all
+ * surfaces together.
+ *
+ * Honesty contract, enforced by render: every number/date/identity traces to a
+ * real field or a documented derivation (email-derived display name/avatar
+ * initial, metered count, tier limit). A renewal/reset date is shown ONLY when
+ * subscriptionState.periodEnd is a real value — never fabricated — and an
+ * unresolved plan surfaces checking/unavailable copy, never a stale balance.
+ */
+function renderAccountOverview() {
+  const signedIn = authState.isVerified && !!authState.email;
+  if (!signedIn) {
+    // Signed-out/guest state has its own container; leave the signed-in
+    // overview untouched in the hidden subtree so no previous identity lingers
+    // anywhere a later sign-in could briefly flash it.
+    return;
+  }
+
+  const loading = isSubscriptionLoading();
+  const resolved = isSubscriptionResolved();
+  const usage = getUsage();
+  const count = resolved ? usage.count : 0;
+  const limit = resolved ? getRunLimit() : 0;
+  const remaining = Math.max(0, limit - count);
+  const tier = resolved ? (subscriptionState.tier || "free") : null;
+  const tierLabel = { free: "Free", professional: "Pro", power: "Power" }[tier] || "Free";
+
+  // --- identity: real email, documented derivations only, no member-since ---
+  const email = authState.email || "";
+  const localPart = email.split("@")[0] || email;
+  const avatar = document.getElementById("acct-avatar");
+  if (avatar) avatar.textContent = (email[0] || "?").toUpperCase();
+  const name = document.getElementById("acct-name");
+  if (name) name.textContent = localPart || "—";
+
+  // --- plan ---
+  const planTier = document.getElementById("acct-plan-tier");
+  const planPrice = document.getElementById("acct-plan-price");
+  const planNote = document.getElementById("acct-plan-note");
+  const renewal = document.getElementById("acct-renewal");
+  if (planTier) {
+    planTier.textContent = loading ? "Checking…" : resolved ? tierLabel : "Plan unavailable";
+  }
+  if (planPrice) {
+    if (loading) planPrice.textContent = "—";
+    else if (!resolved) planPrice.textContent = "—";
+    else if (tier === "free") planPrice.textContent = "$0 / month";
+    else {
+      const money = formatPrice(BASE_PRICES_AUD[tier] ?? 0, detectUserCurrency());
+      planPrice.textContent = `${money} / month`;
+    }
+  }
+  if (planNote) {
+    if (loading) planNote.textContent = "Verifying your subscription…";
+    else if (!resolved) planNote.textContent = "Could not verify your subscription. Check billing or sign out.";
+    else if (tier === "free") planNote.textContent = "No subscription. Upgrade for more generations.";
+    else planNote.textContent = "billed monthly through Stripe";
+  }
+  if (renewal) {
+    const periodEndMs = Date.parse(subscriptionState.periodEnd || "");
+    const hasRealPeriodEnd = resolved && tier !== "free" && !!subscriptionState.periodEnd && !Number.isNaN(periodEndMs);
+    if (loading) renewal.textContent = "";
+    else if (!resolved) renewal.textContent = "";
+    else if (tier === "free") renewal.textContent = "";
+    else if (hasRealPeriodEnd) {
+      const date = new Date(periodEndMs).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+      renewal.textContent = `Renews ${date} · reset at the start of each month.`;
+    } else {
+      // No fabricated date: if the plan has no real period end we say so plainly.
+      renewal.textContent = "Renewal date is not available for this period.";
+    }
+  }
+
+  // --- usage: generations left + meter ---
+  const leftCount = document.getElementById("acct-left-count");
+  const leftLimit = document.getElementById("acct-left-limit");
+  const resetNote = document.getElementById("acct-reset-note");
+  if (leftCount) leftCount.textContent = loading ? "…" : !resolved ? "—" : String(remaining);
+  if (leftLimit) leftLimit.textContent = loading ? "…" : !resolved ? "—" : String(limit);
+  if (resetNote) {
+    if (loading) resetNote.textContent = "Checking plan…";
+    else if (!resolved) resetNote.textContent = "Plan check failed. Refresh or manage billing.";
+    else resetNote.textContent = "Runs reset at the start of each month.";
+  }
+
+  const usedCount = document.getElementById("acct-used-count");
+  const meterFill = document.getElementById("acct-meter-fill");
+  const meterMeta = document.getElementById("acct-meter-meta");
+  const meterTrack = document.getElementById("acct-meter-track");
+  if (usedCount) usedCount.textContent = loading ? "…" : !resolved ? "—" : String(count);
+  if (meterFill) {
+    const pct = resolved && limit > 0 ? Math.min(100, Math.round((count / limit) * 100)) : 0;
+    meterFill.style.width = `${pct}%`;
+  }
+  if (meterMeta) {
+    if (loading) meterMeta.textContent = "Checking…";
+    else if (!resolved) meterMeta.textContent = "Plan check failed";
+    else if (limit === 0) meterMeta.textContent = `${count} of ${limit}`;
+    else {
+      const pct = Math.round((count / limit) * 100);
+      meterMeta.textContent = `${count} of ${limit} · ${pct}%`;
+    }
+  }
+  if (meterTrack) {
+    if (loading) meterTrack.setAttribute("aria-label", "Checking usage…");
+    else if (!resolved) meterTrack.setAttribute("aria-label", "Usage unavailable");
+    else meterTrack.setAttribute("aria-label", `${count} of ${limit} generations used`);
+  }
+
+  // --- FlutterFlow connection (real stored credential state) ---
+  const connKeyConfigured = hasStoredKey("flutterflow");
+  const connProjectConfigured = hasStoredKey("flutterflow_project_id");
+  const ffDot = document.getElementById("acct-ff-dot");
+  const ffStatus = document.getElementById("acct-ff-status");
+  const ffEndpoint = document.getElementById("acct-ff-endpoint");
+  const ffProject = document.getElementById("acct-ff-project");
+  if (ffStatus) {
+    if (connKeyConfigured && connProjectConfigured) {
+      ffStatus.textContent = "Connected to FlutterFlow";
+      if (ffDot) { ffDot.className = "acct-dot ok"; }
+    } else if (connKeyConfigured) {
+      ffStatus.textContent = "API key set — pick a project";
+      if (ffDot) { ffDot.className = "acct-dot warn"; }
+    } else {
+      ffStatus.textContent = "Not connected — add your FlutterFlow API key";
+      if (ffDot) { ffDot.className = "acct-dot"; }
+    }
+  }
+  if (ffEndpoint) {
+    const endpoint = getFlutterFlowEndpoint();
+    ffEndpoint.textContent = endpoint && endpoint.includes("staging") ? "Staging" : "Production";
+  }
+  if (ffProject) ffProject.textContent = flutterflowProjectId || "—";
 }
 
 function updateUsageDisplay() {
