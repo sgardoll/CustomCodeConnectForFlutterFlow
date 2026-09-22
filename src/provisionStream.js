@@ -15,7 +15,11 @@ import { flushNdjsonBuffer, readNdjsonChunk } from "./ndjsonStream.js";
  * @param {function(string): void} [handlers.onLog] - Called with each raw CLI
  *   output line
  * @returns {Promise<Object>} The runner's final result payload, always with a
- *   boolean `success`
+ *   boolean `success`. `finalResultReceived` is true only when the runner
+ *   actually delivered a definitive result event (or a non-streaming JSON
+ *   body); it is false when the stream simply ended or the body carried no
+ *   decision, which the caller must treat as an unknown remote outcome rather
+ *   than a fabricated success or failure.
  */
 export async function readProvisionResponse(response, handlers = {}) {
   const { onPhase, onLog } = handlers;
@@ -63,11 +67,13 @@ export async function readProvisionResponse(response, handlers = {}) {
       success:
         finalResult.success === true ||
         (finalResult.success === undefined && response.ok),
+      finalResultReceived: true,
     };
   }
 
   return {
     success: false,
+    finalResultReceived: false,
     error: response.ok
       ? "The FlutterFlow deploy runner closed the connection before it finished."
       : `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`,

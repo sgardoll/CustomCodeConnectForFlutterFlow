@@ -47,6 +47,11 @@ import {
 } from "./src/authMagicLink.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
+import {
+  classifyDeployResult,
+  DeployOutcome,
+  DEPLOY_UI_TIMEOUT_MS,
+} from "./src/deployOutcome.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
 import { initHeroMarkField } from "./src/heroMarkField.js";
 import {
@@ -2114,6 +2119,54 @@ function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
 }
 
+/**
+ * A carve-out from the ordinary failure path: the client stopped waiting for
+ * (or lost the connection to) the deployment runner before it reported a
+ * decision, so the remote outcome is unknown. This is deliberately *not* a
+ * plain failure — nothing here may be reported as failed or committed when we
+ * cannot know what the server did.
+ */
+class UnconfirmedDeployError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UnconfirmedDeployError";
+    this.outcome = DeployOutcome.UNCONFIRMED;
+  }
+}
+
+/**
+ * Bounded waiting for a remote write. The UI shows live progress only while
+ * this promise settles; once the bound expires the waiter stops claiming
+ * progress and `onExpire` decides the terminal outcome. The underlying promise
+ * is deliberately *not* aborted or retried: it is handed back to the pending
+ * work, and any late settlement is ignored (the bound already resolved the
+ * waiter). This is a rendering bound, never a transport one.
+ * @param {Promise} promise - Work whose remote outcome may or may not arrive
+ * @param {number} ms - How long to wait for a decision
+ * @param {function} onExpire - Called with (resolve, reject) exactly once on expiry
+ * @returns {Promise} Settles with the work's value, or via onExpire on timeout
+ */
+function withUiTimeout(promise, ms, onExpire) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value, which) => {
+      if (settled) return;
+      settled = true;
+      if (which === "resolve") resolve(value);
+      else reject(value);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      onExpire(resolve, reject);
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); finish(resolve, value, "resolve"); },
+      (error) => { clearTimeout(timer); finish(reject, error, "reject"); },
+    );
+  });
+}
+
 async function provisionMissingCodeFiles(
   apiClient,
   fileMap,
@@ -2173,10 +2226,33 @@ async function provisionMissingCodeFiles(
     }),
   });
 
-  const result = await readProvisionResponse(response, {
-    onPhase: (message) => commitProgress.setSubstatus(message),
-    onLog: (message) => console.log(`[custom class deploy] ${message}`),
-  });
+  const result = await withUiTimeout(
+    readProvisionResponse(response, {
+      onPhase: (message) => commitProgress.setSubstatus(message),
+      onLog: (message) => console.log(`[custom class deploy] ${message}`),
+    }),
+    DEPLOY_UI_TIMEOUT_MS,
+    (resolve, reject) =>
+      reject(
+        new UnconfirmedDeployError(
+          "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
+            "Your custom classes may or may not have been written — the outcome is not yet known. " +
+            "Open your FlutterFlow project to reconcile before retrying the deploy.",
+        ),
+      ),
+  );
+
+  // A stream that ended (or a body that carried) no definitive result means the
+  // remote decision never reached us. That is an unknown outcome, not a
+  // failure: report unconfirmed so the user reconciles instead of retrying
+  // blind.
+  if (!result.finalResultReceived) {
+    throw new UnconfirmedDeployError(
+      "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
+        "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+        "before retrying.",
+    );
+  }
 
   if (!result.success) {
     const details = result.details ? ` ${result.details}` : "";
@@ -2197,6 +2273,10 @@ async function provisionMissingCodeFiles(
     syncFileMap: excludeProvisionedCodeFiles(fileMap, missingCodeFiles),
     unverified,
     approximate,
+    // Custom classes were actually upserted on the FlutterFlow side by the
+    // runner. Any failure of the *remaining* sync is therefore a partial
+    // outcome — classes wrote, the rest did not — never a clean total failure.
+    provisionSucceeded: true,
   };
 }
 
@@ -2937,6 +3017,18 @@ async function executeCommit(code, options = {}) {
 
   console.log(`Starting commit for ${artifactName} (${artifactType})`);
 
+  // Written before the try so the catch can decide partial vs failed: once the
+  // runner has upserted custom classes, a failure of the remaining sync is a
+  // genuine partial outcome, not a clean total failure.
+  let provisionClassesWritten = false;
+  const targetIdentity = {
+    projectId: null,
+    endpoint: getFlutterFlowEndpoint(),
+    artifactType,
+    artifactName,
+    fileName,
+  };
+
   try {
     // Step 1: Prepare the code
     commitState.setState(CommitState.PREPARING);
@@ -3011,6 +3103,8 @@ async function executeCommit(code, options = {}) {
       `Provision ${artifactName} custom class`,
       serializedYaml,
     );
+    targetIdentity.projectId = projectId;
+    provisionClassesWritten = provisioning.provisionSucceeded === true;
 
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
@@ -3061,6 +3155,7 @@ async function executeCommit(code, options = {}) {
         success: true,
         message: `Successfully committed ${codeInfo.fileName} to FlutterFlow`,
         metadata,
+        targetIdentity,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
         approximate: provisioning.approximate,
@@ -3095,10 +3190,39 @@ async function executeCommit(code, options = {}) {
       }
     }
 
+    // A client-side wait expiry or a dropped stream means the remote outcome
+    // is unknown: report unconfirmed, never fabricated failed or committed.
+    if (error instanceof UnconfirmedDeployError) {
+      return {
+        success: false,
+        unconfirmed: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
+    // Custom classes were already upserted but the remaining sync failed:
+    // that is a partial outcome, and concealing the written classes would lie.
+    if (provisionClassesWritten) {
+      return {
+        success: false,
+        partial: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
     return {
       success: false,
       error: error.message,
       errorMap: errorMap,
+      targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
     };
@@ -3107,6 +3231,17 @@ async function executeCommit(code, options = {}) {
 
 async function executeBundleCommit(bundlePlan, options = {}) {
   const { pipelineResult } = options;
+
+  let provisionClassesWritten = false;
+  const targetIdentity = {
+    projectId: null,
+    endpoint: getFlutterFlowEndpoint(),
+    artifactType: "Bundle",
+    artifactName: bundlePlan?.title,
+    fileName: bundlePlan?.fileEntries
+      ? `${bundlePlan.fileEntries.length} artifacts`
+      : "bundle",
+  };
 
   try {
     commitState.setState(CommitState.PREPARING);
@@ -3173,6 +3308,8 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       `Provision ${bundlePlan.title} custom classes`,
       serializedYaml,
     );
+    targetIdentity.projectId = projectId;
+    provisionClassesWritten = provisioning.provisionSucceeded === true;
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
       provisioning.remoteFiles,
@@ -3226,6 +3363,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
         success: true,
         message: `Successfully committed ${bundlePlan.fileEntries.length} artifacts to FlutterFlow`,
         metadata,
+        targetIdentity,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
         approximate: provisioning.approximate,
@@ -3241,10 +3379,38 @@ async function executeBundleCommit(bundlePlan, options = {}) {
   } catch (error) {
     console.error("Bundle commit execution failed:", error);
     commitState.setError(error);
+
+    const errorMap = error.errorMap || new Map();
+
+    if (error instanceof UnconfirmedDeployError) {
+      return {
+        success: false,
+        unconfirmed: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
+    if (provisionClassesWritten) {
+      return {
+        success: false,
+        partial: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
     return {
       success: false,
       error: error.message,
-      errorMap: error.errorMap || new Map(),
+      errorMap,
+      targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
     };
@@ -5485,6 +5651,128 @@ function showCommitFailureModal(result) {
 }
 
 /**
+ * Populates the shared terminal modal for the two outcomes that are real but
+ * are neither a clean success nor a clean failure: PARTIAL (some custom
+ * classes were written, the remaining sync failed) and UNCONFIRMED (the remote
+ * outcome is unknown because the client stopped waiting or the stream
+ * dropped). It always shows the same target identity the user confirmed, the
+ * per-file outcomes when the runner/push reported them, and reconciliation
+ * guidance that never hides the manual FlutterFlow step of checking the
+ * project.
+ */
+function populateCommitTerminalModal(result, { heading, title, guidance }) {
+  const identity = result.targetIdentity || {};
+  const modal = document.getElementById("commit-terminal-modal");
+  if (!modal) return false;
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val || "";
+  };
+
+  set("terminal-heading", heading);
+  set("terminal-title", title);
+  set("terminal-message", result.error || result.message || "");
+
+  const idList = document.getElementById("terminal-identity-list");
+  if (idList) {
+    const rows = [
+      ["Project", identity.projectId || result.metadata?.projectId],
+      ["Endpoint", identity.endpoint],
+      ["File", identity.fileName || result.metadata?.fileName],
+      ["Artifact", identity.artifactType || result.metadata?.artifactType],
+    ];
+    idList.innerHTML = rows
+      .map(
+        ([label, value]) =>
+          `<div class="flex justify-between gap-3"><span class="text-gray-400">${escapeHtml(
+            label,
+          )}:</span><span class="font-medium text-gray-700">${escapeHtml(
+            String(value ?? "—"),
+          )}</span></div>`,
+      )
+      .join("");
+  }
+
+  const fileList = document.getElementById("terminal-file-outcomes");
+  let errorMap = result.errorMap;
+  if (errorMap && !(errorMap instanceof Map)) {
+    errorMap = new Map(Object.entries(errorMap));
+  }
+  if (fileList && errorMap && errorMap.size > 0) {
+    fileList.innerHTML = [...errorMap.entries()]
+      .map(
+        ([file, info]) =>
+          `<li class="py-1.5 border-b border-gray-100 last:border-0 text-xs text-gray-700"><span class="font-semibold">${escapeHtml(
+            file,
+          )}:</span> ${escapeHtml(formatFlutterFlowFileError(info))}</li>`,
+      )
+      .join("");
+    fileList.classList.remove("hidden");
+  } else if (fileList) {
+    fileList.classList.add("hidden");
+  }
+
+  const guidanceEl = document.getElementById("terminal-guidance");
+  if (guidanceEl) guidanceEl.innerHTML = guidance;
+
+  const ffLink = document.getElementById("terminal-open-ff-link");
+  const projectId = identity.projectId || result.metadata?.projectId;
+  if (ffLink) {
+    ffLink.href = projectId
+      ? `https://app.flutterflow.io/project/${projectId}`
+      : "https://app.flutterflow.io/";
+  }
+
+  openModal(modal);
+  return true;
+}
+
+/**
+ * Terminal outcome: some custom classes were written to FlutterFlow, but the
+ * remaining sync was rejected. "Committed" would lie — part of the deploy did
+ * land, but part failed.
+ */
+function showCommitPartialModal(result) {
+  populateCommitTerminalModal(result, {
+    heading: "Deploy partially applied",
+    title:
+      "Some custom classes reached FlutterFlow, but the deploy did not fully complete.",
+    guidance:
+      "The custom classes the runner confirmed are already in your project and are <strong>not lost</strong>. " +
+      "Review the per-file errors above, fix them in FlutterFlow or regenerate, then deploy again. " +
+      "Open the project to see exactly what landed.",
+  });
+}
+
+/**
+ * Terminal outcome: the client stopped waiting (bounded UI timeout) or the
+ * connection dropped before the runner reported a result. The remote outcome
+ * is unknown — this is never reported as committed or as failed, and the
+ * in-flight write is never cancelled.
+ */
+function showCommitUnconfirmedModal(result) {
+  populateCommitTerminalModal(result, {
+    heading: "Deploy outcome not yet known",
+    title:
+      "This browser stopped waiting before the FlutterFlow server reported a result.",
+    guidance:
+      "The deploy may still be finishing on the server — it was <strong>not cancelled</strong>. " +
+      "Open your FlutterFlow project and confirm whether the class landed before retrying, so you do not " +
+      "push a duplicate or build on top of an unknown state.",
+  });
+}
+
+/**
+ * Closes the shared terminal modal (partial / unconfirmed outcomes).
+ * @param {Event} [event] - Optional click event
+ */
+function closeCommitTerminalModal(event) {
+  if (event && event.target !== event.currentTarget) return;
+  closeModal(document.getElementById("commit-terminal-modal"));
+}
+
+/**
  * Toggles the code preview section.
  */
 function toggleCodePreview() {
@@ -5733,19 +6021,68 @@ function commitNeedsProvisioning(commitData) {
 /**
  * Confirms the commit after modal review.
  */
+// A deploy is in flight. The confirm action and the deploy toggle are disabled
+// for its whole run, so a user clicking twice cannot start a second push and a
+// second modal cannot be opened over a live one.
+let deployInFlight = false;
+
+function setDeployBusy(busy) {
+  deployInFlight = busy;
+  // The modal's confirm button and every deploy trigger are disabled for the
+  // whole run so a second click cannot start an overlapping push.
+  const confirm = document.querySelector(
+    "#commit-confirm-modal button[data-deploy-confirm]",
+  );
+  if (confirm) confirm.disabled = busy;
+  const triggers = [
+    ...document.querySelectorAll("[data-deploy-start]"),
+    ...document.querySelectorAll("#btn-deploy-to-ff"),
+  ];
+  triggers.forEach((el) => {
+    el.disabled = busy;
+  });
+}
+
+/**
+ * Dispatches a deploy result to the single truthful terminal presentation.
+ * Every outcome releases the UI busy state; only COMMITTED reaches the success
+ * modal. Partial and unconfirmed get their own truthful modals.
+ * @param {Object} result - A deploy result (see deployOutcome.classifyDeployResult)
+ */
+function renderCommitTerminal(result) {
+  hideCommitProgress();
+  setDeployBusy(false);
+  const outcome = classifyDeployResult(result);
+  if (outcome === DeployOutcome.COMMITTED) {
+    showCommitSuccessModal(result);
+  } else if (outcome === DeployOutcome.PARTIAL) {
+    showCommitPartialModal(result);
+  } else if (outcome === DeployOutcome.UNCONFIRMED) {
+    showCommitUnconfirmedModal(result);
+  } else {
+    showCommitFailureModal(result);
+  }
+}
+
 async function confirmCommitToFlutterFlow() {
   if (!pendingCommitData) {
     console.error("No pending commit data");
     return;
   }
+  if (deployInFlight) {
+    console.warn("Deploy already in flight; ignoring duplicate confirm.");
+    return;
+  }
 
   // Null the pending data before any await: it is only cleared at the end of
   // this function otherwise, so a second confirm click landing mid-commit
-  // would read the same data and push twice concurrently.
+  // would read the same data and push twice concurrently. The deploy-in-flight
+  // guard above makes this doubly safe.
   const commitData = pendingCommitData;
   pendingCommitData = null;
   commitTargetProjectId = readCommitTargetProjectId();
   closeCommitConfirmModal();
+  setDeployBusy(true);
   showCommitProgress({ withProvisioning: commitNeedsProvisioning(commitData) });
 
   if (commitData.bundlePlan) {
@@ -5757,14 +6094,7 @@ async function confirmCommitToFlutterFlow() {
     });
 
     commitTargetProjectId = null;
-    hideCommitProgress();
-
-    if (result.success) {
-      showCommitSuccessModal(result);
-    } else {
-      showCommitFailureModal(result);
-    }
-
+    renderCommitTerminal(result);
     return;
   }
 
@@ -5783,13 +6113,7 @@ async function confirmCommitToFlutterFlow() {
   });
 
   commitTargetProjectId = null;
-  hideCommitProgress();
-
-  if (result.success) {
-    showCommitSuccessModal(result);
-  } else {
-    showCommitFailureModal(result);
-  }
+  renderCommitTerminal(result);
 }
 
 // Global exports
@@ -5838,6 +6162,9 @@ window.updateFlutterFlowCredentialStatus = updateFlutterFlowCredentialStatus;
 window.openCommitConfirmModal = openCommitConfirmModal;
 window.closeCommitConfirmModal = closeCommitConfirmModal;
 window.closeCommitSuccessModal = closeCommitSuccessModal
+window.closeCommitTerminalModal = closeCommitTerminalModal
+window.showCommitPartialModal = showCommitPartialModal
+window.showCommitUnconfirmedModal = showCommitUnconfirmedModal
 window.showCommitSuccessModal = showCommitSuccessModal
 window.showCommitFailureModal = showCommitFailureModal;
 window.toggleCodePreview = toggleCodePreview;
@@ -6522,6 +6849,15 @@ if (import.meta.env.DEV) {
     showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
   }
   window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
+
+  // Deterministic test hook for STU-380: drives the exact same terminal
+  // presentation the real confirm flow uses, against a fixture result, so the
+  // browser suite can assert truthful outcomes without a real remote write.
+  window.__CCC_RENDER_DEPLOY_TERMINAL__ = renderCommitTerminal;
+  // Lets the browser suite start a live deploy progress overlay so it can
+  // prove a terminal state releases the busy state.
+  window.__CCC_START_DEPLOY_PROGRESS__ = () =>
+    commitProgress.start({ withProvisioning: true });
 }
 
 function copyResultsCode() {

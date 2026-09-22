@@ -33,6 +33,7 @@ test("reports each streamed phase and returns the result", async () => {
   assert.deepEqual(logs, ["flutterflow_ai 0.0.39"]);
   assert.equal(result.success, true);
   assert.deepEqual(result.deployed, [{ className: "DemoClass" }]);
+  assert.equal(result.finalResultReceived, true);
 });
 
 test("surfaces a failure the runner reports part way through", async () => {
@@ -61,6 +62,10 @@ test("fails when the stream ends before a result arrives", async () => {
 
   assert.equal(result.success, false);
   assert.match(result.error, /closed the connection/);
+  // The runner never delivered a definitive result: this is an unknown remote
+  // outcome, which STU-380 requires the caller to render as unconfirmed
+  // rather than a fabricated failure.
+  assert.equal(result.finalResultReceived, false);
 });
 
 test("reads a non-streaming runner's success response", async () => {
