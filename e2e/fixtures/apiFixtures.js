@@ -48,8 +48,10 @@ export const ENDPOINTS = {
 
 // Origin of the local Vite dev server that playwright.config.js boots and
 // targets (webServer.url / baseURL). Its requests are the only ones allowed
-// to reach the network.
-const VITE_ORIGIN = "http://localhost:3000";
+// to reach the network. Both read CCC_TEST_PORT so parallel worktrees can run
+// their own server without intercepting each other's traffic; absent it, both
+// fall back to the default 3000.
+const VITE_ORIGIN = `http://localhost:${process.env.CCC_TEST_PORT || 3000}`;
 
 function ok(body) {
   return { status: 200, body: JSON.stringify(body), contentType: "application/json" };

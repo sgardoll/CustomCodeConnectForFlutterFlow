@@ -5,7 +5,7 @@ export default defineConfig(({ mode }) => {
   
   return {
     server: {
-      port: 3000,
+      port: Number(process.env.CCC_TEST_PORT || 3000),
       open: true,
       proxy: {
         '/api/gemini': {

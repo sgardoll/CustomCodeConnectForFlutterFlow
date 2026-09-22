@@ -6,6 +6,9 @@ import { defineConfig, devices } from "@playwright/test";
  * exercise the real build pipeline without touching paid generation, billing or
  * production project writes.
  */
+const PORT = Number(process.env.CCC_TEST_PORT || 3000);
+const BASE_URL = `http://localhost:${PORT}`;
+
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
@@ -14,7 +17,7 @@ export default defineConfig({
   workers: process.env.CI ? 1 : undefined,
   reporter: "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: BASE_URL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
@@ -25,8 +28,10 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run dev",
-    url: "http://localhost:3000",
+    // --strictPort makes a taken port fail loudly instead of silently drifting
+    // to another one, which would leave baseURL pointing at a foreign server.
+    command: "npm run dev -- --strictPort",
+    url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
