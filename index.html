@@ -965,6 +965,12 @@
         min-height: 36px;
         padding: 6px 14px;
       }
+      /* The shared .btn-header-action sets display:flex, which would otherwise
+         override the hidden attribute; the replacement banner shows only the
+         action that can resolve the failure (upgrade vs retry). */
+      .results-replacement-error .btn-header-action[hidden] {
+        display: none;
+      }
 
       /* Shared-control styling for the pasted-build-error input overlay. */
       .error-input-card {
@@ -3618,6 +3624,7 @@
                     <strong id="results-replacement-error-title">Regeneration failed</strong>
                     <span id="results-replacement-error-message"></span>
                   </div>
+                  <button id="results-replacement-error-upgrade" type="button" class="btn-header-action btn-error-regen" hidden></button>
                   <button id="results-replacement-error-retry" type="button" class="btn-header-action btn-error-regen"></button>
                 </div>
               </div>

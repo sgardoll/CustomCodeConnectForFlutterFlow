@@ -4,6 +4,7 @@ import {
   ENDPOINTS,
   ok,
   providerError,
+  quotaExhausted,
   reviewPassed,
   oneArtifact,
   freeSubscription,
@@ -161,6 +162,8 @@ async function establishInitialResult(page, router) {
 const refineButton = (page) => page.locator("#btn-refine-header");
 const banner = (page) => page.locator("#results-replacement-error");
 const retryButton = (page) => page.locator("#results-replacement-error-retry");
+const upgradeButton = (page) => page.locator("#results-replacement-error-upgrade");
+const pricingModal = (page) => page.locator("#pricing-modal");
 
 test.describe("Refinement preserves the previous successful result", () => {
   for (const viewport of [
@@ -261,6 +264,37 @@ test.describe("Refinement preserves the previous successful result", () => {
     await expect(page.locator("#results-code-output")).not.toContainText("oldGreeting");
     await expect(banner(page)).toBeHidden();
   });
+
+  test("a quota failure during refinement offers upgrade as the primary action, never a dead-end retry (desktop)", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openHome(page);
+    const router = await routePipeline(page, {
+      generate: () => quotaExhausted(),
+      review: reviewFor("unused"),
+    });
+    await establishInitialResult(page, router);
+
+    await refineButton(page).click();
+
+    // Old code stays inspectable and copyable behind the persistent banner.
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    await expect(page.locator("#results-code-output")).toContainText("oldGreeting");
+    await expect(banner(page)).not.toBeHidden();
+    // An exhausted allowance will not change on a bare retry: the upgrade
+    // affordance is the primary action and retry is not offered.
+    await expect(upgradeButton(page)).toBeVisible();
+    await expect(retryButton(page)).toBeHidden();
+    // Keyboard accessible: focus lands on the action that can resolve it.
+    await expect(upgradeButton(page)).toBeFocused();
+
+    // The upgrade opens the pricing modal; the previous result stays put.
+    await upgradeButton(page).click();
+    await expect(pricingModal(page)).toHaveClass(/open/);
+    await expect(page.locator("#results-code-output")).toContainText("oldGreeting");
+    await expect(banner(page)).not.toBeHidden();
+
+    expect(router.generatorCalls()).toBe(2);
+  });
 });
 
 test.describe("Pasted build-error regeneration", () => {
@@ -328,5 +362,30 @@ test.describe("Pasted build-error regeneration", () => {
     // The previous result stays intact.
     await expect(page.locator("#results-code-output")).toContainText("oldGreeting");
     expect(router.generatorCalls()).toBe(1);
+  });
+
+  test("a quota failure during build-error regeneration offers upgrade, not a dead-end retry (desktop)", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openHome(page);
+    const router = await routePipeline(page, {
+      generate: () => quotaExhausted(),
+      review: reviewFor("unused"),
+    });
+    await establishInitialResult(page, router);
+
+    await page.locator("#btn-error-regen-header").click();
+    await page.locator("#ff-error-paste-input").fill("Error: quota exhausted");
+    await page.locator("#btn-fix-from-errors").click();
+
+    // The replacement renderer must surface the same upgrade affordance here.
+    await expect(banner(page)).not.toBeHidden();
+    await expect(page.locator("#results-code-output")).toContainText("oldGreeting");
+    await expect(upgradeButton(page)).toBeVisible();
+    await expect(retryButton(page)).toBeHidden();
+    await expect(upgradeButton(page)).toBeFocused();
+
+    await upgradeButton(page).click();
+    await expect(pricingModal(page)).toHaveClass(/open/);
+    await expect(page.locator("#results-code-output")).toContainText("oldGreeting");
   });
 });

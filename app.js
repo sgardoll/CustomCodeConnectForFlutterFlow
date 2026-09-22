@@ -3732,18 +3732,39 @@ function showReplacementFailure(error, { stage = 2, runId, retry }) {
   const titleEl = document.getElementById("results-replacement-error-title");
   const messageEl = document.getElementById("results-replacement-error-message");
   const retryEl = document.getElementById("results-replacement-error-retry");
+  const upgradeEl = document.getElementById("results-replacement-error-upgrade");
   if (titleEl) titleEl.textContent = `${PIPELINE_STAGE_LABELS[stage] || "Regeneration"}: ${failure.title}`;
   if (messageEl) messageEl.textContent = failure.message;
   banner.hidden = false;
-  if (retryEl) {
-    retryEl.onclick = () => {
-      hideReplacementFailure();
-      if (typeof retry === "function") retry();
-    };
-    retryEl.textContent = "Retry";
-    // Keyboard accessible: a failed replacement lands focus on its retry.
-    retryEl.focus({ preventScroll: true });
+
+  // A quota/usage-limit rejection is the one failure a protected retry cannot
+  // fix — re-firing launches another generation into an already-exhausted
+  // allowance, a dead end. Surface the upgrade affordance as the primary
+  // action, exactly as the non-replacement path does. Every other failure
+  // keeps the retry.
+  let focusTarget = null;
+  if (upgradeEl) {
+    upgradeEl.hidden = !failure.canUpgrade;
+    if (failure.canUpgrade) {
+      upgradeEl.textContent = "View plans";
+      upgradeEl.onclick = () => openPricingModal();
+      focusTarget = upgradeEl;
+    }
   }
+  if (retryEl) {
+    retryEl.hidden = failure.canUpgrade;
+    if (!failure.canUpgrade) {
+      retryEl.onclick = () => {
+        hideReplacementFailure();
+        if (typeof retry === "function") retry();
+      };
+      retryEl.textContent = "Retry";
+      focusTarget = retryEl;
+    }
+  }
+  // Keyboard accessible: a failed replacement lands focus on the action that
+  // can actually resolve it.
+  (focusTarget || banner).focus({ preventScroll: true });
 }
 
 function hideReplacementFailure() {
