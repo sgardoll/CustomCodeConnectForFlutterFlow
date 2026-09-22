@@ -1,4 +1,5 @@
 import { flushNdjsonBuffer, readNdjsonChunk } from "./ndjsonStream.js";
+import { classifyDeployResult, DeployOutcome } from "./deployOutcome.js";
 
 /**
  * Reads the custom class deploy response.
@@ -74,8 +75,41 @@ export async function readProvisionResponse(response, handlers = {}) {
   return {
     success: false,
     finalResultReceived: false,
+    // An explicit non-2xx HTTP response is a definitive server refusal, not an
+    // unknown outcome. The caller must render it as FAILED; only an ok response
+    // whose stream dropped before a result leaves the remote state genuinely
+    // unknown (UNCONFIRMED).
+    httpRejected: !response.ok,
+    httpStatus: response.status,
     error: response.ok
       ? "The FlutterFlow deploy runner closed the connection before it finished."
       : `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`,
   };
+}
+
+/**
+ * Maps a provisioning stream result to the single truthful terminal outcome.
+ *
+ * When the runner delivered a definitive result, the ordinary classifier
+ * applies. When it did not (`finalResultReceived === false`), the two cases the
+ * caller must never flatten are separated: an explicit HTTP rejection (403/5xx)
+ * is a definitive refusal — the write did not happen — so it is FAILED, while an
+ * ok response whose stream simply dropped (or a client wait expiry) leaves the
+ * remote outcome unknown and is UNCONFIRMED.
+ *
+ * This is the decision `provisionMissingCodeFiles` uses in the real deploy
+ * path, so a test of this function drives the same code that renders a 403
+ * that never streamed a result.
+ *
+ * @param {Object|null|undefined} result - The result from `readProvisionResponse`
+ * @returns {string} One of the DeployOutcome values
+ */
+export function deployOutcomeOfStreamResult(result) {
+  if (result?.finalResultReceived) {
+    return classifyDeployResult(result);
+  }
+  if (result?.httpRejected) {
+    return DeployOutcome.FAILED;
+  }
+  return DeployOutcome.UNCONFIRMED;
 }

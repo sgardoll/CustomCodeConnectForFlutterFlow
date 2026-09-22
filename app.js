@@ -46,7 +46,10 @@ import {
   trimEmail,
 } from "./src/authMagicLink.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
-import { readProvisionResponse } from "./src/provisionStream.js";
+import {
+  deployOutcomeOfStreamResult,
+  readProvisionResponse,
+} from "./src/provisionStream.js";
 import {
   classifyDeployResult,
   DeployOutcome,
@@ -2242,11 +2245,20 @@ async function provisionMissingCodeFiles(
       ),
   );
 
-  // A stream that ended (or a body that carried) no definitive result means the
-  // remote decision never reached us. That is an unknown outcome, not a
-  // failure: report unconfirmed so the user reconciles instead of retrying
-  // blind.
+  // A stream that ended (or a body that carried) no definitive result leaves
+  // the remote decision ambiguous. There are two distinct cases which must not
+  // be flattened: a server that explicitly refused the request (a 403/5xx
+  // `response.ok === false`) has made a definitive decision — the write did not
+  // happen — so that is a FAILURE, not an unknown outcome; only an ok response
+  // whose stream dropped before a result (or a client wait expiry) leaves the
+  // remote state genuinely unknown and must be reported UNCONFIRMED.
   if (!result.finalResultReceived) {
+    if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
+      throw new Error(
+        result.error ||
+          `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
+      );
+    }
     throw new UnconfirmedDeployError(
       "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
         "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
@@ -6858,6 +6870,25 @@ if (import.meta.env.DEV) {
   // prove a terminal state releases the busy state.
   window.__CCC_START_DEPLOY_PROGRESS__ = () =>
     commitProgress.start({ withProvisioning: true });
+  // Lets the browser suite put the deploy into (and out of) its exactly-real
+  // busied state — the same `setDeployBusy` the confirm flow calls — so a test
+  // can prove a terminal outcome releases the busy lock on the deploy controls.
+  window.__CCC_SET_DEPLOY_BUSY__ = setDeployBusy;
+  // Lets the browser suite open the real commit-confirm modal (and set real
+  // `pendingCommitData`) with fixture code, so the duplicate-submit guard in
+  // `confirmCommitToFlutterFlow` can be driven through the real confirm flow
+  // without a real remote write.
+  window.__CCC_OPEN_COMMIT_CONFIRM__ = (codeInfo, checks, deps) =>
+    openCommitConfirmModal(
+      {
+        fileName: "gauge_widget.dart",
+        artifactType: "CustomClass",
+        content: "class GaugeWidget {}",
+        ...codeInfo,
+      },
+      { warnings: [], ...checks },
+      deps || {},
+    );
 }
 
 function copyResultsCode() {

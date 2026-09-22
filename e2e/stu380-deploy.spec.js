@@ -219,4 +219,73 @@ test.describe("STU-380 deployment terminal outcomes", () => {
       page.locator("#commit-confirm-modal button[data-deploy-confirm]"),
     ).toBeEnabled();
   });
+
+  test("a duplicate confirm while a deploy is in flight is ignored (guard)", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("hasSeenWalkthrough", "true");
+    });
+    await applyDefaultRoutes(page);
+    await page.goto("/");
+    await page.waitForFunction(
+      () =>
+        typeof window.__CCC_OPEN_COMMIT_CONFIRM__ === "function" &&
+        typeof window.__CCC_SET_DEPLOY_BUSY__ === "function",
+    );
+
+    // Put the deploy into its in-flight state, exactly as confirmCommitToFlutterFlow
+    // does at the top of a real run, then open the real commit-confirm modal so
+    // there is real pending commit data a second (errant) confirm would consume.
+    await page.evaluate(() => window.__CCC_SET_DEPLOY_BUSY__(true));
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+
+    // A second confirm while a deploy is already in flight must be a no-op.
+    await page.evaluate(() => window.confirmCommitToFlutterFlow());
+
+    // Guard held: the confirm modal was not closed and no progress overlay was
+    // started (both would only happen if a second commit ran).
+    await expect(page.locator("#commit-confirm-modal")).toBeVisible();
+    await expect(page.locator("#commit-progress-overlay")).toBeHidden();
+  });
+
+  test("a terminal state releases the busy lock on the deploy controls (guard release)", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("hasSeenWalkthrough", "true");
+    });
+    await applyDefaultRoutes(page);
+    await page.goto("/");
+    await page.waitForFunction(
+      () =>
+        typeof window.__CCC_OPEN_COMMIT_CONFIRM__ === "function" &&
+        typeof window.__CCC_SET_DEPLOY_BUSY__ === "function" &&
+        typeof window.__CCC_RENDER_DEPLOY_TERMINAL__ === "function",
+    );
+
+    // Busy the deploy controls by driving the exact same setDeployBusy(true)
+    // the confirm flow calls at the start of a run.
+    await page.evaluate(() => window.__CCC_SET_DEPLOY_BUSY__(true));
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(page.locator("#btn-deploy-to-ff")).toBeDisabled();
+    await expect(
+      page.locator("#commit-confirm-modal button[data-deploy-confirm]"),
+    ).toBeDisabled();
+
+    // A terminal outcome must release the busy state through the real terminal
+    // renderer (renderCommitTerminal -> setDeployBusy(false)).
+    await page.evaluate(
+      ({ identity }) => {
+        window.__CCC_RENDER_DEPLOY_TERMINAL__({
+          success: false,
+          partial: true,
+          targetIdentity: identity,
+          error: "sync rejected",
+        });
+      },
+      { identity },
+    );
+
+    await expect(page.locator("#btn-deploy-to-ff")).toBeEnabled();
+    await expect(
+      page.locator("#commit-confirm-modal button[data-deploy-confirm]"),
+    ).toBeEnabled();
+  });
 });
