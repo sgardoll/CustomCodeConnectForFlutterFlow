@@ -76,16 +76,17 @@ function collect(declared, into, sdkPackages) {
       continue;
     }
 
-    // A block-form entry's first own-key says where the package comes from.
-    // `sdk:` is the Flutter SDK, which the runner reproduces from the name
-    // alone as `name: {sdk: flutter}`. A nested `version:` is simply a
-    // constraint written on its own line.
+    // A block-form entry's own keys say where the package comes from, in
+    // whatever order YAML allows. `sdk:` is the Flutter SDK, which the runner
+    // reproduces from the name alone as `name: {sdk: flutter}`. A mapping
+    // whose only own key is `version:` is a normal pub.dev dependency with
+    // its constraint written on its own line.
     if (info.sourceKey === "sdk") {
       sdkPackages.add(name);
       continue;
     }
-    if (info.sourceKey === "version") {
-      into[name] = unquoteConstraint(info.sourceValue);
+    if (info.sourceKey === null && info.version) {
+      into[name] = unquoteConstraint(info.version);
       continue;
     }
 
@@ -167,22 +168,32 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * FlutterFlow. Classes that depend on the generated app are reported in
  * `skipped` so the deploy can say plainly what it did not verify.
  *
- * A dependency that cannot be reproduced outside the project - a `git:` or
- * `path:` source - stops only a class that imports it. For that class the
- * scratch package would resolve different code from the project, and a check
- * against the wrong versions reports a result that does not describe what
- * ships, so it is left out of `sources` and named in `skipped`. A class that
- * does not import it resolves everything it uses to the same versions the
- * project will, so it is verified normally.
+ * A dependency that cannot be reproduced outside the project - a `git:`,
+ * `path:`, or custom-`hosted:` source - cannot be expressed in the scratch
+ * manifest, which carries names and version constraints only. Such a
+ * dependency is handled by scope, not by breadth:
  *
- * That scoping is the point. Deciding it once for the whole project meant a
- * single `git:` entry - or a package the SDK supplied but a hand-kept name list
- * had not heard of - left every class in the deploy uncompiled, including the
- * ones that never touched it.
+ * - A class that imports it directly cannot compile without it at all, so it
+ *   is skipped and `skipped` names the import as this class's own problem.
+ * - Every other class is still verified, against a scratch graph that omits
+ *   the unrepresentable package. A representable import may reach that
+ *   package transitively - knowable only by resolving the graph, which
+ *   cannot happen here - so for those classes the check is approximate.
+ *   `approximate` carries one notice per unrepresentable package stating
+ *   exactly that, so the limitation is disclosed rather than silently
+ *   trusted, and the result is never mistaken for full graph fidelity. A
+ *   class importing only `dart:` never touches package resolution, so the
+ *   approximation does not reach it.
+ *
+ * Skipping every class with a `package:` import instead was rejected: one
+ * unrelated git or path dependency would disable the compile check for
+ * nearly the whole deployment, and invalid custom code would land unopposed.
+ * Verifying with a disclosed approximation keeps the check on the code that
+ * ships while saying plainly what it could not reproduce.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>, approximate: string[]}}
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
@@ -198,14 +209,23 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const sources = [];
   const skipped = [];
 
+  // The scratch manifest omits every unrepresentable package, so any class
+  // that does not import one directly is checked against a reduced graph.
+  // Disclosing that per package - rather than skipping those classes or
+  // silently trusting the scratch - keeps the check running and the human
+  // told what it could not reproduce.
+  const approximate = unrepresentable.map(
+    (name) =>
+      `Your project declares ${name} from a source that cannot be reproduced outside it, so the pre-deploy compile check runs against a scratch package graph that omits ${name}. Classes that do not import ${name} directly are still checked, but against that reduced graph, so their transitive package resolution may differ from your project's and the check is approximate for them.`,
+  );
+
   for (const entry of classes) {
     const { className, content } = entry;
 
     const importedPackages = extractPackageImports(content);
 
-    // Scoped to this class's own imports. A dependency the project declares
-    // from a source the manifest cannot express is only a problem for a class
-    // that actually imports it.
+    // A direct import of a dependency the manifest cannot express is this
+    // class's own problem, and the reason names it as such.
     const unresolvablePackages = importedPackages.filter((name) =>
       unrepresentable.includes(name),
     );
@@ -237,5 +257,5 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     });
   }
 
-  return { manifest, sources, skipped };
+  return { manifest, sources, skipped, approximate };
 }

@@ -210,8 +210,62 @@ test("a nested version block is read as a constraint, not as a source", () => {
 `;
   const declared = parseExistingDependencies(pubspec);
 
-  assert.equal(declared.get("intl").sourceKey, "version");
-  assert.equal(declared.get("intl").sourceValue, "^0.20.3");
+  // `version` is a constraint, not a source: with no sdk/git/path/hosted key
+  // present, the dependency is a normal pub.dev one.
+  assert.equal(declared.get("intl").sourceKey, null);
+  assert.equal(declared.get("intl").sourceValue, null);
+  assert.equal(declared.get("intl").version, "^0.20.3");
+});
+
+test("a source key is classified wherever it sits among the nested keys", () => {
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  sdk_thing:
+    version: ^2.0.0
+    sdk: flutter
+  git_thing:
+    version: ^3.0.0
+    git:
+      url: https://example.invalid/private.git
+  path_thing:
+    version: ^4.0.0
+    path: ../nearby
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // YAML mappings are order-independent, so a `version:` written before the
+  // source directive must not hide it: reading only the first key classified
+  // this hosted dependency as a plain pub.dev one, and the verification
+  // runner compiled against a different package source than the project ships.
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("sdk_thing").sourceKey, "sdk");
+  assert.equal(declared.get("sdk_thing").sourceValue, "flutter");
+  assert.equal(declared.get("git_thing").sourceKey, "git");
+  assert.equal(declared.get("path_thing").sourceKey, "path");
+  assert.equal(declared.get("path_thing").sourceValue, "../nearby");
+
+  // The version line survives alongside the source key even though the
+  // source is what classifies the entry.
+  assert.equal(declared.get("hosted_thing").version, "^1.0.0");
+});
+
+test("a version written before an unrecognized key does not invent a source", () => {
+  const pubspec = `dependencies:
+  odd_thing:
+    version: ^5.0.0
+    description: not a real pubspec key
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // Keys that are neither sources nor `version` are skipped without ending
+  // the scan, so a source below them is still found and a missing one still
+  // reads as null.
+  assert.equal(declared.get("odd_thing").sourceKey, null);
+  assert.equal(declared.get("odd_thing").version, "^5.0.0");
 });
 
 test("a git source keeps only its first key, whatever the nested shape", () => {

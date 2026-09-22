@@ -12,7 +12,7 @@ The canonical handoff archive is read-only and lives outside the repo:
 
 Do not copy the entire archive into `public/` or `src/assets`. The full folder is large and contains design-process variants and screenshots that should not ship to users. Use one of these approaches:
 
-1. **Build-time reference only.** Read the five canonical files (`DESIGN-HANDOFF.md`, `DESIGN-MANIFEST.json`, `custom-code-connect-hero.html`, `journey-connect.html`, `account-admin.html`, `monetisation.html`, `fonts/Delight-VF.ttf`) from the absolute path during development. The SHA-256 manifest in [SOURCE-MANIFEST.json](./SOURCE-MANIFEST.json) lets CI verify that the files have not changed.
+1. **Build-time reference only.** Read the nine canonical files (`DESIGN-HANDOFF.md`, `DESIGN-MANIFEST.json`, `index.html`, `custom-code-connect-hero.html`, `journey-connect.html`, `account-admin.html`, `monetisation.html`, `fonts/Delight-VF.ttf`, `assets/flutterflow-icon.svg`) from the absolute path during development. The SHA-256 manifest in [SOURCE-MANIFEST.json](./SOURCE-MANIFEST.json) lets CI verify that the files have not changed.
 
 2. **Local dev symlink (optional).** A developer may create a symlink at repo root:
    ```bash
