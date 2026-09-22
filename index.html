@@ -1694,6 +1694,189 @@
         background: #22c55e;
       }
 
+      /* ── Pipeline: real stage, note and failure states (STU-377) ── */
+      .pipeline-progress {
+        overflow-y: auto;
+        gap: 0;
+      }
+      .pipeline-prompt-recap {
+        width: 100%;
+        max-width: 400px;
+        margin-bottom: 24px;
+        text-align: left;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md, 12px);
+        background: var(--surface);
+      }
+      .pipeline-prompt-kicker {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: var(--ls-mono);
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .pipeline-prompt-text {
+        font-size: 14px;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-prompt-edit {
+        margin-top: 8px;
+        padding: 0;
+        min-height: 44px;
+        background: none;
+        border: none;
+        color: var(--accent);
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      /* A finished or failed run has nothing left to spin for. */
+      .pipeline-progress[data-run-state="failed"] .pipeline-progress-icon::after,
+      .pipeline-progress[data-run-state="settled"] .pipeline-progress-icon::after {
+        animation: none;
+        border-top-color: var(--border);
+      }
+      .pipeline-progress[data-run-state="failed"] .progress-fill {
+        animation: none;
+        background: var(--bad);
+      }
+
+      .progress-steps-dots {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 4px;
+      }
+      .progress-stage {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        min-height: 44px;
+        padding: 6px 10px;
+        background: none;
+        border: none;
+        font: inherit;
+        font-size: 11px;
+        color: var(--muted-2);
+        cursor: pointer;
+      }
+      .progress-stage:disabled {
+        cursor: default;
+      }
+      .progress-stage[data-state="active"] .progress-dot {
+        background: #6366f1;
+        box-shadow: 0 0 8px rgba(99, 102, 241, 0.4);
+      }
+      .progress-stage[data-state="done"] .progress-dot {
+        background: #22c55e;
+      }
+      .progress-stage[data-state="failed"] .progress-dot {
+        background: var(--bad);
+      }
+      .progress-stage[data-state="active"] .progress-stage-label,
+      .progress-stage[data-state="done"] .progress-stage-label {
+        color: var(--fg);
+      }
+      .progress-stage[aria-pressed="true"] .progress-stage-label {
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+
+      .pipeline-note {
+        margin-top: 16px;
+        max-width: 400px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+
+      .pipeline-failure {
+        margin-top: 24px;
+        width: 100%;
+        max-width: 420px;
+        text-align: left;
+        padding: 16px;
+        border: 1px solid var(--bad);
+        border-radius: var(--radius-md, 12px);
+        background: var(--bad-soft);
+      }
+      .pipeline-failure-title {
+        font-family: var(--font-display);
+        font-size: 15px;
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        margin-bottom: 6px;
+      }
+      .pipeline-failure-message,
+      .pipeline-failure-hint {
+        font-size: 13.5px;
+        line-height: 1.5;
+        color: var(--fg);
+        overflow-wrap: anywhere;
+      }
+      .pipeline-failure-hint {
+        margin-top: 8px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .pipeline-failure-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .pipeline-failure-actions button {
+        flex: 1 1 140px;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: var(--radius-md, 12px);
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13.5px;
+        font-weight: var(--fw-ui);
+        cursor: pointer;
+      }
+      .pipeline-failure-actions button[data-variant="primary"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+
+      /* The authored coral outline that morphs the composer into the pipeline
+         panel, and the pipeline panel into the expanded Results view. */
+      /* The composer's send button carries its own busy spinner, so the shared
+         control spinner must not double it up. */
+      .send[aria-busy="true"]::after { content: none; }
+
+      /* Outline only: the destination surface is already in place underneath,
+         so the morph never hides real state while it plays. */
+      .composer-morph {
+        position: fixed;
+        z-index: 45;
+        pointer-events: none;
+        border: 2px solid var(--accent);
+        border-radius: 20px;
+        box-shadow: var(--shadow-composer);
+        background: transparent;
+      }
+
+      @media (max-width: 640px) {
+        .pipeline-progress { padding: 24px 16px 32px; justify-content: flex-start; }
+        .pipeline-progress-icon { width: 56px; height: 56px; margin-bottom: 18px; }
+        .pipeline-failure-actions button { flex: 1 1 100%; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .pipeline-progress-icon::after,
+        .progress-fill { animation: none; }
+        .composer-morph { display: none; }
+      }
+
       /* ── Modals ────────────────────────────────────────── */
       .modal-overlay {
         position: fixed;
@@ -3207,24 +3390,48 @@
 
             <!-- Pipeline Progress View -->
             <div id="pipeline-progress" class="pipeline-progress">
-              <div class="pipeline-progress-icon">
+              <div class="pipeline-prompt-recap">
+                <p class="pipeline-prompt-kicker">Your prompt</p>
+                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
+                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
+              </div>
+              <div class="pipeline-progress-icon" id="pipeline-progress-icon">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
                 </svg>
               </div>
-              <h3 id="progress-title-text">Generating your code...</h3>
-              <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              <div class="pipeline-status" id="pipeline-status" role="status" aria-live="polite">
+                <h3 id="progress-title-text">Understanding your prompt</h3>
+                <p class="progress-substep" id="progress-substep-text">Step 1 of 3 — Prompt Architect</p>
+              </div>
               <div class="progress-track">
                 <div class="progress-fill" id="pipeline-progress-fill"></div>
               </div>
               <div class="progress-meta">
                 <span id="progress-elapsed">0s</span>
-                <span id="progress-estimate">~120s</span>
+                <span id="progress-stage-count">Step 1 of 3</span>
               </div>
-              <div class="progress-steps-dots">
-                <div class="progress-dot" id="pdot-1"></div>
-                <div class="progress-dot" id="pdot-2"></div>
-                <div class="progress-dot" id="pdot-3"></div>
+              <div class="progress-steps-dots" id="pipeline-stage-nav">
+                <button class="progress-stage" type="button" id="pdot-1" data-step="1" data-state="pending" disabled onclick="selectPipelineStage(1)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Architect</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-2" data-step="2" data-state="pending" disabled onclick="selectPipelineStage(2)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Generator</span>
+                </button>
+                <button class="progress-stage" type="button" id="pdot-3" data-step="3" data-state="pending" disabled onclick="selectPipelineStage(3)">
+                  <span class="progress-dot" aria-hidden="true"></span>
+                  <span class="progress-stage-label">Review</span>
+                </button>
+              </div>
+              <p class="pipeline-note" id="pipeline-note" hidden></p>
+
+              <div class="pipeline-failure" id="pipeline-failure" role="alert" hidden>
+                <h4 class="pipeline-failure-title" id="pipeline-failure-title"></h4>
+                <p class="pipeline-failure-message" id="pipeline-failure-message"></p>
+                <p class="pipeline-failure-hint" id="pipeline-failure-hint" hidden></p>
+                <div class="pipeline-failure-actions" id="pipeline-failure-actions"></div>
               </div>
             </div>
 
