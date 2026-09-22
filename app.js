@@ -3689,6 +3689,109 @@ function updateModelInfo(selectedModel) {
   console.log(`Step 3 (Code Review): ${getModelLabel(CODE_REVIEW_MODEL)}`)
 }
 
+/**
+ * Snapshot the current successful generation result so a failed refinement or
+ * build-error replacement can restore it verbatim. The selected artifact, full
+ * bundle, prompt, review and selection are held untouched until a replacement
+ * generation AND review both succeed.
+ */
+function snapshotGenerationResult() {
+  return {
+    step1Result: pipelineState.step1Result,
+    step2Result: pipelineState.step2Result,
+    step3Result: pipelineState.step3Result,
+    artifactBundle: pipelineState.artifactBundle,
+    bundleReview: pipelineState.bundleReview,
+    selectedArtifactId: pipelineState.selectedArtifactId,
+  };
+}
+
+/**
+ * Bring a prior successful result back into shared state and reconcile the
+ * selection to an id that still exists in the restored bundle (so the prior
+ * result never points at a stale artifact that the failed replacement no
+ * longer defined).
+ */
+function restoreGenerationResult(snapshot) {
+  if (!snapshot) return;
+  Object.assign(pipelineState, snapshot);
+  const ids = new Set((pipelineState.artifactBundle?.artifacts || []).map((a) => a.id));
+  if (!ids.has(pipelineState.selectedArtifactId)) {
+    pipelineState.selectedArtifactId =
+      getPrimaryArtifact(pipelineState.artifactBundle)?.id || null;
+  }
+}
+
+const RESULTS_REPLACEMENT_ERROR_ID = "results-replacement-error";
+
+/** Persistent error + retry UI that sits over the retained previous result. */
+function showReplacementFailure(error, { stage = 2, runId, retry }) {
+  if (!isCurrentPipelineRun(runId)) return;
+  const banner = document.getElementById(RESULTS_REPLACEMENT_ERROR_ID);
+  if (!banner) return;
+  const failure = classifyPipelineError(error);
+  const titleEl = document.getElementById("results-replacement-error-title");
+  const messageEl = document.getElementById("results-replacement-error-message");
+  const retryEl = document.getElementById("results-replacement-error-retry");
+  const upgradeEl = document.getElementById("results-replacement-error-upgrade");
+  if (titleEl) titleEl.textContent = `${PIPELINE_STAGE_LABELS[stage] || "Regeneration"}: ${failure.title}`;
+  if (messageEl) messageEl.textContent = failure.message;
+  banner.hidden = false;
+
+  // A quota/usage-limit rejection is the one failure a protected retry cannot
+  // fix — re-firing launches another generation into an already-exhausted
+  // allowance, a dead end. Surface the upgrade affordance as the primary
+  // action, exactly as the non-replacement path does. Every other failure
+  // keeps the retry.
+  let focusTarget = null;
+  if (upgradeEl) {
+    upgradeEl.hidden = !failure.canUpgrade;
+    if (failure.canUpgrade) {
+      upgradeEl.textContent = "View plans";
+      upgradeEl.onclick = () => openPricingModal();
+      focusTarget = upgradeEl;
+    }
+  }
+  if (retryEl) {
+    retryEl.hidden = failure.canUpgrade;
+    if (!failure.canUpgrade) {
+      retryEl.onclick = () => {
+        hideReplacementFailure();
+        if (typeof retry === "function") retry();
+      };
+      retryEl.textContent = "Retry";
+      focusTarget = retryEl;
+    }
+  }
+  // Keyboard accessible: a failed replacement lands focus on the action that
+  // can actually resolve it.
+  (focusTarget || banner).focus({ preventScroll: true });
+}
+
+function hideReplacementFailure() {
+  const banner = document.getElementById(RESULTS_REPLACEMENT_ERROR_ID);
+  if (banner) banner.hidden = true;
+}
+
+/**
+ * Shared completion path for a replacement run (refinement / build-error fix):
+ * the previous successful result is restored verbatim, the Results surface is
+ * repainted from it, and a persistent error + retry banner is shown. A toast
+ * alone is insufficient - the old code and review must stay inspectable and
+ * copyable while the user decides whether to retry.
+ */
+function restoreAndShowReplacementFailure(error, { previous, stage, runId, retry }) {
+  if (!isCurrentPipelineRun(runId)) return;
+  if (error.isUsageLimit) updateUsageDisplay();
+  restoreGenerationResult(previous);
+  hidePipelineProgress();
+  setGenerationStageVisible(true);
+  showResultsView();
+  updateSelectedArtifactPanels();
+  showReplacementFailure(error, { stage, runId, retry });
+  updateDeployButtonVisibility();
+}
+
 async function runRefinement() {
   console.log("runRefinement called");
 
@@ -3703,6 +3806,10 @@ async function runRefinement() {
   callEndpoint('standardRegenerate', pipelineState.step2Result, pipelineState.step1Result)
   const btns = document.querySelectorAll(".btn-refine-action");
 
+  // Hold the prior successful result verbatim until a replacement generation
+  // AND review both succeed; a failure restores it below.
+  const previousResult = snapshotGenerationResult();
+
   btns.forEach((btn) => {
     btn.disabled = true;
     btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3712,7 +3819,9 @@ async function runRefinement() {
   });
 
   try {
+    hideReplacementFailure();
     const selectedArtifact = getSelectedArtifact();
+    const refinedArtifactId = selectedArtifact.id;
     const refinementPrompt = buildArtifactRegenerationPrompt({
       bundleSpec: pipelineState.step1Result,
       artifactBundle: JSON.stringify(pipelineState.artifactBundle || pipelineState.step2Result),
@@ -3764,6 +3873,16 @@ async function runRefinement() {
     updateBundleReviewFromReviewResult();
     completePipelineStage(3, runId);
 
+    // The whole replacement (generation + review) succeeded, so the new result
+    // is committed. Reconcile the selection onto the re-refined artifact if it
+    // still exists, otherwise fall back to the new bundle's primary — either
+    // way the tabs are rebuilt from the new bundle, so none go stale.
+    if (pipelineState.artifactBundle?.artifacts?.some((a) => a.id === refinedArtifactId)) {
+      pipelineState.selectedArtifactId = refinedArtifactId;
+    } else {
+      pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle)?.id || null;
+    }
+
     const auditOutput = document.getElementById("step3-output");
     auditOutput.textContent = pipelineState.step3Result;
 
@@ -3783,14 +3902,15 @@ async function runRefinement() {
       review: 3,
     });
 
-    if (error.isUsageLimit) {
-      updateUsageDisplay();
-    }
-
-    selectWorkflowStep(errorStep);
-    showStepLoading(errorStep, false);
-    showPipelineFailure(error, { stage: errorStep, runId, retry: runRefinement });
-    updateStepIndicator(errorStep, "error");
+    // Restore the previous successful result and keep it visible and copyable
+    // with persistent error + retry UI; the failed replacement never owns the
+    // screen.
+    restoreAndShowReplacementFailure(error, {
+      previous: previousResult,
+      stage: errorStep,
+      runId,
+      retry: runRefinement,
+    });
   } finally {
     // The control's own busy affordance is restored even for an abandoned
     // run — the run guard only protects shared pipeline state.
@@ -3866,7 +3986,12 @@ async function regenerateFromPastedErrors() {
     </svg> Fixing…`
   }
 
+  // Hold the prior successful result verbatim until the bundle replacement
+  // generation AND review both succeed; a failure restores it below.
+  const previousResult = snapshotGenerationResult()
+
   try {
+    hideReplacementFailure()
     const refinementPrompt = buildBundleRegenerationPrompt({
       bundleSpec: pipelineState.step1Result,
       artifactBundle: JSON.stringify(pipelineState.artifactBundle || pipelineState.step2Result),
@@ -3922,14 +4047,15 @@ async function regenerateFromPastedErrors() {
       review: 3,
     })
 
-    if (error.isUsageLimit) {
-      updateUsageDisplay()
-    }
-
-    selectWorkflowStep(errorStep)
-    showStepLoading(errorStep, false)
-    showPipelineFailure(error, { stage: errorStep, runId, retry: regenerateFromPastedErrors })
-    updateStepIndicator(errorStep, "error")
+    // Restore the previous successful result and keep it visible and copyable
+    // with persistent error + retry UI; the failed replacement never owns the
+    // screen.
+    restoreAndShowReplacementFailure(error, {
+      previous: previousResult,
+      stage: errorStep,
+      runId,
+      retry: regenerateFromPastedErrors,
+    })
   } finally {
     if (btn) {
       btn.disabled = false

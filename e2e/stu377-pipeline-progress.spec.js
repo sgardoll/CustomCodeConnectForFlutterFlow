@@ -488,28 +488,26 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await page.locator("#hero-send").click();
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
 
-    // The refinement's generator call fails: the run must land on the
-    // persistent failure panel, not a transient toast and a blank stage.
+    // The refinement's generator call fails. STU-379: the run must NOT blank
+    // the previous result — it stays visible and copyable behind a persistent
+    // error + retry banner, never a transient toast over an empty stage.
     await routePipelineStages(page, { responses: { generator: providerError } });
     await page.locator("#btn-refine-header").click();
 
-    await expect(failure(page)).toBeVisible();
-    await expect(failure(page)).toHaveAttribute("data-kind", "generic");
-    await expect(failure(page).locator('button[data-action="retry"]')).toBeVisible();
-    await expect(stage(page, 2)).toHaveAttribute("data-state", "failed");
-    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
-    await expect(page.locator("#results-view")).not.toHaveClass(/visible/);
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    await expect(page.locator("#results-replacement-error")).not.toBeHidden();
+    await expect(page.locator("#results-replacement-error-retry")).toBeVisible();
     await expect(page.locator("#hero-send")).toBeEnabled();
 
     // Well past the hide window the failure is still on screen — a toast
-    // alone would have left an empty stage behind.
+    // alone would have left behind only the floating result.
     await page.waitForTimeout(700);
-    await expect(failure(page)).toBeVisible();
+    await expect(page.locator("#results-replacement-error")).not.toBeHidden();
 
     // Retry re-enters the same refinement flow (Generator then Review), not
     // a brand-new pipeline run from the Architect.
     const retryRun = await routePipelineStages(page);
-    await failure(page).locator('button[data-action="retry"]').click();
+    await page.locator("#results-replacement-error-retry").click();
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
     expect(retryRun.bodies.map((body) => body.step)).toEqual(["generator", "review"]);
   });
@@ -556,11 +554,11 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await page.locator("#ff-error-paste-input").fill("Widget build failed: missing return");
     await page.locator("#btn-fix-from-errors").click();
 
-    await expect(failure(page)).toBeVisible();
-    await expect(failure(page)).toHaveAttribute("data-kind", "generic");
-    await expect(failure(page).locator('button[data-action="retry"]')).toBeVisible();
-    await expect(stage(page, 2)).toHaveAttribute("data-state", "failed");
-    await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
+    // STU-379: a failed replacement keeps the previous result visible and
+    // copyable behind a persistent error + retry banner.
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+    await expect(page.locator("#results-replacement-error")).not.toBeHidden();
+    await expect(page.locator("#results-replacement-error-retry")).toBeVisible();
   });
 });
 
