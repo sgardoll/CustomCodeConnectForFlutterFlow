@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test src/*.test.js",
+    "test:ui": "npx playwright test",
     "test:proxies": "php scripts/test-proxy-allowlist.php",
     "test:deploy-guard": "python3 scripts/test-deploy-guard.py",
     "test:key-storage": "npm run build && node scripts/test-key-storage.mjs",
