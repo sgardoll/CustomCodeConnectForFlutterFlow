@@ -40,10 +40,10 @@ test("trims whitespace before checking", () => {
 });
 
 test("explainPlusAliasRule returns an actionable message for blocked aliases", () => {
-  const msg = explainPlusAliasRule(`user+tag@${firstAllowlistedDomain}`);
-  assert.ok(msg.includes("primary email address"));
-  assert.ok(msg.includes(firstAllowlistedDomain));
-  assert.ok(msg.includes(`user+tag@${firstAllowlistedDomain}`));
+  assert.equal(
+    explainPlusAliasRule("user+tag@gmail.com"),
+    "Please enter your primary email address. Plus aliases (such as user+tag@gmail.com) are not allowed for gmail.com accounts."
+  );
 });
 
 test("explainPlusAliasRule returns null for non-blocked addresses", () => {
@@ -63,11 +63,12 @@ test("getMagicLinkResultMessage maps server codes to inline messages", () => {
     "Use primary email."
   );
 
-  assert.ok(
+  assert.equal(
     getMagicLinkResultMessage(
       { code: fixtures.validationCode },
-      `user+tag@${firstAllowlistedDomain}`
-    ).includes("primary email address")
+      "user+tag@gmail.com"
+    ),
+    "Please enter your primary email address. Plus aliases (such as user+tag@gmail.com) are not allowed for gmail.com accounts."
   );
 });
 
