@@ -34,6 +34,11 @@ test("desktop hero controls stay clickable and readable with the mark field acti
   const canvas = page.locator("#fx-grid");
   await expect(canvas).toHaveClass(/is-ready/);
 
+  // Pointer transparency is an explicit contract, not just a z-index side
+  // effect behind the composer. Assert the computed style so that removing
+  // `pointer-events: none` genuinely fails this test.
+  await expect(canvas).toHaveCSS("pointer-events", "none");
+
   await expect(page.locator("h1.headline")).toBeVisible();
   await expect(page.locator(".composer")).toBeVisible();
 
