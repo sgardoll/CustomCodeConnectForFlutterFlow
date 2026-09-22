@@ -43,6 +43,9 @@ jobs:
       - name: Run browser tests
         run: npm run test:ui
 
+      - name: Run accessibility modal tests
+        run: npm run test:accessibility
+
       - name: Run deploy guard
         run: npm run test:deploy-guard
 
