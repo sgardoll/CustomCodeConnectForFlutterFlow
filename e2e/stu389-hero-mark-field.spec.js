@@ -1,6 +1,22 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, devices } from "@playwright/test";
 
 const DESKTOP = { width: 1440, height: 900 };
+
+// Counts requestAnimationFrame callbacks the page drives over `ms`. The field
+// calls the global `requestAnimationFrame` on every frame, so intercepting it
+// for a short window is a real, falsifiable measure of whether it is animating.
+async function countRafFrames(page, ms) {
+  return page.evaluate(async (millis) => {
+    const orig = window.requestAnimationFrame;
+    let count = 0;
+    window.requestAnimationFrame = function (cb) {
+      count++;
+      return orig.call(window, cb);
+    };
+    await new Promise((r) => setTimeout(r, millis));
+    return count;
+  }, ms);
+}
 
 function collectFxGridWarnings(page) {
   const warnings = [];
@@ -212,12 +228,19 @@ test("effect does not impede typing or page scrolling", async ({ page }) => {
   logs.free();
 });
 
-test("desktop visual comparison on named device", async ({ page }, testInfo) => {
+test("desktop mark field captured as a human-review artifact on a named device", async ({ page }, testInfo) => {
   const logs = collectFxGridWarnings(page);
   await page.setViewportSize(DESKTOP);
   await page.goto("/");
   await expect(page.locator("#fx-grid")).toHaveClass(/is-ready/);
   await page.waitForTimeout(600);
+
+  // This is an artifact for human review, not a regression gate: the field is
+  // animated and mouse-parallax-dependent, so no pixel baseline is compared.
+  // The renderer must at least report the field as actively running before we
+  // capture, so a field that never initializes cannot produce a "clean" shot.
+  const running = await page.evaluate(() => window.__heroField?.isRunning() === true);
+  expect(running, "field should be rendering before the artifact is captured").toBe(true);
 
   const screenshotPath = testInfo.outputPath("hero-mark-field-desktop.png");
   await page.locator(".hero").screenshot({ path: screenshotPath });
@@ -227,32 +250,40 @@ test("desktop visual comparison on named device", async ({ page }, testInfo) => 
   logs.free();
 });
 
-test("frame measurements before and after disabling the effect", async ({ page }) => {
-  const logs = collectFxGridWarnings(page);
-
-  await page.setViewportSize(DESKTOP);
-  await page.goto("/");
-  await page.waitForTimeout(600);
-  const withEffect = await page.evaluate(() => {
-    const nav = performance.getEntriesByType("navigation")[0];
-    return nav ? { domComplete: nav.domComplete, duration: nav.duration } : null;
+test.describe("frame measurements before and after disabling the effect", () => {
+  // Named device profile (Desktop Chrome HiDPI); strip the browser-type field
+  // which cannot change per-group.
+  test.use({
+    viewport: devices["Desktop Chrome HiDPI"].viewport,
+    deviceScaleFactor: devices["Desktop Chrome HiDPI"].deviceScaleFactor,
   });
 
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.reload();
-  await page.waitForTimeout(600);
-  const withoutEffect = await page.evaluate(() => {
-    const nav = performance.getEntriesByType("navigation")[0];
-    return nav ? { domComplete: nav.domComplete, duration: nav.duration } : null;
+  test("field animates on Desktop Chrome HiDPI and stops when reduced motion is enabled", async ({ page }) => {
+    const logs = collectFxGridWarnings(page);
+    await page.goto("/");
+    await expect(page.locator("#fx-grid")).toHaveClass(/is-ready/);
+
+    const runningBefore = await page.evaluate(() => window.__heroField?.isRunning() === true);
+    expect(runningBefore, "field should be running with motion enabled").toBe(true);
+
+    // A genuine frame metric: count requestAnimationFrame callbacks the field
+    // drives over a fixed window. A module that never renders yields 0 here.
+    const framesOn = await countRafFrames(page, 500);
+    expect(framesOn, "with the effect enabled the field should animate, not sit idle").toBeGreaterThan(5);
+
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.waitForTimeout(250);
+
+    const runningAfter = await page.evaluate(() => window.__heroField?.isRunning() === true);
+    expect(runningAfter, "field should stop when reduced motion is enabled").toBe(false);
+
+    const framesOff = await countRafFrames(page, 500);
+    expect(framesOff, "with the effect disabled no new animation frames should be requested").toBe(0);
+
+    // The point is the before/after comparison: rendering must stop, not slow down.
+    expect(framesOff).toBeLessThan(framesOn);
+
+    logs.expectClean();
+    logs.free();
   });
-
-  expect(withEffect).toBeTruthy();
-  expect(withoutEffect).toBeTruthy();
-
-  // The presence of the effect should not blow up the navigation timing.
-  expect(withEffect.duration, "load duration with effect should be finite").toBeLessThan(60_000);
-  expect(withoutEffect.duration, "load duration without effect should be finite").toBeLessThan(60_000);
-
-  logs.expectClean();
-  logs.free();
 });
