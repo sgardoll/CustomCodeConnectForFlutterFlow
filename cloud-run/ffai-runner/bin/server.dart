@@ -548,16 +548,19 @@ List<String> _normalizeSdkPackages(Object? value) {
   if (value is! List) {
     throw const FormatException('verification.sdkPackages must be an array.');
   }
+  if (value.length > maxDependenciesPerRequest) {
+    throw const FormatException('Too many entries in verification.sdkPackages.');
+  }
 
-  final result = <String>[];
+  final result = <String>{};
   for (final raw in value) {
     final name = '$raw';
     if (!_packageNamePattern.hasMatch(name)) {
       throw FormatException('Invalid SDK package name: $name.');
     }
-    if (!result.contains(name)) result.add(name);
+    result.add(name);
   }
-  return result;
+  return result.toList();
 }
 
 String _validateConstraint(
