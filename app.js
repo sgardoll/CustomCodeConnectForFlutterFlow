@@ -4669,37 +4669,93 @@ function updateModelSelectorGating() {
   updateModelInfo(select.value)
 }
 
-function updateUsageDisplay() {
-  const el = document.getElementById('usage-counter')
-  if (!el) return
+/**
+ * Single source of truth for the monthly-usage presentation shown in the
+ * topbar allowance and the usage/billing dialog. Reads the metered count, the
+ * resolved tier limit and the auth/subscription state, then writes every usage
+ * surface (topbar, dialog, account row, guest counter) consistently. Remaining
+ * runs are clamped to zero and an unresolved plan never surfaces a fake balance.
+ */
+function renderUsageSurfaces() {
+  const signedIn = authState.isVerified && !!authState.email;
+  const loading = signedIn && isSubscriptionLoading();
+  const resolved = !signedIn || isSubscriptionResolved();
 
-  if (authState.isVerified && isSubscriptionLoading()) {
-    el.textContent = 'Checking plan…'
-    el.className = 'text-xs text-gray-500'
-    updateGuestUsageCounter()
-    hidePaywallExhausted()
-    return
+  const usage = getUsage();
+  const count = resolved ? usage.count : 0;
+  const limit = resolved ? getRunLimit() : 0;
+  const remaining = Math.max(0, limit - count);
+  const usedLimitText = `${count} / ${limit} runs this month`;
+  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const tier = resolved ? (subscriptionState.tier || "free") : null;
+
+  const topbarCredits = document.getElementById("topbar-credits-count");
+  if (topbarCredits) {
+    if (loading) topbarCredits.textContent = "…";
+    else if (!resolved) topbarCredits.textContent = "—";
+    else topbarCredits.textContent = String(remaining);
   }
 
-  if (authState.isVerified && !isSubscriptionResolved()) {
-    el.textContent = 'Plan check failed'
-    el.className = 'text-xs text-red-600 font-medium'
-    updateGuestUsageCounter()
+  const balance = document.getElementById("credits-balance");
+  if (balance) {
+    if (loading) balance.textContent = "Checking plan…";
+    else if (!resolved) balance.textContent = "Plan check failed";
+    else balance.textContent = usedLimitText;
+  }
+
+  const dialogTier = document.getElementById("usage-dialog-tier");
+  if (dialogTier) {
+    if (loading) dialogTier.textContent = "Checking…";
+    else if (!resolved) dialogTier.textContent = "Unavailable";
+    else dialogTier.textContent = labels[tier] || "Free";
+  }
+
+  const dialogStatus = document.getElementById("usage-dialog-status");
+  if (dialogStatus) {
+    if (loading) dialogStatus.textContent = "Verifying your subscription…";
+    else if (!resolved) dialogStatus.textContent = "Could not verify your subscription. Try again or sign out.";
+    else dialogStatus.textContent = "Runs reset at the start of each month.";
+  }
+
+  const counter = document.getElementById("usage-counter");
+  if (counter) {
+    if (loading && signedIn) {
+      counter.textContent = "Checking plan…";
+      counter.className = "text-xs text-gray-500";
+    } else if (!resolved && signedIn) {
+      counter.textContent = "Plan check failed";
+      counter.className = "text-xs text-red-600 font-medium";
+    } else {
+      counter.textContent = usedLimitText;
+      const pct = limit > 0 ? count / limit : 0;
+      counter.className = pct >= 1
+        ? "text-xs text-red-600 font-medium"
+        : pct >= 0.8
+          ? "text-xs text-yellow-600 font-medium"
+          : "text-xs text-gray-500";
+    }
+  }
+
+  if (!signedIn) {
+    const guestEl = document.getElementById("guest-usage-text");
+    if (guestEl) {
+      const g = getUsageData();
+      const gCount = g.month === getCurrentYearMonth() ? (g.count ?? 0) : 0;
+      guestEl.textContent = `${gCount} / ${TIER_LIMITS.free} generations used`;
+    }
+  }
+}
+
+function updateUsageDisplay() {
+  renderUsageSurfaces()
+
+  if (authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())) {
     hidePaywallExhausted()
     return
   }
 
   const { count } = getUsage()
   const limit = getRunLimit()
-  el.textContent = `${count} / ${limit} runs this month`
-  const pct = limit > 0 ? count / limit : 0
-  el.className = pct >= 1
-    ? 'text-xs text-red-600 font-medium'
-    : pct >= 0.8
-      ? 'text-xs text-yellow-600 font-medium'
-      : 'text-xs text-gray-500'
-  updateGuestUsageCounter()
-
   if (count >= limit && !pipelineState.isRunning) {
     showPaywallExhausted(count, limit)
   } else {
@@ -4708,12 +4764,7 @@ function updateUsageDisplay() {
 }
 
 function updateGuestUsageCounter() {
-  const el = document.getElementById('guest-usage-text')
-  if (!el) return
-  const usage = getUsageData()
-  const count = usage.month === getCurrentYearMonth() ? (usage.count ?? 0) : 0
-  const limit = TIER_LIMITS.free
-  el.textContent = `${count} / ${limit} generations used`
+  renderUsageSurfaces()
 }
 
 // --- STRIPE FUNCTIONS ---
@@ -4815,13 +4866,17 @@ async function startCheckout(tierId) {
   }
 }
 
-async function openCustomerPortal() {
+async function openCustomerPortal(trigger) {
   if (!authState.isVerified || !authState.sessionToken) {
     openSignInModal()
     return
   }
 
-  const btn = document.getElementById('manage-billing-btn')
+  // Every Manage Subscription / Manage Billing trigger shares this single
+  // portal request and its loading/error state, so only one fresh session URL
+  // is ever requested.
+  const btn = trigger || document.getElementById('manage-billing-btn')
+  const prevText = btn ? btn.textContent : ''
   if (btn) { btn.disabled = true; btn.textContent = 'Loading…' }
 
   try {
@@ -4837,7 +4892,7 @@ async function openCustomerPortal() {
     window.location.href = url
   } catch (err) {
     console.error('openCustomerPortal failed:', err)
-    if (btn) { btn.disabled = false; btn.textContent = 'Manage billing' }
+    if (btn) { btn.disabled = false; btn.textContent = prevText }
     showToast('Could not open billing portal. Please try again.', 'error')
   }
 }
@@ -6577,14 +6632,7 @@ function updateShellUI() {
   const avatar = document.getElementById("topbar-avatar");
   if (avatar) avatar.textContent = (authState.email || "?")[0].toUpperCase();
 
-  const usage = getUsage();
-  const usageText = `${usage.count} / ${getRunLimit()} runs this month`;
-
-  const topbarCredits = document.getElementById("topbar-credits-count");
-  if (topbarCredits) topbarCredits.textContent = String(usage.count);
-
-  const creditsBalance = document.getElementById("credits-balance");
-  if (creditsBalance) creditsBalance.textContent = usageText;
+  renderUsageSurfaces();
 
   // Plans view current-plan indicators
   const freeCurrent = document.getElementById("plans-free-current");
