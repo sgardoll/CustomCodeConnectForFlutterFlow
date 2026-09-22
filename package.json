@@ -11,6 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test src/*.test.js",
+    "test:ui": "npx playwright test",
+    "test:ui:headed": "npx playwright test --headed",
     "test:proxies": "php scripts/test-proxy-allowlist.php",
     "test:deploy-guard": "python3 scripts/test-deploy-guard.py",
     "test:key-storage": "npm run build && node scripts/test-key-storage.mjs",
@@ -18,6 +20,7 @@
     "audit:widget": "node scripts/audit-ff-widget.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "playwright": "^1.58.2",
     "pptxgenjs": "^4.0.1",
     "vite": "^7.0.0"
