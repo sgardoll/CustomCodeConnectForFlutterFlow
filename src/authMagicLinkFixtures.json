@@ -1,0 +1,13 @@
+{
+  "allowlistedDomains": [
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "hotmail.com",
+    "live.com",
+    "msn.com"
+  ],
+  "successCode": "MAGIC_LINK_SENT",
+  "validationCode": "PLUS_ALIAS_REJECTED",
+  "messageTemplate": "Please enter your primary email address. Plus aliases (such as {email}) are not allowed for {domain} accounts."
+}

@@ -32,6 +32,12 @@ import {
 } from "./src/flutterFlowCodeSanitizer.js";
 import { formatFlutterFlowFileError } from "./src/flutterFlowFileErrors.js";
 import { extractPackageImports } from "./src/dartPackageImports.js";
+import {
+  explainPlusAliasRule,
+  getMagicLinkResultMessage,
+  isKnownProviderPlusAlias,
+  trimEmail,
+} from "./src/authMagicLink.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import { readProvisionResponse } from "./src/provisionStream.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
@@ -4272,7 +4278,7 @@ async function handleMagicLinkRequest() {
   const input = document.getElementById('signin-email-input')
   const btn = document.getElementById('signin-submit-btn')
   const msg = document.getElementById('signin-message')
-  const email = input?.value?.trim()
+  const email = trimEmail(input?.value)
 
   const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
   if (!email || !emailRegex.test(email) || email.length > 254) {
@@ -4281,13 +4287,19 @@ async function handleMagicLinkRequest() {
   }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…' }
-  if (msg) msg.textContent = ''
+
+  // Explain the rule for known providers, but do not block submission here.
+  // Existing accounts on plus-tagged addresses are still allowed to recover
+  // because the server performs the authoritative check.
+  const plusAliasHint = explainPlusAliasRule(email)
+  if (msg && plusAliasHint) msg.textContent = plusAliasHint
 
   try {
-    await sendMagicLink(email)
-    if (input) input.value = ''
-    if (msg) msg.textContent = `Check your email — we sent a link to ${email}`
-    if (btn) btn.textContent = 'Sent!'
+    const data = await sendMagicLink(email)
+    if (input && data?.code !== 'PLUS_ALIAS_REJECTED') input.value = ''
+    if (msg) msg.textContent = getMagicLinkResultMessage(data, email)
+    if (btn) btn.textContent = data?.code === 'PLUS_ALIAS_REJECTED' ? 'Send Link' : 'Sent!'
+    if (btn && data?.code === 'PLUS_ALIAS_REJECTED') btn.disabled = false
   } catch (err) {
     console.error('handleMagicLinkRequest: sendMagicLink failed', { email, err })
     if (msg) msg.textContent = 'Something went wrong. Please try again.'
