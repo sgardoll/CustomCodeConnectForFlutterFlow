@@ -255,6 +255,21 @@
         object-fit: cover;
         display: block;
       }
+      .prompt-img-thumb.is-pending img { opacity: 0.55; }
+      .prompt-img-thumb.is-pending::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        pointer-events: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 9999px;
+        border: 2px solid rgba(15, 23, 42, 0.15);
+        border-top-color: rgba(15, 23, 42, 0.6);
+        animation: prompt-img-spin 0.8s linear infinite;
+      }
+      @keyframes prompt-img-spin { to { transform: rotate(360deg); } }
       .prompt-img-remove {
         position: absolute;
         top: 3px;
@@ -1621,6 +1636,11 @@
       .hidden {
         display: none !important;
       }
+      .sr-only {
+        position: absolute; width: 1px; height: 1px;
+        padding: 0; margin: -1px; overflow: hidden;
+        clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+      }
 
       @media (max-width: 980px) {
         .results-split { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
@@ -2850,6 +2870,15 @@
         transition: opacity var(--t-fast) var(--ease);
       }
       .composer.has-suggest .ghost .suggest { opacity: 1; }
+      /* Demo caret (prototype): a real text cursor — hard blink on a 1.05s cadence
+         with a soft brand afterglow. Shown while a chip fills the prompt. */
+      @keyframes caret-blink { 0%,45% { opacity:1; } 46%,100% { opacity:0; } }
+      .composer.is-demo-typing .ghost .typed::after {
+        content:""; display:inline-block; width:2px; height:1.05em; margin-right:-2px; vertical-align:-.15em;
+        background:var(--accent); border-radius:1px;
+        box-shadow:0 0 7px 1px oklch(from var(--accent) l c h / .5);
+        animation:caret-blink 1.05s step-end infinite;
+      }
       .composer .tab-hint {
         position: absolute;
         right: 64px;
@@ -2911,6 +2940,20 @@
         cursor: pointer;
       }
       .icon-btn svg { width: 18px; height: 18px; }
+      .prompt-image-upload {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .prompt-image-upload.hidden { display: none; }
+      .prompt-image-thumbnails {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .prompt-image-thumbnails:empty { display: none; }
+      .composer .prompt-img-thumb { width: 40px; height: 40px; border-radius: 8px; }
+      .composer .prompt-img-remove { width: 16px; height: 16px; top: 2px; right: 2px; font-size: 11px; }
       .icon-btn:hover { background: oklch(95% 0.01 260); color: var(--fg); }
       .send {
         position: absolute;
@@ -2933,6 +2976,7 @@
       .send:disabled { background: var(--disabled-bg); color: var(--disabled-fg); box-shadow: none; cursor: not-allowed; }
       .send.is-busy .send-arrow { display: none; }
       .send.is-busy .send-spin { display: block; animation: spin 900ms linear infinite; }
+      .composer.is-busy .field { pointer-events: none; }
       @keyframes spin { to { transform: rotate(360deg); } }
 
       .chips {
@@ -3270,6 +3314,7 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .view, .generation-stage { transition: none; }
+        .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
   </head>
@@ -3322,19 +3367,23 @@
           <span id="suggest-status" class="sr-only" aria-live="polite"></span>
           <button class="tab-hint" type="button" id="tab-hint" tabindex="-1" hidden=""><kbd aria-hidden="true">Tab</kbd><span class="tab-hint-label">to accept</span></button>
           <div class="tools">
-            <button class="icon-btn" type="button" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
-              </svg>
-            </button>
+            <div id="prompt-image-upload" class="prompt-image-upload">
+              <button class="icon-btn" type="button" id="btn-add-images" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
+                </svg>
+                <span id="prompt-image-btn-label" class="sr-only">Add images</span>
+              </button>
+              <div id="prompt-image-thumbnails" class="prompt-image-thumbnails"></div>
+              <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
+            </div>
             <button class="icon-btn" type="button" aria-label="Generation settings" onclick="openApiKeysModal()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>
               </svg>
             </button>
           </div>
-          <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
-          <button class="send" id="hero-send" type="button" aria-label="Generate" onclick="runThinkingPipeline()">
+          <button class="send" id="hero-send" type="button" aria-label="Generate">
             <svg class="send-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7"></path>
             </svg>

@@ -82,6 +82,7 @@ import {
   highlightCode,
   renderMarkdownAudit,
 } from "./src/auditRenderer.js";
+import { initComposer } from "./src/composerAdapter.js";
 
 // --- CONFIGURATION ---
 const IS_DEV = import.meta.env.DEV
@@ -146,6 +147,11 @@ function createSubscriptionState(overrides = {}) {
 }
 
 let subscriptionState = createSubscriptionState({ isResolved: true })
+
+// Settles once startup auth + subscription fetches finish. The composer binds
+// before they complete, so a submission that lands early waits on this rather
+// than checking entitlements against free-tier defaults.
+let sessionReadiness = Promise.resolve()
 
 // --- PIPELINE ---
 const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}/service/runpipeline`
@@ -225,6 +231,19 @@ const PIPELINE_IMAGE_ENDPOINT =
 // what actually gets sent to the pipeline.
 let promptImages = [] // Array of { dataUrl, name, url }
 
+// In-flight attachment uploads, one entry per file: { slot, controller, job }.
+// A submission that lands mid-upload waits on these before snapshotting
+// promptImages, and the composer gates Send/Enter while any are pending.
+// Ordering and cap claims live on the reserved slots in promptImages itself
+// (url === null while a slot is pending); removing a slot aborts its entry.
+const pendingImageUploads = []
+
+// An unresponsive upload endpoint must not gate the composer forever.
+const PROMPT_IMAGE_UPLOAD_TIMEOUT_MS = 30000
+
+// Handle returned by initComposer; lets attachment state gate the Send button.
+let composerControls = null
+
 function readAsDataUrl(file) {
   return new Promise((resolve) => {
     const reader = new FileReader()
@@ -236,12 +255,13 @@ function readAsDataUrl(file) {
 
 // Uploads one image file to the BuildShip image endpoint. The endpoint is
 // called separately from the pipeline so we pass real URLs, not base64.
-async function uploadPromptImage(file) {
+async function uploadPromptImage(file, signal) {
   const formData = new FormData()
   formData.append("file", file)
   const res = await fetch(PIPELINE_IMAGE_ENDPOINT, {
     method: "POST",
     body: formData,
+    signal,
   })
   return res.json()
 }
@@ -282,9 +302,78 @@ function uploadedFileUrl(uploaded) {
   return ""
 }
 
+// Uploads one selected file into its reserved promptImages slot. The slot
+// fixes the file's position and its claim on the cap at selection time; on
+// failure the slot is removed, on user removal the commit is skipped.
+// Resolves "added", "failed" (no usable upload URL, including a timeout),
+// or "dropped" (the slot was removed while the upload was in flight).
+async function addPromptImage(file, slot, signal) {
+  const dataUrl = await readAsDataUrl(file)
+  if (dataUrl && promptImages.includes(slot)) {
+    // Fast local preview while the upload is still in flight.
+    slot.dataUrl = dataUrl
+    renderPromptImages()
+  }
+  let url = ""
+  if (dataUrl) {
+    try {
+      url = uploadedFileUrl(await uploadPromptImage(file, signal))
+    } catch (e) {
+      url = ""
+    }
+  }
+  // The slot may have been removed while the upload was in flight (remove
+  // button, or a non-vision model switch clearing attachments) — commit
+  // nothing then. discardImageUpload has already released the pending gate.
+  if (!promptImages.includes(slot)) return "dropped"
+  // A file that never produced an upload URL is reported by the caller and
+  // its slot removed — keeping it would render a thumbnail the pipeline
+  // silently filters out of the payload.
+  if (!dataUrl || !url) {
+    promptImages.splice(promptImages.indexOf(slot), 1)
+    renderPromptImages()
+    return "failed"
+  }
+  slot.url = url
+  renderPromptImages()
+  return "added"
+}
+
+function releaseImageUpload(entry) {
+  const i = pendingImageUploads.indexOf(entry)
+  if (i >= 0) pendingImageUploads.splice(i, 1)
+  updateAttachmentPending()
+}
+
+// Drop a pending upload: abort its request, free the send gate immediately,
+// and pull the slot if it is still attached. A settled upload is already out
+// of pendingImageUploads and can't reach this path.
+function discardImageUpload(entry) {
+  entry.controller.abort()
+  releaseImageUpload(entry)
+  const i = promptImages.indexOf(entry.slot)
+  if (i >= 0) {
+    promptImages.splice(i, 1)
+    renderPromptImages()
+  }
+}
+
+function updateAttachmentPending() {
+  composerControls?.setAttachmentsPending(pendingImageUploads.length > 0)
+}
+
 async function handlePromptImageSelect(event) {
   const files = Array.from(event.target.files || [])
   if (!files.length) return
+  // Clear immediately so picking the same files again fires a change event.
+  event.target.value = ""
+
+  // A run already in flight has snapshotted its attachments; refuse new
+  // selections so an upload can't appear to belong to a run that omitted it.
+  if (pipelineState.isRunning) {
+    showToast("Wait for the current generation to finish before attaching images.", "info")
+    return
+  }
 
   // Drop oversized files up front rather than uploading/reading them.
   const oversized = files.filter((f) => f.size > MAX_PROMPT_IMAGE_BYTES)
@@ -295,46 +384,54 @@ async function handlePromptImageSelect(event) {
     )
   }
   const validFiles = files.filter((f) => f.size <= MAX_PROMPT_IMAGE_BYTES)
-  if (!validFiles.length) {
-    event.target.value = ""
-    return
-  }
+  if (!validFiles.length) return
 
+  // Reserved slots already count toward the cap, so a second selection can't
+  // claim slots the first one is still filling.
   const remaining = MAX_PROMPT_IMAGES - promptImages.length
   const toAdd = validFiles.slice(0, remaining)
-
-  const jobs = toAdd.map(async (file) => {
-    const dataUrl = await readAsDataUrl(file)
-    if (!dataUrl) return null
-    let url = ""
-    try {
-      url = uploadedFileUrl(await uploadPromptImage(file))
-    } catch (e) {
-      url = ""
-    }
-    return { dataUrl, name: file.name, url }
-  })
-
-  const added = (await Promise.all(jobs)).filter(Boolean)
-  event.target.value = ""
-  // A non-vision model may have been selected while uploading; don't restore
-  // images that the model-change handler cleared.
-  if (
-    added.length &&
-    !modelSupportsImages(
-      document.getElementById("code-generator-model")?.value,
-    )
-  ) {
-    return
-  }
-  promptImages.push(...added)
   if (validFiles.length > remaining) {
     showToast(`You can attach up to ${MAX_PROMPT_IMAGES} images.`, "info")
   }
+  if (!toAdd.length) return
+
+  const jobs = toAdd.map((file) => {
+    // Reserve the ordered slot synchronously: thumbnails and the payload keep
+    // selection order even when uploads finish out of order.
+    const slot = { dataUrl: null, name: file.name, url: null }
+    promptImages.push(slot)
+    const entry = { slot, controller: new AbortController() }
+    const timeoutId = setTimeout(
+      () => entry.controller.abort(),
+      PROMPT_IMAGE_UPLOAD_TIMEOUT_MS,
+    )
+    entry.job = addPromptImage(file, slot, entry.controller.signal)
+    pendingImageUploads.push(entry)
+    entry.job.finally(() => {
+      clearTimeout(timeoutId)
+      releaseImageUpload(entry)
+    })
+    return entry.job
+  })
   renderPromptImages()
+  updateAttachmentPending()
+
+  const results = await Promise.all(jobs)
+  const failed = results.filter((r) => r === "failed").length
+  if (failed) {
+    showToast(`${failed} image(s) could not be uploaded and were not attached.`, "error")
+  }
 }
 
 function removePromptImage(index) {
+  const slot = promptImages[index]
+  const entry = pendingImageUploads.find((e) => e.slot === slot)
+  // Removing a pending thumbnail aborts its upload and frees the send gate
+  // right away instead of waiting on the abandoned request.
+  if (entry) {
+    discardImageUpload(entry)
+    return
+  }
   promptImages.splice(index, 1)
   renderPromptImages()
 }
@@ -347,9 +444,11 @@ function renderPromptImages() {
   container.innerHTML = ""
   promptImages.forEach((img, i) => {
     const el = document.createElement("div")
-    el.className = "prompt-img-thumb"
+    // A slot whose upload is still in flight (url === null) renders dimmed
+    // with a spinner; it can already carry a local dataUrl preview.
+    el.className = "prompt-img-thumb" + (img.url ? "" : " is-pending")
     el.innerHTML =
-      `<img src="${escapeAttr(img.dataUrl)}" alt="Prompt image">` +
+      (img.dataUrl ? `<img src="${escapeAttr(img.dataUrl)}" alt="Prompt image">` : "") +
       `<button type="button" class="prompt-img-remove" title="Remove image" onclick="removePromptImage(${i})">×</button>`
     container.appendChild(el)
   })
@@ -368,6 +467,8 @@ function updatePromptImageAvailability() {
   section.classList.toggle("hidden", !supports)
   // Non-vision models have no way to consume images: drop any already attached.
   if (!supports && promptImages.length) {
+    // Abort uploads still in flight so they release the send gate now.
+    pendingImageUploads.slice().forEach(discardImageUpload)
     promptImages = []
     renderPromptImages()
   }
@@ -4286,6 +4387,12 @@ async function runThinkingPipeline() {
 
   const userInput = document.getElementById("pipeline-input").value;
   const selectedModel = document.getElementById("code-generator-model").value;
+  // Freeze the attachment list at submission time: a thumbnail removal or a
+  // non-vision model switch during the preflight awaits below must not change
+  // the images this run was started with. Still-pending slots live in the
+  // slice too — their jobs commit into these same objects before the payload
+  // is built, so the wait-for-uploads path still works.
+  const submittedImages = promptImages.slice();
 
   if (!userInput.trim()) {
     showToast("Please describe your FlutterFlow widget first.", "warning");
@@ -4299,6 +4406,19 @@ async function runThinkingPipeline() {
   const runId = startPipelineRun();
 
   try {
+    // A submission can beat startup auth/subscription reconciliation; wait for
+    // it so entitlement checks see the real session instead of free defaults.
+    await sessionReadiness;
+    if (!isCurrentPipelineRun(runId)) return;
+
+    // Images still uploading must join this run: wait for every accepted file
+    // to produce a URL (or fail out). Their slots sit in the frozen
+    // submittedImages slice, so commits land there without needing promptImages.
+    if (pendingImageUploads.length) {
+      await Promise.allSettled(pendingImageUploads.map((entry) => entry.job));
+    }
+    if (!isCurrentPipelineRun(runId)) return;
+
     if (!(await canRunPipeline())) return;
     if (!isCurrentPipelineRun(runId)) return;
 
@@ -4316,7 +4436,7 @@ async function runThinkingPipeline() {
     // Reset state
     resetPipelineResults();
     pipelineState.submittedPrompt = userInput;
-    pipelineState.submittedImages = promptImages.slice();
+    pipelineState.submittedImages = submittedImages.filter((img) => img.url);
 
     setRunPipelineButtonBusy(true);
 
@@ -4342,9 +4462,9 @@ async function runThinkingPipeline() {
 
     // Uploaded image URLs are sent to both the architect and the generator so
     // the vision-carrying model sees them when producing the widget.
-    const imagePayload = promptImages
-      .filter((img) => img.url)
-      .map((img) => ({ url: img.url }));
+    const imagePayload = pipelineState.submittedImages.map((img) => ({
+      url: img.url,
+    }));
 
     // A stage result commits to shared pipeline state only after its run is
     // revalidated: a response that lands after the user started a newer run
@@ -6081,9 +6201,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   // cleanup-safe on view transition; completion never depends on it.
   window.__pipelineLogo = createPipelineLogoLoop();
 
-  await initializeAuth();
-  handleCheckoutRedirect();
-  await fetchSubscription();
+  // Bind the composer before the first awaited startup call so the send
+  // button's listener exists while auth/subscription requests are still in
+  // flight; runThinkingPipeline waits on sessionReadiness before checking
+  // entitlements.
+  composerControls = initComposer({ onSubmit: runThinkingPipeline });
+
+  // Startup auth + subscription share one promise: the pipeline awaits it so
+  // an early submission sees the resolved session instead of free defaults.
+  // It always resolves — a failed init must not hang a waiting run.
+  sessionReadiness = (async () => {
+    try {
+      await initializeAuth();
+      handleCheckoutRedirect();
+      await fetchSubscription();
+    } catch (err) {
+      console.warn("Startup auth/subscription initialization failed:", err);
+    }
+  })();
+  await sessionReadiness;
   confirmCheckoutAfterReconcile();
   updateSubscriptionUI();
   updatePricingDisplay();
@@ -6156,7 +6292,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  bindHeroChips();
   restoreViewFromHash();
 });
 
@@ -7462,7 +7597,12 @@ function editPipelinePrompt() {
   setGenerationStageVisible(false);
   const input = document.getElementById("pipeline-input");
   if (input) {
-    if (pipelineState.submittedPrompt) input.value = pipelineState.submittedPrompt;
+    if (pipelineState.submittedPrompt) {
+      input.value = pipelineState.submittedPrompt;
+      // Programmatic restores emit no input event; dispatch one so the
+      // composer's ghost text, chip selection and send state resync.
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
   }
@@ -7473,6 +7613,8 @@ function retryPipelineRun() {
   const input = document.getElementById("pipeline-input");
   if (input && pipelineState.submittedPrompt) {
     input.value = pipelineState.submittedPrompt;
+    // Same resync as the composer-restore path above.
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }
   promptImages = pipelineState.submittedImages.slice();
   renderPromptImages();
@@ -8387,17 +8529,6 @@ window.addEventListener("popstate", (event) => {
 window.addEventListener("hashchange", () => {
   restoreViewFromHash();
 });
-
-function bindHeroChips() {
-  const chips = document.querySelectorAll("#example-chips .chip");
-  const input = document.getElementById("pipeline-input");
-  chips.forEach((chip) => {
-    chip.addEventListener("click", () => {
-      if (input) input.value = chip.dataset.prompt || "";
-      input?.focus();
-    });
-  });
-}
 
 window.copyResultsCode = copyResultsCode;
 window.selectArtifact = selectArtifact;
