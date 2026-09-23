@@ -274,12 +274,26 @@ test.describe("submission wiring at desktop viewport", () => {
     );
   });
 
-  test("the settings control opens the actual generation settings", async ({ page }) => {
+  test("the settings control opens the generation settings dialog", async ({ page }) => {
     await page.goto("/");
 
     await page.click('.tools [aria-label="Generation settings"]');
+    // STU-385: the gear opens the composer generation-settings dialog (model +
+    // generation options), not the API-keys editor directly.
+    await expect(page.locator("#composer-settings-modal")).toHaveClass(/open/);
+    await expect(page.locator("#composer-settings-modal")).toHaveAttribute(
+      "aria-hidden",
+      "false",
+    );
+
+    // Provider-key management is a shortcut into the canonical account
+    // connection editor (STU-384), not a second independent editor.
+    await page.click("#composer-settings-modal [aria-controls='api-keys-modal']");
     await expect(page.locator("#api-keys-modal")).toHaveClass(/open/);
-    await expect(page.locator("#api-keys-modal")).toHaveAttribute("aria-hidden", "false");
+    await expect(page.locator("#api-keys-modal")).toHaveAttribute(
+      "aria-hidden",
+      "false",
+    );
   });
 
   test("attachments keep the existing size and count validation", async ({ page }) => {
