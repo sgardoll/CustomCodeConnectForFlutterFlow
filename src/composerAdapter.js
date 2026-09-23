@@ -119,12 +119,14 @@ export function initComposer({ onSubmit }) {
   const session = createSuggestionSession();
   let composing = false; // IME composition: suggestions must not fight it
   let submitting = false; // duplicate-submission guard
+  let chipTyping = false; // a chip still typing its prompt owns the field
   let debounceTimer = null;
   let chipTimer = null;
 
   // Prototype sync(): the send control follows the prompt and the pipeline.
+  // Chip typing counts as busy: a submit must never carry a half-typed prompt.
   function syncSend() {
-    send.disabled = !canSubmit(field.value, submitting);
+    send.disabled = !canSubmit(field.value, submitting || chipTyping);
   }
 
   function mirrorTyped() {
@@ -202,7 +204,7 @@ export function initComposer({ onSubmit }) {
   }
 
   async function doSubmit() {
-    if (!canSubmit(field.value, submitting)) return;
+    if (!canSubmit(field.value, submitting || chipTyping)) return;
     clearSuggestion();
     setBusy(true);
     try {
@@ -217,11 +219,13 @@ export function initComposer({ onSubmit }) {
   // selected state, and focus lands at the end of the prompt.
 
   function cancelChipTyping() {
+    chipTyping = false;
     if (chipTimer) {
       clearInterval(chipTimer);
       chipTimer = null;
     }
     composer.classList.remove("is-demo-typing");
+    syncSend();
   }
 
   function clearChipSelection() {
@@ -260,6 +264,7 @@ export function initComposer({ onSubmit }) {
 
     field.value = "";
     mirrorTyped();
+    chipTyping = true;
     syncSend();
     composer.classList.add("is-demo-typing");
     let index = 0;
@@ -267,10 +272,11 @@ export function initComposer({ onSubmit }) {
       index += 1;
       field.value = text.slice(0, index);
       mirrorTyped();
-      syncSend();
       if (index >= text.length) {
         cancelChipTyping();
         focusFieldAtEnd();
+      } else {
+        syncSend();
       }
     }, 22);
   }
@@ -284,6 +290,18 @@ export function initComposer({ onSubmit }) {
   // Tab accepts only an active suggestion and otherwise moves focus; Escape
   // dismisses; Enter submits unless Shift is held or an IME is composing.
   field.addEventListener("keydown", (event) => {
+    // Enter while a chip is mid-typing is not a submission and not a
+    // cancellation: the chip finishes writing its full prompt first.
+    if (
+      chipTyping &&
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.isComposing &&
+      !composing
+    ) {
+      event.preventDefault();
+      return;
+    }
     cancelChipTyping();
     if (event.key === "Tab" && !event.shiftKey && session.active) {
       event.preventDefault();
