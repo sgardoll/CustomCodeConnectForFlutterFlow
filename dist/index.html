@@ -3313,7 +3313,7 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-BdVVPYTC.js"></script>
+    <script type="module" crossorigin src="/assets/index-oXwmwfKe.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-DcLSblVK.css">
   </head>
   <body>
@@ -3375,7 +3375,7 @@
               <div id="prompt-image-thumbnails" class="prompt-image-thumbnails"></div>
               <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
             </div>
-            <button class="icon-btn" type="button" aria-label="Generation settings" aria-haspopup="dialog" aria-controls="composer-settings-modal" onclick="openComposerSettings()">
+            <button class="icon-btn" type="button" aria-label="Generation settings" onclick="openApiKeysModal()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>
               </svg>
@@ -3941,57 +3941,6 @@
         <div class="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end" style="flex-shrink:0;background:#fff;border-radius:0 0 16px 16px;">
           <button onclick="clearAllApiKeys()" class="px-4 py-2 text-sm font-medium text-red-500 hover:bg-red-50 rounded-lg transition-colors">Clear All Keys</button>
           <button onclick="saveApiKeys()" class="px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors">Save & Close</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Composer Generation Settings Modal (STU-385): the model selector and
-         generation options moved into the dialog the composer's gear opens.
-         #code-generator-model here remains the single element the generation
-         pipeline reads, so selections made in this dialog reach the actual
-         request unchanged. -->
-    <div id="composer-settings-modal" class="modal-overlay" data-modal-close-handler="closeComposerSettings" onclick="closeComposerSettings(event)">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width:480px; display:flex; flex-direction:column; max-height:calc(100vh - 64px);">
-        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between" style="flex-shrink:0;">
-          <h2 class="font-semibold text-base text-gray-900">Generation settings</h2>
-          <button onclick="closeComposerSettings()" class="modal-close">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-          </button>
-        </div>
-        <div class="p-6 space-y-5" style="overflow-y:auto; flex:1;">
-          <div>
-            <label class="block text-sm font-medium text-gray-600 mb-1.5" for="composer-settings-model">Code generation model</label>
-            <select id="composer-settings-model">
-              <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
-              <option value="anthropic/claude-opus-5">Claude Opus 5</option>
-              <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
-              <option value="z-ai/glm-5.2">GLM 5.2</option>
-              <option value="moonshotai/kimi-k3">Kimi K3</option>
-              <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
-              <option value="openrouter/free">OpenRouter: Free Models</option>
-              <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
-            </select>
-            <p class="text-xs text-gray-400 mt-1" id="composer-settings-free-notice" hidden></p>
-          </div>
-
-          <div>
-            <span class="block text-sm font-medium text-gray-600 mb-2">Generation options</span>
-            <div class="flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
-              <span class="text-sm text-gray-700">Image input</span>
-              <span id="composer-image-capability" class="text-xs font-medium text-gray-500">—</span>
-            </div>
-            <p class="text-xs text-gray-400 mt-1.5" id="composer-image-capability-note"></p>
-          </div>
-
-          <div class="rounded-lg border border-gray-200 overflow-hidden">
-            <button type="button" class="w-full flex items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-gray-50 transition-colors" onclick="openApiKeysModal()" aria-haspopup="dialog" aria-controls="api-keys-modal">
-              <span class="text-sm text-gray-700">API keys &amp; connection</span>
-              <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </button>
-          </div>
-        </div>
-        <div class="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end" style="flex-shrink:0;">
-          <button type="button" data-modal-initial-focus="true" onclick="closeComposerSettings()" class="px-4 py-2 text-sm font-medium text-white bg-blue-500 hover:bg-blue-600 rounded-lg transition-colors">Done</button>
         </div>
       </div>
     </div>
