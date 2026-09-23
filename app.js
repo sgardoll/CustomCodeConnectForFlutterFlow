@@ -231,6 +231,15 @@ const PIPELINE_IMAGE_ENDPOINT =
 // what actually gets sent to the pipeline.
 let promptImages = [] // Array of { dataUrl, name, url }
 
+// In-flight attachment uploads, one promise per file resolving to
+// "added"/"failed"/"dropped". A selection reserves its slots synchronously so
+// a second selection can't overfill the cap, and a submission that lands
+// mid-upload waits on these before snapshotting promptImages.
+const pendingImageUploads = []
+
+// Handle returned by initComposer; lets attachment state gate the Send button.
+let composerControls = null
+
 function readAsDataUrl(file) {
   return new Promise((resolve) => {
     const reader = new FileReader()
@@ -288,9 +297,40 @@ function uploadedFileUrl(uploaded) {
   return ""
 }
 
+// Uploads one selected file and commits it to promptImages on success.
+// Resolves "added", "failed" (no usable upload URL), or "dropped" (a
+// non-vision model was selected while the upload was in flight).
+async function addPromptImage(file) {
+  const dataUrl = await readAsDataUrl(file)
+  let url = ""
+  if (dataUrl) {
+    try {
+      url = uploadedFileUrl(await uploadPromptImage(file))
+    } catch (e) {
+      url = ""
+    }
+  }
+  // A file that never produced an upload URL is reported by the caller and
+  // skipped — attaching it anyway would render a thumbnail the pipeline
+  // silently filters out of the payload.
+  if (!dataUrl || !url) return "failed"
+  // A non-vision model may have been selected while uploading; don't restore
+  // images that the model-change handler cleared.
+  if (!modelSupportsImages(document.getElementById("code-generator-model")?.value)) return "dropped"
+  promptImages.push({ dataUrl, name: file.name, url })
+  renderPromptImages()
+  return "added"
+}
+
+function updateAttachmentPending() {
+  composerControls?.setAttachmentsPending(pendingImageUploads.length > 0)
+}
+
 async function handlePromptImageSelect(event) {
   const files = Array.from(event.target.files || [])
   if (!files.length) return
+  // Clear immediately so picking the same files again fires a change event.
+  event.target.value = ""
 
   // Drop oversized files up front rather than uploading/reading them.
   const oversized = files.filter((f) => f.size > MAX_PROMPT_IMAGE_BYTES)
@@ -301,43 +341,34 @@ async function handlePromptImageSelect(event) {
     )
   }
   const validFiles = files.filter((f) => f.size <= MAX_PROMPT_IMAGE_BYTES)
-  if (!validFiles.length) {
-    event.target.value = ""
-    return
-  }
+  if (!validFiles.length) return
 
-  const remaining = MAX_PROMPT_IMAGES - promptImages.length
+  // Pending uploads count against the cap: a second selection can't claim
+  // slots the first one is still filling.
+  const remaining = MAX_PROMPT_IMAGES - promptImages.length - pendingImageUploads.length
   const toAdd = validFiles.slice(0, remaining)
-
-  const jobs = toAdd.map(async (file) => {
-    const dataUrl = await readAsDataUrl(file)
-    if (!dataUrl) return null
-    let url = ""
-    try {
-      url = uploadedFileUrl(await uploadPromptImage(file))
-    } catch (e) {
-      url = ""
-    }
-    return { dataUrl, name: file.name, url }
-  })
-
-  const added = (await Promise.all(jobs)).filter(Boolean)
-  event.target.value = ""
-  // A non-vision model may have been selected while uploading; don't restore
-  // images that the model-change handler cleared.
-  if (
-    added.length &&
-    !modelSupportsImages(
-      document.getElementById("code-generator-model")?.value,
-    )
-  ) {
-    return
-  }
-  promptImages.push(...added)
   if (validFiles.length > remaining) {
     showToast(`You can attach up to ${MAX_PROMPT_IMAGES} images.`, "info")
   }
-  renderPromptImages()
+  if (!toAdd.length) return
+
+  const jobs = toAdd.map((file) => {
+    const job = addPromptImage(file)
+    pendingImageUploads.push(job)
+    job.finally(() => {
+      const i = pendingImageUploads.indexOf(job)
+      if (i >= 0) pendingImageUploads.splice(i, 1)
+      updateAttachmentPending()
+    })
+    return job
+  })
+  updateAttachmentPending()
+
+  const results = await Promise.all(jobs)
+  const failed = results.filter((r) => r === "failed").length
+  if (failed) {
+    showToast(`${failed} image(s) could not be uploaded and were not attached.`, "error")
+  }
 }
 
 function removePromptImage(index) {
@@ -4310,6 +4341,13 @@ async function runThinkingPipeline() {
     await sessionReadiness;
     if (!isCurrentPipelineRun(runId)) return;
 
+    // Images still uploading must join this run: wait for every accepted file
+    // to produce a URL (or fail out) before snapshotting attachments.
+    if (pendingImageUploads.length) {
+      await Promise.allSettled([...pendingImageUploads]);
+    }
+    if (!isCurrentPipelineRun(runId)) return;
+
     if (!(await canRunPipeline())) return;
     if (!isCurrentPipelineRun(runId)) return;
 
@@ -6096,7 +6134,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // button's listener exists while auth/subscription requests are still in
   // flight; runThinkingPipeline waits on sessionReadiness before checking
   // entitlements.
-  initComposer({ onSubmit: runThinkingPipeline });
+  composerControls = initComposer({ onSubmit: runThinkingPipeline });
 
   // Startup auth + subscription share one promise: the pipeline awaits it so
   // an early submission sees the resolved session instead of free defaults.
@@ -7488,7 +7526,12 @@ function editPipelinePrompt() {
   setGenerationStageVisible(false);
   const input = document.getElementById("pipeline-input");
   if (input) {
-    if (pipelineState.submittedPrompt) input.value = pipelineState.submittedPrompt;
+    if (pipelineState.submittedPrompt) {
+      input.value = pipelineState.submittedPrompt;
+      // Programmatic restores emit no input event; dispatch one so the
+      // composer's ghost text, chip selection and send state resync.
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     input.focus({ preventScroll: true });
     input.setSelectionRange(input.value.length, input.value.length);
   }
@@ -7499,6 +7542,8 @@ function retryPipelineRun() {
   const input = document.getElementById("pipeline-input");
   if (input && pipelineState.submittedPrompt) {
     input.value = pipelineState.submittedPrompt;
+    // Same resync as the composer-restore path above.
+    input.dispatchEvent(new Event("input", { bubbles: true }));
   }
   promptImages = pipelineState.submittedImages.slice();
   renderPromptImages();

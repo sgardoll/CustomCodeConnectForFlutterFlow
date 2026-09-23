@@ -120,13 +120,15 @@ export function initComposer({ onSubmit }) {
   let composing = false; // IME composition: suggestions must not fight it
   let submitting = false; // duplicate-submission guard
   let chipTyping = false; // a chip still typing its prompt owns the field
+  let attachmentsPending = false; // image uploads in flight own the run's attachments
   let debounceTimer = null;
   let chipTimer = null;
 
   // Prototype sync(): the send control follows the prompt and the pipeline.
-  // Chip typing counts as busy: a submit must never carry a half-typed prompt.
+  // Chip typing and in-flight attachment uploads count as busy: a submit must
+  // never carry a half-typed prompt or run without a just-attached image.
   function syncSend() {
-    send.disabled = !canSubmit(field.value, submitting || chipTyping);
+    send.disabled = !canSubmit(field.value, submitting || chipTyping || attachmentsPending);
   }
 
   function mirrorTyped() {
@@ -204,7 +206,7 @@ export function initComposer({ onSubmit }) {
   }
 
   async function doSubmit() {
-    if (!canSubmit(field.value, submitting || chipTyping)) return;
+    if (!canSubmit(field.value, submitting || chipTyping || attachmentsPending)) return;
     clearSuggestion();
     setBusy(true);
     try {
@@ -372,4 +374,13 @@ export function initComposer({ onSubmit }) {
   // reflects it. The shipped default value stays exactly as authored.
   mirrorTyped();
   syncSend();
+
+  return {
+    // app.js marks attachment uploads as pending: submissions are held off
+    // until every accepted file has produced an upload URL or failed out.
+    setAttachmentsPending(pending) {
+      attachmentsPending = Boolean(pending);
+      syncSend();
+    },
+  };
 }
