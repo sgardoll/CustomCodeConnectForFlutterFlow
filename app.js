@@ -231,12 +231,15 @@ const PIPELINE_IMAGE_ENDPOINT =
 // what actually gets sent to the pipeline.
 let promptImages = [] // Array of { dataUrl, name, url }
 
-// In-flight attachment uploads, one promise per file resolving to
-// "added"/"failed"/"dropped". A submission that lands mid-upload waits on
-// these before snapshotting promptImages, and the composer gates Send/Enter
-// while any are pending. Ordering and cap claims live on the reserved slots
-// in promptImages itself (url === null while a slot is pending).
+// In-flight attachment uploads, one entry per file: { slot, controller, job }.
+// A submission that lands mid-upload waits on these before snapshotting
+// promptImages, and the composer gates Send/Enter while any are pending.
+// Ordering and cap claims live on the reserved slots in promptImages itself
+// (url === null while a slot is pending); removing a slot aborts its entry.
 const pendingImageUploads = []
+
+// An unresponsive upload endpoint must not gate the composer forever.
+const PROMPT_IMAGE_UPLOAD_TIMEOUT_MS = 30000
 
 // Handle returned by initComposer; lets attachment state gate the Send button.
 let composerControls = null
@@ -252,12 +255,13 @@ function readAsDataUrl(file) {
 
 // Uploads one image file to the BuildShip image endpoint. The endpoint is
 // called separately from the pipeline so we pass real URLs, not base64.
-async function uploadPromptImage(file) {
+async function uploadPromptImage(file, signal) {
   const formData = new FormData()
   formData.append("file", file)
   const res = await fetch(PIPELINE_IMAGE_ENDPOINT, {
     method: "POST",
     body: formData,
+    signal,
   })
   return res.json()
 }
@@ -301,9 +305,9 @@ function uploadedFileUrl(uploaded) {
 // Uploads one selected file into its reserved promptImages slot. The slot
 // fixes the file's position and its claim on the cap at selection time; on
 // failure the slot is removed, on user removal the commit is skipped.
-// Resolves "added", "failed" (no usable upload URL), or "dropped" (the slot
-// was removed while the upload was in flight).
-async function addPromptImage(file, slot) {
+// Resolves "added", "failed" (no usable upload URL, including a timeout),
+// or "dropped" (the slot was removed while the upload was in flight).
+async function addPromptImage(file, slot, signal) {
   const dataUrl = await readAsDataUrl(file)
   if (dataUrl && promptImages.includes(slot)) {
     // Fast local preview while the upload is still in flight.
@@ -313,14 +317,14 @@ async function addPromptImage(file, slot) {
   let url = ""
   if (dataUrl) {
     try {
-      url = uploadedFileUrl(await uploadPromptImage(file))
+      url = uploadedFileUrl(await uploadPromptImage(file, signal))
     } catch (e) {
       url = ""
     }
   }
   // The slot may have been removed while the upload was in flight (remove
   // button, or a non-vision model switch clearing attachments) — commit
-  // nothing then.
+  // nothing then. discardImageUpload has already released the pending gate.
   if (!promptImages.includes(slot)) return "dropped"
   // A file that never produced an upload URL is reported by the caller and
   // its slot removed — keeping it would render a thumbnail the pipeline
@@ -333,6 +337,25 @@ async function addPromptImage(file, slot) {
   slot.url = url
   renderPromptImages()
   return "added"
+}
+
+function releaseImageUpload(entry) {
+  const i = pendingImageUploads.indexOf(entry)
+  if (i >= 0) pendingImageUploads.splice(i, 1)
+  updateAttachmentPending()
+}
+
+// Drop a pending upload: abort its request, free the send gate immediately,
+// and pull the slot if it is still attached. A settled upload is already out
+// of pendingImageUploads and can't reach this path.
+function discardImageUpload(entry) {
+  entry.controller.abort()
+  releaseImageUpload(entry)
+  const i = promptImages.indexOf(entry.slot)
+  if (i >= 0) {
+    promptImages.splice(i, 1)
+    renderPromptImages()
+  }
 }
 
 function updateAttachmentPending() {
@@ -377,14 +400,18 @@ async function handlePromptImageSelect(event) {
     // selection order even when uploads finish out of order.
     const slot = { dataUrl: null, name: file.name, url: null }
     promptImages.push(slot)
-    const job = addPromptImage(file, slot)
-    pendingImageUploads.push(job)
-    job.finally(() => {
-      const i = pendingImageUploads.indexOf(job)
-      if (i >= 0) pendingImageUploads.splice(i, 1)
-      updateAttachmentPending()
+    const entry = { slot, controller: new AbortController() }
+    const timeoutId = setTimeout(
+      () => entry.controller.abort(),
+      PROMPT_IMAGE_UPLOAD_TIMEOUT_MS,
+    )
+    entry.job = addPromptImage(file, slot, entry.controller.signal)
+    pendingImageUploads.push(entry)
+    entry.job.finally(() => {
+      clearTimeout(timeoutId)
+      releaseImageUpload(entry)
     })
-    return job
+    return entry.job
   })
   renderPromptImages()
   updateAttachmentPending()
@@ -397,6 +424,14 @@ async function handlePromptImageSelect(event) {
 }
 
 function removePromptImage(index) {
+  const slot = promptImages[index]
+  const entry = pendingImageUploads.find((e) => e.slot === slot)
+  // Removing a pending thumbnail aborts its upload and frees the send gate
+  // right away instead of waiting on the abandoned request.
+  if (entry) {
+    discardImageUpload(entry)
+    return
+  }
   promptImages.splice(index, 1)
   renderPromptImages()
 }
@@ -432,6 +467,8 @@ function updatePromptImageAvailability() {
   section.classList.toggle("hidden", !supports)
   // Non-vision models have no way to consume images: drop any already attached.
   if (!supports && promptImages.length) {
+    // Abort uploads still in flight so they release the send gate now.
+    pendingImageUploads.slice().forEach(discardImageUpload)
     promptImages = []
     renderPromptImages()
   }
@@ -4371,7 +4408,7 @@ async function runThinkingPipeline() {
     // Images still uploading must join this run: wait for every accepted file
     // to produce a URL (or fail out) before snapshotting attachments.
     if (pendingImageUploads.length) {
-      await Promise.allSettled([...pendingImageUploads]);
+      await Promise.allSettled(pendingImageUploads.map((entry) => entry.job));
     }
     if (!isCurrentPipelineRun(runId)) return;
 

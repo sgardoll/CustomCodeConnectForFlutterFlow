@@ -204,8 +204,14 @@ export function initComposer({ onSubmit }) {
     composer.classList.toggle("is-busy", busy);
     send.classList.toggle("is-busy", busy);
     send.setAttribute("aria-label", busy ? "Generating" : "Generate");
-    // An attachment can't join a run that's already in flight: the control
-    // and file input stay disabled for the whole submitting interval.
+    // Edits made mid-run can never join it: the prompt and chips stay
+    // inert for the whole submitting interval (readOnly keeps the text
+    // selectable). An attachment can't join either — its control and file
+    // input are disabled too.
+    field.readOnly = busy;
+    chips.forEach((chip) => {
+      chip.disabled = busy;
+    });
     if (attachBtn) attachBtn.disabled = busy;
     if (attachInput) attachInput.disabled = busy;
     syncSend();
