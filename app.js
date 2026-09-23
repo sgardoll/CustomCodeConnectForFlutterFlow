@@ -4387,6 +4387,12 @@ async function runThinkingPipeline() {
 
   const userInput = document.getElementById("pipeline-input").value;
   const selectedModel = document.getElementById("code-generator-model").value;
+  // Freeze the attachment list at submission time: a thumbnail removal or a
+  // non-vision model switch during the preflight awaits below must not change
+  // the images this run was started with. Still-pending slots live in the
+  // slice too — their jobs commit into these same objects before the payload
+  // is built, so the wait-for-uploads path still works.
+  const submittedImages = promptImages.slice();
 
   if (!userInput.trim()) {
     showToast("Please describe your FlutterFlow widget first.", "warning");
@@ -4406,7 +4412,8 @@ async function runThinkingPipeline() {
     if (!isCurrentPipelineRun(runId)) return;
 
     // Images still uploading must join this run: wait for every accepted file
-    // to produce a URL (or fail out) before snapshotting attachments.
+    // to produce a URL (or fail out). Their slots sit in the frozen
+    // submittedImages slice, so commits land there without needing promptImages.
     if (pendingImageUploads.length) {
       await Promise.allSettled(pendingImageUploads.map((entry) => entry.job));
     }
@@ -4429,7 +4436,7 @@ async function runThinkingPipeline() {
     // Reset state
     resetPipelineResults();
     pipelineState.submittedPrompt = userInput;
-    pipelineState.submittedImages = promptImages.slice();
+    pipelineState.submittedImages = submittedImages.filter((img) => img.url);
 
     setRunPipelineButtonBusy(true);
 
@@ -4455,9 +4462,9 @@ async function runThinkingPipeline() {
 
     // Uploaded image URLs are sent to both the architect and the generator so
     // the vision-carrying model sees them when producing the widget.
-    const imagePayload = promptImages
-      .filter((img) => img.url)
-      .map((img) => ({ url: img.url }));
+    const imagePayload = pipelineState.submittedImages.map((img) => ({
+      url: img.url,
+    }));
 
     // A stage result commits to shared pipeline state only after its run is
     // revalidated: a response that lands after the user started a newer run
