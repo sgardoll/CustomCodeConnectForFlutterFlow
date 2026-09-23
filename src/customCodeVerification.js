@@ -170,17 +170,30 @@ function skipReason(className, unresolvableImports, missingPackages) {
  *
  * A dependency that cannot be reproduced outside the project - a `git:`,
  * `path:`, or custom-`hosted:` source - cannot be expressed in the scratch
- * manifest, which carries names and version constraints only. When one is
- * declared, the scratch graph cannot match the project's, so every class
- * that imports anything from `package:` is skipped: even a representable
- * import may reach the unrepresentable package transitively, and a check
- * run against a different graph reports a result that does not describe
- * the code that ships. A class importing only `dart:` never touches pub
- * resolution, so it is still compiled.
+ * manifest, which carries names and version constraints only. Such a
+ * dependency is handled by scope, not by breadth:
+ *
+ * - A class that imports it directly cannot compile without it at all, so it
+ *   is skipped and `skipped` names the import as this class's own problem.
+ * - Every other class is still verified, against a scratch graph that omits
+ *   the unrepresentable package. A representable import may reach that
+ *   package transitively - knowable only by resolving the graph, which
+ *   cannot happen here - so for those classes the check is approximate.
+ *   `approximate` carries one notice per unrepresentable package stating
+ *   exactly that, so the limitation is disclosed rather than silently
+ *   trusted, and the result is never mistaken for full graph fidelity. A
+ *   class importing only `dart:` never touches package resolution, so the
+ *   approximation does not reach it.
+ *
+ * Skipping every class with a `package:` import instead was rejected: one
+ * unrelated git or path dependency would disable the compile check for
+ * nearly the whole deployment, and invalid custom code would land unopposed.
+ * Verifying with a disclosed approximation keeps the check on the code that
+ * ships while saying plainly what it could not reproduce.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>, approximate: string[]}}
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
@@ -196,25 +209,31 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const sources = [];
   const skipped = [];
 
+  // The scratch manifest omits every unrepresentable package, so any class
+  // that does not import one directly is checked against a reduced graph.
+  // Disclosing that per package - rather than skipping those classes or
+  // silently trusting the scratch - keeps the check running and the human
+  // told what it could not reproduce.
+  const approximate = unrepresentable.map(
+    (name) =>
+      `Your project declares ${name} from a source that cannot be reproduced outside it, so the pre-deploy compile check runs against a scratch package graph that omits ${name}. Classes that do not import ${name} directly are still checked, but against that reduced graph, so their transitive package resolution may differ from your project's and the check is approximate for them.`,
+  );
+
   for (const entry of classes) {
     const { className, content } = entry;
 
     const importedPackages = extractPackageImports(content);
 
-    // An unrepresentable dependency means the scratch graph cannot match
-    // the project's, so no class that imports from `package:` can be
-    // checked against the graph it will actually compile with. A direct
-    // import keeps its own reason, naming this class's own import.
-    if (unrepresentable.length > 0 && importedPackages.length > 0) {
-      const direct = importedPackages.filter((name) =>
-        unrepresentable.includes(name),
-      );
+    // A direct import of a dependency the manifest cannot express is this
+    // class's own problem, and the reason names it as such.
+    const unresolvablePackages = importedPackages.filter((name) =>
+      unrepresentable.includes(name),
+    );
+
+    if (unresolvablePackages.length > 0) {
       skipped.push({
         className,
-        reason:
-          direct.length > 0
-            ? `${className} was not compiled before deploying: it imports ${direct.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`
-            : `${className} was not compiled before deploying: your project declares ${unrepresentable.join(", ")} from a source that cannot be reproduced outside it, so the package graph ${className} would compile against could not be matched exactly.`,
+        reason: `${className} was not compiled before deploying: it imports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`,
       });
       continue;
     }
@@ -238,5 +257,5 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     });
   }
 
-  return { manifest, sources, skipped };
+  return { manifest, sources, skipped, approximate };
 }

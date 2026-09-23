@@ -74,6 +74,7 @@ try {
     ["pricing-modal", "window.openPricingModal"],
     ["commit-confirm-modal", `() => window.openCommitConfirmModal({fileName:'test.dart',artifactType:'CustomAction',content:'void test() {}'}, {warnings:[]}, null)`],
     ["commit-success-modal", `() => window.showCommitSuccessModal({success:true,message:'Done',metadata:{projectId:'test',fileName:'test.dart',artifactType:'CustomAction',codeSize:14}})`],
+    ["commit-terminal-modal", `() => window.showCommitUnconfirmedModal({success:false,unconfirmed:true,targetIdentity:{projectId:'test',endpoint:'https://api.flutterflow.io',artifactType:'CustomClass',artifactName:'T',fileName:'test.dart'},error:'outcome unknown'})`],
   ];
   for (const [id, expression] of cases) {
     console.log(`Checking ${id}...`);

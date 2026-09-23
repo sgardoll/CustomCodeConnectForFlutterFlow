@@ -6,6 +6,11 @@ import {
   setModalPending,
 } from "./src/sharedControls.js";
 import {
+  PLAN_LABELS as planLabels,
+  PLAN_LIMITS as planLimits,
+  PLAN_FEATURES as planFeatures,
+} from "./src/plansSurface.js";
+import {
   getPrimaryArtifact,
   normalizeArtifactBundle,
 } from "./src/artifactBundle.js";
@@ -45,9 +50,25 @@ import {
   PLUS_ALIAS_REJECTED_CODE,
   trimEmail,
 } from "./src/authMagicLink.js";
+import {
+  clearDisposableUiCaches,
+  createSendLinkController,
+  isDeleteAccountSupported,
+  performSignOut,
+} from "./src/accountAccess.js";
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
-import { readProvisionResponse } from "./src/provisionStream.js";
+import {
+  deployOutcomeOfStreamResult,
+  readProvisionResponse,
+} from "./src/provisionStream.js";
+import {
+  classifyDeployResult,
+  DeployOutcome,
+  DEPLOY_UI_TIMEOUT_MS,
+} from "./src/deployOutcome.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
+import { initHeroMarkField } from "./src/heroMarkField.js";
+import { createPipelineLogoLoop } from "./src/logoMotion.js";
 import {
   applyDependencyOverrides,
   mergeDependenciesIntoYaml,
@@ -55,7 +76,7 @@ import {
 } from "./src/pubspecSync.js";
 import { planDependencyChanges } from "./src/dependencyResolution.js";
 import { escapeAttr, escapeHtml, escapeHtmlText } from "./src/htmlEscape.js";
-import { resolvePipelineErrorStep } from "./src/pipelineErrors.js";
+import { resolvePipelineErrorStep, classifyPipelineError } from "./src/pipelineErrors.js";
 import {
   extractCodeFromMarkdown,
   highlightCode,
@@ -99,6 +120,11 @@ const STRIPE_PRICE_IDS = {
 }
 
 const AUTH_SESSION_STORAGE_KEY = 'ccc_auth_session'
+// Where the user asked to sign in from (composer, plans, billing…), so a
+// magic-link round trip — which reloads the page with no memory of the DOM —
+// can return them to that surface instead of always landing on home.
+const SIGNIN_RETURN_STORAGE_KEY = 'ccc_signin_return'
+const SIGNIN_RETURN_TTL_MS = 30 * 60 * 1000
 
 const proGateAttachedSet = new WeakSet()
 
@@ -139,11 +165,9 @@ let identityState = {
 }
 
 // --- TIER LIMITS ---
-const TIER_LIMITS = {
-  free: 2,
-  professional: 50,
-  power: 2000,
-}
+// Single source of truth in src/plansSurface.js so the plans page, the
+// paywall and generation gating agree (STU-382 criterion 1).
+const TIER_LIMITS = planLimits;
 
 const SUBSCRIPTION_CACHE_KEY = 'ccc_subscription'
 const SUBSCRIPTION_CACHE_VERSION = 3
@@ -908,6 +932,7 @@ function getFlutterFlowEndpoint() {
 
 function setFlutterFlowEndpoint(endpoint) {
   localStorage.setItem("flutterflow_api_endpoint", endpoint);
+  invalidateStaleProjectSelection();
   return true;
 }
 
@@ -932,6 +957,15 @@ let commitTargetProjectId = null;
 // modal's dropdown when the modal is closed/reopened before the fetch returns.
 let confirmProjectToken = 0;
 
+// Canonical account-connection state for the account connection card. It is
+// derived from the outcome of a real FlutterFlow projects fetch — never from
+// the presence of stored bytes alone and never from the placeholder token
+// "set". 'connected' is only reachable from an actual listProjects response
+// that returned at least one project.
+// kind: 'not-configured' | 'validating' | 'connected' | 'no-projects'
+//       | 'unauthorized' | 'network-error'
+let ffConnectionState = "not-configured";
+
 async function initializeApiKeys() {
   // Remove an exportable key left by an earlier version even if its encrypted
   // credentials were already cleared.
@@ -942,11 +976,28 @@ async function initializeApiKeys() {
   flutterflowProjectId = await getApiKey("flutterflow_project_id");
   updateApiKeyStatusIndicators();
   updateDeployButtonVisibility();
+
+  // If a FlutterFlow key is stored, confirm the real connection even before
+  // the settings modal is opened, so the account connection card is truthful
+  // on load. Non-blocking; runs once per initialize.
+  if (flutterflowApiKey) {
+    validateFlutterFlowConnection();
+  } else {
+    ffConnectionState = "not-configured";
+    renderApiKeyConnection();
+  }
 }
 
 // --- API KEY UI FUNCTIONS ---
 
-function openApiKeysModal() {
+// Onboarding-scoped editor re-entry. The walkthrough's own "connect account"
+// step sets this before opening the shared API-key editor so that closing it
+// returns to (and advances) the tour. Settings opened from any other surface
+// (account card, gear, commit flow) stays false, so closing those never
+// launches or advances the walkthrough.
+let walkthroughSettingsActive = false;
+
+function openApiKeysModalBody() {
   const modal = document.getElementById("api-keys-modal");
   openModal(modal);
 
@@ -960,17 +1011,47 @@ function openApiKeysModal() {
   }
 }
 
+function openApiKeysModal() {
+  // A standalone settings visit, not onboarding: closing it must not touch the
+  // walkthrough.
+  walkthroughSettingsActive = false;
+  openApiKeysModalBody();
+}
+
+// Entered by the walkthrough's "Connect your FlutterFlow account" step. Routes
+// the user to the real account control and remembers, on this one close, to
+// return to the originating tour step.
+function walkthroughConnectAccount() {
+  walkthroughSettingsActive = true;
+  // Close the tour first so the shared editor never stacks on top of it.
+  const wt = document.getElementById("walkthrough-modal");
+  if (wt) closeModal(wt);
+  openApiKeysModalBody();
+}
+
 function closeApiKeysModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("api-keys-modal");
   if (modal) {
     closeModal(modal);
   }
-  // Show walkthrough again after closing API keys
-  const walkthroughModal = document.getElementById("walkthrough-modal");
-  if (walkthroughModal) {
-    advanceWalkthrough();
-    openModal(walkthroughModal);
+  const fromWalkthrough = walkthroughSettingsActive;
+  walkthroughSettingsActive = false;
+  if (fromWalkthrough) {
+    // Return to the originating walkthrough step. Advance only when the
+    // account is genuinely connected, per the STU-384 canonical connection
+    // state (ffConnectionState), which is set only from a successful
+    // listProjects outcome — never from the mere presence of stored key bytes.
+    // A failed or cancelled connection returns to the same connect step so the
+    // user can retry instead of being pushed forward past an unconnected
+    // account.
+    const walkthroughModal = document.getElementById("walkthrough-modal");
+    if (walkthroughModal) {
+      if (ffConnectionState === "connected") {
+        advanceWalkthrough();
+      }
+      openModal(walkthroughModal);
+    }
   }
 }
 
@@ -987,38 +1068,17 @@ function updateWalkthroughUI() {
   if (!steps.length) return;
   steps.forEach((stepEl, idx) => {
     const i = idx + 1;
+    stepEl.classList.remove("wt-current", "wt-done", "wt-pending");
+    const numEl = stepEl.querySelector(".wt-step-num");
     if (i === walkthroughStep) {
-      stepEl.classList.remove("opacity-60", "bg-gray-50", "border-gray-200");
-      stepEl.classList.add("bg-blue-50", "border-blue-200");
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-gray-400");
-        numEl.classList.add("bg-blue-500");
-        numEl.innerHTML = i;
-      }
+      stepEl.classList.add("wt-current");
+      if (numEl) numEl.textContent = i;
     } else if (i < walkthroughStep) {
-      stepEl.classList.remove("opacity-60", "bg-blue-50", "border-blue-200");
-      stepEl.classList.add("bg-green-50", "border-green-200");
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-blue-500", "bg-gray-400");
-        numEl.classList.add("bg-green-500");
-        numEl.innerHTML = "✓";
-      }
+      stepEl.classList.add("wt-done");
+      if (numEl) numEl.textContent = "✓";
     } else {
-      stepEl.classList.add("opacity-60", "bg-gray-50", "border-gray-200");
-      stepEl.classList.remove(
-        "bg-blue-50",
-        "border-blue-200",
-        "bg-green-50",
-        "border-green-200",
-      );
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-blue-500", "bg-green-500");
-        numEl.classList.add("bg-gray-400");
-        numEl.innerHTML = i;
-      }
+      stepEl.classList.add("wt-pending");
+      if (numEl) numEl.textContent = i;
     }
   });
 }
@@ -1109,11 +1169,7 @@ function updateDeployButtonVisibility() {
     pipelineState.step2Result && pipelineState.step2Result.length > 0;
 
   const deployBtn = document.getElementById("btn-deploy-to-ff");
-  const runBtn = document.getElementById("btn-run-pipeline");
 
-  // Run Pipeline stays visible next to Deploy so a generation can be restarted
-  // without closing the results.
-  if (runBtn) runBtn.classList.remove("hidden");
   if (deployBtn) {
     deployBtn.classList.toggle("hidden", !hasGeneratedCode);
   }
@@ -1168,10 +1224,11 @@ function updateApiKeyStatusIndicators() {
 async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
+  const enteredKey = flutterflowInput.value.trim();
 
   // Only save if user entered a new value
-  if (flutterflowInput.value.trim()) {
-    await saveApiKey("flutterflow", flutterflowInput.value);
+  if (enteredKey) {
+    await saveApiKey("flutterflow", enteredKey);
   }
 
   const selectedProjectId = projectSelect?.value.trim() || "";
@@ -1186,6 +1243,15 @@ async function saveApiKeys() {
 
   // Reinitialize keys
   await initializeApiKeys();
+
+  // If a key was (re)entered, wait for the REAL connection outcome before the
+  // editor closes, so the walkthrough advance decision in closeApiKeysModal
+  // sees a settled canonical state rather than an in-flight "validating" or
+  // the mere presence of stored bytes. STU-384 owns this state; it is only
+  // "connected" after a real listProjects returns at least one project.
+  if (enteredKey) {
+    await validateFlutterFlowConnection();
+  }
 
   // Update UI
   loadApiKeyInputs();
@@ -1250,6 +1316,139 @@ function validateFlutterFlowProjectId(projectId) {
   if (!projectId || projectId.trim().length < 5) return false;
   if (projectId.includes(" ")) return false;
   return /^[a-zA-Z0-9-]+$/.test(projectId);
+}
+
+/**
+ * Renders the account connection card from the canonical connection state.
+ * Not-config/validating/connected/no-projects/unauthorized/network-error are
+ * derived from ffConnectionState, which is only ever set from a real
+ * listProjects outcome. No raw or masked API key is ever written into a status
+ * label here.
+ */
+function renderApiKeyConnection() {
+  const dot = document.getElementById("acct-ff-dot");
+  const status = document.getElementById("acct-ff-status");
+  const endpoint = document.getElementById("acct-ff-endpoint");
+  const project = document.getElementById("acct-ff-project");
+
+  // Endpoint and default project always mirror the stored configuration (the
+  // same value the deploy confirmation pre-selects).
+  if (endpoint) {
+    const ep = getFlutterFlowEndpoint();
+    endpoint.textContent = ep && ep.includes("staging") ? "Staging" : "Production";
+  }
+  if (project) {
+    project.textContent = flutterflowProjectId || "—";
+  }
+  if (!status) return;
+
+  let label;
+  let tone;
+  if (!hasStoredKey("flutterflow")) {
+    label = "Not connected — add your FlutterFlow API key";
+    tone = "";
+  } else {
+    switch (ffConnectionState) {
+      case "connected":
+        label = "Connected to FlutterFlow";
+        tone = "ok";
+        break;
+      case "no-projects":
+        label = "Key accepted — no projects found";
+        tone = "warn";
+        break;
+      case "unauthorized":
+        label = "API key rejected (401/403) — re-enter your key";
+        tone = "bad";
+        break;
+      case "network-error":
+        label = "Could not reach FlutterFlow — check your network";
+        tone = "bad";
+        break;
+      case "validating":
+      default:
+        label = "Checking connection…";
+        tone = "warn";
+        break;
+    }
+  }
+  status.textContent = label;
+  if (dot) dot.className = `acct-dot${tone ? " " + tone : ""}`;
+}
+
+/**
+ * Refreshes the canonical connection state by calling the real FlutterFlow
+ * projects endpoint with the stored key. A returned empty list and a 401/403
+ * are distinct outcomes; both differ from a network failure. Used at startup
+ * and after saving/clearing so the account connection card is truthful.
+ * @returns {Promise<Array|null>} the loaded projects, or null on error.
+ */
+async function validateFlutterFlowConnection() {
+  const apiKey = await getApiKey("flutterflow");
+  if (!apiKey || !hasStoredKey("flutterflow")) {
+    ffConnectionState = "not-configured";
+    renderApiKeyConnection();
+    return null;
+  }
+
+  ffConnectionState = "validating";
+  renderApiKeyConnection();
+
+  try {
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
+    const projects = await client.listProjects();
+    ffConnectionState = projects && projects.length > 0
+      ? "connected"
+      : "no-projects";
+    renderApiKeyConnection();
+    return projects;
+  } catch (error) {
+    const msg = String((error && error.message) || "");
+    ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
+      ? "unauthorized"
+      : "network-error";
+    renderApiKeyConnection();
+    return null;
+  }
+}
+
+/**
+ * Clears the currently selected FlutterFlow project so a stale selection
+ * (belonging to a different endpoint, or a removed key) is never reused as a
+ * deploy/sync default. Storage, the in-memory value and the dropdown mirror
+ * each other: the account connection card and the deploy confirmation read the
+ * same stored value, so invalidating it keeps them consistent.
+ */
+function clearStoredProjectSelection() {
+  flutterflowProjectId = "";
+  localStorage.removeItem(STORAGE_KEY_PREFIX + "flutterflow_project_id");
+  sessionStorage.removeItem(SESSION_STORAGE_KEY_PREFIX + "flutterflow_project_id");
+}
+
+/**
+ * Endpoint changes serve a different project set, so the previously selected
+ * project is no longer a trustworthy target. Invalidate the stale selection and
+ * re-fetch the project list for the new endpoint when a key is configured.
+ */
+function invalidateStaleProjectSelection() {
+  clearStoredProjectSelection();
+  const select = document.getElementById("flutterflow-projects-select");
+  if (select) {
+    select.innerHTML = '<option value="">Enter your API key to load projects</option>';
+    select.value = "";
+  }
+  if (hasStoredKey("flutterflow")) {
+    ffConnectionState = "validating";
+    fetchProjects(flutterflowApiKey);
+  } else {
+    ffConnectionState = "not-configured";
+  }
+  renderApiKeyConnection();
 }
 
 function updateInputValidationState(inputId, isValid) {
@@ -1321,15 +1520,32 @@ async function fetchProjects(apiKey) {
   select.innerHTML = '<option value="">Loading projects...</option>';
   if (errorElement) errorElement.classList.add("hidden");
 
+  // A real request is in flight; the account connection card shows validating
+  // until the outcome is known (never "connected" from storage alone).
+  if (hasStoredKey("flutterflow") || apiKey) {
+    ffConnectionState = "validating";
+  }
+  renderApiKeyConnection();
+
   try {
     // Create temporary client instance (no project ID needed)
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
 
     if (!projects || projects.length === 0) {
+      ffConnectionState = "no-projects";
+      renderApiKeyConnection();
       select.innerHTML = '<option value="">No projects found</option>';
       return;
     }
+
+    ffConnectionState = "connected";
+    renderApiKeyConnection();
 
     // Populate dropdown
     select.innerHTML = '<option value="">Select a project...</option>';
@@ -1347,6 +1563,11 @@ async function fetchProjects(apiKey) {
     }
   } catch (error) {
     console.error("Failed to fetch projects:", error);
+    const msg = String((error && error.message) || "");
+    ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
+      ? "unauthorized"
+      : "network-error";
+    renderApiKeyConnection();
     select.innerHTML = '<option value="">Error loading projects</option>';
     if (errorElement) {
       errorElement.textContent = `Failed to load projects: ${error.message}`;
@@ -1386,6 +1607,15 @@ let pipelineState = {
   resultsViewMode: "summary",
   currentStep: 0,
   isRunning: false,
+  // Incremented every time a pipeline run starts. Captured locally by each
+  // run so a stale run's async step results can never overwrite a newer
+  // run's UI state (e.g. a slow first request resolving after the user
+  // already retried).
+  runId: 0,
+  // The prompt and images as submitted, so a retry re-runs exactly what the
+  // user sent and an edit returns them to the composer unchanged.
+  submittedPrompt: "",
+  submittedImages: [],
 };
 
 function resetPipelineResults() {
@@ -2118,6 +2348,54 @@ function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
 }
 
+/**
+ * A carve-out from the ordinary failure path: the client stopped waiting for
+ * (or lost the connection to) the deployment runner before it reported a
+ * decision, so the remote outcome is unknown. This is deliberately *not* a
+ * plain failure — nothing here may be reported as failed or committed when we
+ * cannot know what the server did.
+ */
+class UnconfirmedDeployError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UnconfirmedDeployError";
+    this.outcome = DeployOutcome.UNCONFIRMED;
+  }
+}
+
+/**
+ * Bounded waiting for a remote write. The UI shows live progress only while
+ * this promise settles; once the bound expires the waiter stops claiming
+ * progress and `onExpire` decides the terminal outcome. The underlying promise
+ * is deliberately *not* aborted or retried: it is handed back to the pending
+ * work, and any late settlement is ignored (the bound already resolved the
+ * waiter). This is a rendering bound, never a transport one.
+ * @param {Promise} promise - Work whose remote outcome may or may not arrive
+ * @param {number} ms - How long to wait for a decision
+ * @param {function} onExpire - Called with (resolve, reject) exactly once on expiry
+ * @returns {Promise} Settles with the work's value, or via onExpire on timeout
+ */
+function withUiTimeout(promise, ms, onExpire) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value, which) => {
+      if (settled) return;
+      settled = true;
+      if (which === "resolve") resolve(value);
+      else reject(value);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      onExpire(resolve, reject);
+    }, ms);
+    promise.then(
+      (value) => { clearTimeout(timer); finish(resolve, value, "resolve"); },
+      (error) => { clearTimeout(timer); finish(reject, error, "reject"); },
+    );
+  });
+}
+
 async function provisionMissingCodeFiles(
   apiClient,
   fileMap,
@@ -2169,10 +2447,42 @@ async function provisionMissingCodeFiles(
     }),
   });
 
-  const result = await readProvisionResponse(response, {
-    onPhase: (message) => commitProgress.setSubstatus(message),
-    onLog: (message) => console.log(`[custom class deploy] ${message}`),
-  });
+  const result = await withUiTimeout(
+    readProvisionResponse(response, {
+      onPhase: (message) => commitProgress.setSubstatus(message),
+      onLog: (message) => console.log(`[custom class deploy] ${message}`),
+    }),
+    DEPLOY_UI_TIMEOUT_MS,
+    (resolve, reject) =>
+      reject(
+        new UnconfirmedDeployError(
+          "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
+            "Your custom classes may or may not have been written — the outcome is not yet known. " +
+            "Open your FlutterFlow project to reconcile before retrying the deploy.",
+        ),
+      ),
+  );
+
+  // A stream that ended (or a body that carried) no definitive result leaves
+  // the remote decision ambiguous. There are two distinct cases which must not
+  // be flattened: a server that explicitly refused the request (a 403/5xx
+  // `response.ok === false`) has made a definitive decision — the write did not
+  // happen — so that is a FAILURE, not an unknown outcome; only an ok response
+  // whose stream dropped before a result (or a client wait expiry) leaves the
+  // remote state genuinely unknown and must be reported UNCONFIRMED.
+  if (!result.finalResultReceived) {
+    if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
+      throw new Error(
+        result.error ||
+          `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
+      );
+    }
+    throw new UnconfirmedDeployError(
+      "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
+        "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+        "before retrying.",
+    );
+  }
 
   if (!result.success) {
     const details = result.details ? ` ${result.details}` : "";
@@ -2192,6 +2502,10 @@ async function provisionMissingCodeFiles(
     remoteFiles,
     syncFileMap: excludeProvisionedCodeFiles(fileMap, missingCodeFiles),
     unverified,
+    // Custom classes were actually upserted on the FlutterFlow side by the
+    // runner. Any failure of the *remaining* sync is therefore a partial
+    // outcome — classes wrote, the rest did not — never a clean total failure.
+    provisionSucceeded: true,
   };
 }
 
@@ -2931,6 +3245,18 @@ async function executeCommit(code, options = {}) {
 
   console.log(`Starting commit for ${artifactName} (${artifactType})`);
 
+  // Written before the try so the catch can decide partial vs failed: once the
+  // runner has upserted custom classes, a failure of the remaining sync is a
+  // genuine partial outcome, not a clean total failure.
+  let provisionClassesWritten = false;
+  const targetIdentity = {
+    projectId: null,
+    endpoint: getFlutterFlowEndpoint(),
+    artifactType,
+    artifactName,
+    fileName,
+  };
+
   try {
     // Step 1: Prepare the code
     commitState.setState(CommitState.PREPARING);
@@ -3005,6 +3331,8 @@ async function executeCommit(code, options = {}) {
       `Provision ${artifactName} custom class`,
       serializedYaml,
     );
+    targetIdentity.projectId = projectId;
+    provisionClassesWritten = provisioning.provisionSucceeded === true;
 
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
@@ -3055,6 +3383,7 @@ async function executeCommit(code, options = {}) {
         success: true,
         message: `Successfully committed ${codeInfo.fileName} to FlutterFlow`,
         metadata,
+        targetIdentity,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
@@ -3088,10 +3417,39 @@ async function executeCommit(code, options = {}) {
       }
     }
 
+    // A client-side wait expiry or a dropped stream means the remote outcome
+    // is unknown: report unconfirmed, never fabricated failed or committed.
+    if (error instanceof UnconfirmedDeployError) {
+      return {
+        success: false,
+        unconfirmed: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
+    // Custom classes were already upserted but the remaining sync failed:
+    // that is a partial outcome, and concealing the written classes would lie.
+    if (provisionClassesWritten) {
+      return {
+        success: false,
+        partial: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
     return {
       success: false,
       error: error.message,
       errorMap: errorMap,
+      targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
     };
@@ -3100,6 +3458,17 @@ async function executeCommit(code, options = {}) {
 
 async function executeBundleCommit(bundlePlan, options = {}) {
   const { pipelineResult } = options;
+
+  let provisionClassesWritten = false;
+  const targetIdentity = {
+    projectId: null,
+    endpoint: getFlutterFlowEndpoint(),
+    artifactType: "Bundle",
+    artifactName: bundlePlan?.title,
+    fileName: bundlePlan?.fileEntries
+      ? `${bundlePlan.fileEntries.length} artifacts`
+      : "bundle",
+  };
 
   try {
     commitState.setState(CommitState.PREPARING);
@@ -3166,6 +3535,8 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       `Provision ${bundlePlan.title} custom classes`,
       serializedYaml,
     );
+    targetIdentity.projectId = projectId;
+    provisionClassesWritten = provisioning.provisionSucceeded === true;
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
       provisioning.remoteFiles,
@@ -3219,6 +3590,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
         success: true,
         message: `Successfully committed ${bundlePlan.fileEntries.length} artifacts to FlutterFlow`,
         metadata,
+        targetIdentity,
         addedDependencies: pubspecMerge.added,
         unverified: provisioning.unverified,
         warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
@@ -3233,10 +3605,38 @@ async function executeBundleCommit(bundlePlan, options = {}) {
   } catch (error) {
     console.error("Bundle commit execution failed:", error);
     commitState.setError(error);
+
+    const errorMap = error.errorMap || new Map();
+
+    if (error instanceof UnconfirmedDeployError) {
+      return {
+        success: false,
+        unconfirmed: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
+    if (provisionClassesWritten) {
+      return {
+        success: false,
+        partial: true,
+        error: error.message,
+        errorMap,
+        targetIdentity,
+        state: commitState.currentState,
+        elapsedTime: commitState.getElapsedTime(),
+      };
+    }
+
     return {
       success: false,
       error: error.message,
-      errorMap: error.errorMap || new Map(),
+      errorMap,
+      targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
     };
@@ -3258,11 +3658,16 @@ async function runPromptArchitect(userInput, images = []) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    // An exhausted allowance must keep its marker or the failure view loses
+    // the upgrade action and stage attribution.
+    if (error.isUsageLimit) throw error
+    // A cancelled request is a stale run, not a stage failure.
+    if (error.isPipelineCancel) throw error
     throw new Error(`Prompt Architect failed: ${error.message}`)
   }
 }
 
-async function runCodeGenerator(masterPrompt, selectedModel, images = []) {
+async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId) {
   const prompt = buildGeneratorPrompt(masterPrompt)
   const context = createBuildShipContext("generator", pipelineState.bundleSpec)
   try {
@@ -3270,13 +3675,27 @@ async function runCodeGenerator(masterPrompt, selectedModel, images = []) {
     return result
   } catch (primaryError) {
     if (primaryError.isModelArmor) throw primaryError
+    // An exhausted allowance is not a model problem: retrying on the fallback
+    // model would spend another request and lose the quota signal the view
+    // needs to offer an upgrade.
+    if (primaryError.isUsageLimit) throw primaryError
+    // A cancelled request is a stale run, not a model problem: it must not
+    // trigger a second request on the fallback model.
+    if (primaryError.isPipelineCancel) throw primaryError
     if (selectedModel !== FALLBACK_MODEL) {
       console.warn(`Code Generator failed with ${selectedModel}, retrying with fallback model:`, primaryError.message)
+      // The fallback is a real service event, so the run says so while it
+      // continues rather than silently swapping models behind the progress.
+      notePipelineFallback(selectedModel, FALLBACK_MODEL, runId)
       try {
         const result = await callBuildShip("generator", FALLBACK_MODEL, prompt, context, images)
         return result
       } catch (fallbackError) {
         if (fallbackError.isModelArmor) throw fallbackError
+        // A quota refusal on the fallback is terminal the same way it was on
+        // the primary: wrap it and the upgrade affordance is lost.
+        if (fallbackError.isUsageLimit) throw fallbackError
+        if (fallbackError.isPipelineCancel) throw fallbackError
         throw new Error(`Code Generator failed: primary (${selectedModel}): ${primaryError.message} | fallback (${FALLBACK_MODEL}): ${fallbackError.message}`)
       }
     }
@@ -3294,6 +3713,10 @@ async function runCodeReview(code, architectOutput = null) {
     return result
   } catch (error) {
     if (error.isModelArmor) throw error
+    // An exhausted allowance must keep its marker or the failure view loses
+    // the upgrade action and stage attribution.
+    if (error.isUsageLimit) throw error
+    if (error.isPipelineCancel) throw error
     throw new Error(`Code Review failed: ${error.message}`)
   }
 }
@@ -3462,6 +3885,109 @@ function updateModelInfo(selectedModel) {
   console.log(`Step 3 (Code Review): ${getModelLabel(CODE_REVIEW_MODEL)}`)
 }
 
+/**
+ * Snapshot the current successful generation result so a failed refinement or
+ * build-error replacement can restore it verbatim. The selected artifact, full
+ * bundle, prompt, review and selection are held untouched until a replacement
+ * generation AND review both succeed.
+ */
+function snapshotGenerationResult() {
+  return {
+    step1Result: pipelineState.step1Result,
+    step2Result: pipelineState.step2Result,
+    step3Result: pipelineState.step3Result,
+    artifactBundle: pipelineState.artifactBundle,
+    bundleReview: pipelineState.bundleReview,
+    selectedArtifactId: pipelineState.selectedArtifactId,
+  };
+}
+
+/**
+ * Bring a prior successful result back into shared state and reconcile the
+ * selection to an id that still exists in the restored bundle (so the prior
+ * result never points at a stale artifact that the failed replacement no
+ * longer defined).
+ */
+function restoreGenerationResult(snapshot) {
+  if (!snapshot) return;
+  Object.assign(pipelineState, snapshot);
+  const ids = new Set((pipelineState.artifactBundle?.artifacts || []).map((a) => a.id));
+  if (!ids.has(pipelineState.selectedArtifactId)) {
+    pipelineState.selectedArtifactId =
+      getPrimaryArtifact(pipelineState.artifactBundle)?.id || null;
+  }
+}
+
+const RESULTS_REPLACEMENT_ERROR_ID = "results-replacement-error";
+
+/** Persistent error + retry UI that sits over the retained previous result. */
+function showReplacementFailure(error, { stage = 2, runId, retry }) {
+  if (!isCurrentPipelineRun(runId)) return;
+  const banner = document.getElementById(RESULTS_REPLACEMENT_ERROR_ID);
+  if (!banner) return;
+  const failure = classifyPipelineError(error);
+  const titleEl = document.getElementById("results-replacement-error-title");
+  const messageEl = document.getElementById("results-replacement-error-message");
+  const retryEl = document.getElementById("results-replacement-error-retry");
+  const upgradeEl = document.getElementById("results-replacement-error-upgrade");
+  if (titleEl) titleEl.textContent = `${PIPELINE_STAGE_LABELS[stage] || "Regeneration"}: ${failure.title}`;
+  if (messageEl) messageEl.textContent = failure.message;
+  banner.hidden = false;
+
+  // A quota/usage-limit rejection is the one failure a protected retry cannot
+  // fix — re-firing launches another generation into an already-exhausted
+  // allowance, a dead end. Surface the upgrade affordance as the primary
+  // action, exactly as the non-replacement path does. Every other failure
+  // keeps the retry.
+  let focusTarget = null;
+  if (upgradeEl) {
+    upgradeEl.hidden = !failure.canUpgrade;
+    if (failure.canUpgrade) {
+      upgradeEl.textContent = "View plans";
+      upgradeEl.onclick = () => openPricingModal();
+      focusTarget = upgradeEl;
+    }
+  }
+  if (retryEl) {
+    retryEl.hidden = failure.canUpgrade;
+    if (!failure.canUpgrade) {
+      retryEl.onclick = () => {
+        hideReplacementFailure();
+        if (typeof retry === "function") retry();
+      };
+      retryEl.textContent = "Retry";
+      focusTarget = retryEl;
+    }
+  }
+  // Keyboard accessible: a failed replacement lands focus on the action that
+  // can actually resolve it.
+  (focusTarget || banner).focus({ preventScroll: true });
+}
+
+function hideReplacementFailure() {
+  const banner = document.getElementById(RESULTS_REPLACEMENT_ERROR_ID);
+  if (banner) banner.hidden = true;
+}
+
+/**
+ * Shared completion path for a replacement run (refinement / build-error fix):
+ * the previous successful result is restored verbatim, the Results surface is
+ * repainted from it, and a persistent error + retry banner is shown. A toast
+ * alone is insufficient - the old code and review must stay inspectable and
+ * copyable while the user decides whether to retry.
+ */
+function restoreAndShowReplacementFailure(error, { previous, stage, runId, retry }) {
+  if (!isCurrentPipelineRun(runId)) return;
+  if (error.isUsageLimit) updateUsageDisplay();
+  restoreGenerationResult(previous);
+  hidePipelineProgress();
+  setGenerationStageVisible(true);
+  showResultsView();
+  updateSelectedArtifactPanels();
+  showReplacementFailure(error, { stage, runId, retry });
+  updateDeployButtonVisibility();
+}
+
 async function runRefinement() {
   console.log("runRefinement called");
 
@@ -3472,8 +3998,13 @@ async function runRefinement() {
 
   // Set running state
   pipelineState.isRunning = true;
+  const runId = startPipelineRun();
   callEndpoint('standardRegenerate', pipelineState.step2Result, pipelineState.step1Result)
   const btns = document.querySelectorAll(".btn-refine-action");
+
+  // Hold the prior successful result verbatim until a replacement generation
+  // AND review both succeed; a failure restores it below.
+  const previousResult = snapshotGenerationResult();
 
   btns.forEach((btn) => {
     btn.disabled = true;
@@ -3484,7 +4015,9 @@ async function runRefinement() {
   });
 
   try {
+    hideReplacementFailure();
     const selectedArtifact = getSelectedArtifact();
+    const refinedArtifactId = selectedArtifact.id;
     const refinementPrompt = buildArtifactRegenerationPrompt({
       bundleSpec: pipelineState.step1Result,
       artifactBundle: JSON.stringify(pipelineState.artifactBundle || pipelineState.step2Result),
@@ -3493,20 +4026,28 @@ async function runRefinement() {
       userFeedback: "Fix the issues listed in the audit report.",
     });
 
-    // Show progress bar for refinement
-    showPipelineProgress();
-    updatePipelineProgressStep(2);
+    // Show progress bar for refinement. The run was already claimed above,
+    // so a late response from an older run cannot overwrite this one.
+    showPipelineProgress({ runId });
+    updatePipelineProgressStep(2, runId);
 
     // Step 2: Code Generator (Refinement)
     selectWorkflowStep(2);
     showStepLoading(2, true);
 
-    // We use the same runCodeGenerator function but with the refinement prompt
-    pipelineState.step2Result = await runCodeGenerator(
+    // We use the same runCodeGenerator function but with the refinement
+    // prompt. Stage results commit to shared state only after the run is
+    // revalidated, so an abandoned run cannot overwrite a newer one.
+    const step2Result = await runCodeGenerator(
       refinementPrompt,
       selectedModel,
+      [],
+      runId,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
+    completePipelineStage(2, runId);
 
     const step2Output = document.getElementById("step2-output");
     const cleanStep2 = extractCodeFromMarkdown(pipelineState.step2Result);
@@ -3516,14 +4057,27 @@ async function runRefinement() {
 
     // Step 3: Code Audit (Re-audit)
     selectWorkflowStep(3);
-    updatePipelineProgressStep(3);
+    updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
+    completePipelineStage(3, runId);
+
+    // The whole replacement (generation + review) succeeded, so the new result
+    // is committed. Reconcile the selection onto the re-refined artifact if it
+    // still exists, otherwise fall back to the new bundle's primary — either
+    // way the tabs are rebuilt from the new bundle, so none go stale.
+    if (pipelineState.artifactBundle?.artifacts?.some((a) => a.id === refinedArtifactId)) {
+      pipelineState.selectedArtifactId = refinedArtifactId;
+    } else {
+      pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle)?.id || null;
+    }
 
     const auditOutput = document.getElementById("step3-output");
     auditOutput.textContent = pipelineState.step3Result;
@@ -3536,15 +4090,34 @@ async function runRefinement() {
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
     console.error("Refinement failed:", error);
-    hidePipelineProgress();
-    showToast(getPipelineErrorMessage(error, "Refinement failed"), "error");
+    if (!isCurrentPipelineRun(runId)) return;
+
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    });
+
+    // Restore the previous successful result and keep it visible and copyable
+    // with persistent error + retry UI; the failed replacement never owns the
+    // screen.
+    restoreAndShowReplacementFailure(error, {
+      previous: previousResult,
+      stage: errorStep,
+      runId,
+      retry: runRefinement,
+    });
   } finally {
-    pipelineState.isRunning = false;
+    // The control's own busy affordance is restored even for an abandoned
+    // run — the run guard only protects shared pipeline state.
     btns.forEach((btn) => {
       btn.disabled = false;
       btn.textContent = "Refine & Regenerate";
     });
-    updateDeployButtonVisibility();
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false;
+      updateDeployButtonVisibility();
+    }
   }
 }
 
@@ -3598,6 +4171,7 @@ async function regenerateFromPastedErrors() {
 
   const selectedModel = document.getElementById("code-generator-model").value
   pipelineState.isRunning = true
+  const runId = startPipelineRun()
   callEndpoint('flutterflowError', pipelineState.step2Result, pastedErrors)
 
   const btn = document.getElementById("btn-fix-from-errors")
@@ -3608,7 +4182,12 @@ async function regenerateFromPastedErrors() {
     </svg> Fixing…`
   }
 
+  // Hold the prior successful result verbatim until the bundle replacement
+  // generation AND review both succeed; a failure restores it below.
+  const previousResult = snapshotGenerationResult()
+
   try {
+    hideReplacementFailure()
     const refinementPrompt = buildBundleRegenerationPrompt({
       bundleSpec: pipelineState.step1Result,
       artifactBundle: JSON.stringify(pipelineState.artifactBundle || pipelineState.step2Result),
@@ -3617,14 +4196,17 @@ async function regenerateFromPastedErrors() {
     });
 
     hideErrorInputPanel()
-    showPipelineProgress()
-    updatePipelineProgressStep(2)
+    showPipelineProgress({ runId })
+    updatePipelineProgressStep(2, runId)
 
     selectWorkflowStep(2)
     showStepLoading(2, true)
 
-    pipelineState.step2Result = await runCodeGenerator(refinementPrompt, selectedModel)
+    const step2Result = await runCodeGenerator(refinementPrompt, selectedModel, [], runId)
+    if (!isCurrentPipelineRun(runId)) return
+    pipelineState.step2Result = step2Result
     updateArtifactBundleFromGeneratedCode()
+    completePipelineStage(2, runId)
 
     const step2Output = document.getElementById("step2-output")
     const cleanStep2 = extractCodeFromMarkdown(pipelineState.step2Result)
@@ -3633,11 +4215,14 @@ async function regenerateFromPastedErrors() {
     showStepLoading(2, false)
 
     selectWorkflowStep(3)
-    updatePipelineProgressStep(3)
+    updatePipelineProgressStep(3, runId)
     showStepLoading(3, true)
 
-    pipelineState.step3Result = await runCodeReview(pipelineState.step2Result, pipelineState.step1Result)
+    const step3Result = await runCodeReview(pipelineState.step2Result, pipelineState.step1Result)
+    if (!isCurrentPipelineRun(runId)) return
+    pipelineState.step3Result = step3Result
     updateBundleReviewFromReviewResult()
+    completePipelineStage(3, runId)
 
     const auditOutput = document.getElementById("step3-output")
     auditOutput.textContent = pipelineState.step3Result
@@ -3650,15 +4235,32 @@ async function regenerateFromPastedErrors() {
     if (input) input.value = ""
   } catch (error) {
     console.error("Fix from errors failed:", error)
-    hidePipelineProgress()
-    showToast(getPipelineErrorMessage(error, "Failed to fix errors"), "error")
+    if (!isCurrentPipelineRun(runId)) return
+
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    })
+
+    // Restore the previous successful result and keep it visible and copyable
+    // with persistent error + retry UI; the failed replacement never owns the
+    // screen.
+    restoreAndShowReplacementFailure(error, {
+      previous: previousResult,
+      stage: errorStep,
+      runId,
+      retry: regenerateFromPastedErrors,
+    })
   } finally {
-    pipelineState.isRunning = false
     if (btn) {
       btn.disabled = false
       btn.textContent = "Fix Errors & Regenerate"
     }
-    updateDeployButtonVisibility()
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false
+      updateDeployButtonVisibility()
+    }
   }
 }
 
@@ -3679,38 +4281,37 @@ async function runThinkingPipeline() {
     return;
   }
 
-  if (!(await canRunPipeline())) return;
-
-  await ensureIdentityReady();
-
-  const effectiveModel = getEffectiveModel(selectedModel);
-
-  trackEvent("Pipeline Started", { 
-    selectedModel, 
-    effectiveModel,
-    inputLength: userInput.length
-  });
-
-  const btn = document.getElementById("btn-run-pipeline");
-
-  // Reset state
+  // The run is claimed before the first await, so a second submission during
+  // preflight sees it already running instead of starting a concurrent run
+  // beside it.
   pipelineState.isRunning = true;
-  resetPipelineResults();
-
-  // The redesigned hero shell drives the pipeline from #hero-send, so the
-  // legacy run button is optional; only a surface that has it can show it.
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-    </svg>
-    Running...`;
-  }
-
-  // Update model info
-  updateModelInfo(effectiveModel);
+  const runId = startPipelineRun();
 
   try {
+    if (!(await canRunPipeline())) return;
+    if (!isCurrentPipelineRun(runId)) return;
+
+    await ensureIdentityReady();
+    if (!isCurrentPipelineRun(runId)) return;
+
+    const effectiveModel = getEffectiveModel(selectedModel);
+
+    trackEvent("Pipeline Started", { 
+      selectedModel, 
+      effectiveModel,
+      inputLength: userInput.length
+    });
+
+    // Reset state
+    resetPipelineResults();
+    pipelineState.submittedPrompt = userInput;
+    pipelineState.submittedImages = promptImages.slice();
+
+    setRunPipelineButtonBusy(true);
+
+    // Update model info
+    updateModelInfo(effectiveModel);
+
     // Dismiss welcome video and hide ready state, show progress
     dismissWelcomeVideo();
     const readyState = document.getElementById("ready-state");
@@ -3718,12 +4319,14 @@ async function runThinkingPipeline() {
     const paywallEl = document.getElementById("paywall-exhausted");
     if (paywallEl) paywallEl.classList.add("hidden");
 
-    // Show pipeline progress bar
-    showPipelineProgress();
+    // Show pipeline progress bar. The outline morph runs over the panel once
+    // the panel itself is in place, so busy feedback is immediate either way.
+    showPipelineProgress({ prompt: userInput, runId });
+    morphComposerToPipeline();
 
     // Step 1: Prompt Architect
     selectWorkflowStep(1);
-    updatePipelineProgressStep(1);
+    updatePipelineProgressStep(1, runId);
     showStepLoading(1, true);
 
     // Uploaded image URLs are sent to both the architect and the generator so
@@ -3732,11 +4335,18 @@ async function runThinkingPipeline() {
       .filter((img) => img.url)
       .map((img) => ({ url: img.url }));
 
-    pipelineState.step1Result = await runPromptArchitect(
+    // A stage result commits to shared pipeline state only after its run is
+    // revalidated: a response that lands after the user started a newer run
+    // belongs to a run nobody is watching any more, so it must not touch
+    // pipeline state or the view.
+    const step1Result = await runPromptArchitect(
       userInput,
       imagePayload,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step1Result = step1Result;
     updateBundleSpecFromArchitectResult();
+    completePipelineStage(1, runId);
     trackEvent("Prompt Architect Completed");
 
     const step1Output = document.getElementById("step1-output")
@@ -3747,15 +4357,19 @@ async function runThinkingPipeline() {
 
     // Step 2: Code Generator
     selectWorkflowStep(2);
-    updatePipelineProgressStep(2);
+    updatePipelineProgressStep(2, runId);
     showStepLoading(2, true);
 
-    pipelineState.step2Result = await runCodeGenerator(
+    const step2Result = await runCodeGenerator(
       pipelineState.step1Result,
       effectiveModel,
       imagePayload,
+      runId,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
+    completePipelineStage(2, runId);
     trackEvent("Code Generator Completed");
 
     const step2Output = document.getElementById("step2-output");
@@ -3766,14 +4380,17 @@ async function runThinkingPipeline() {
 
     // Step 3: Code Audit
     selectWorkflowStep(3);
-    updatePipelineProgressStep(3);
+    updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
+    completePipelineStage(3, runId);
     trackEvent("Code Review Completed");
 
     const auditOutput = document.getElementById("step3-output");
@@ -3781,87 +4398,45 @@ async function runThinkingPipeline() {
 
     showStepLoading(3, false);
 
-    // Hide progress bar and show split-panel results
+    // Every stage reported, so the Results view is a real outcome: expand the
+    // panel into it and hand the outline morph over to the expansion.
     hidePipelineProgress();
     const auditHtml = renderMarkdownAudit(pipelineState.step3Result);
+    morphPipelineToResults();
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
-    console.error("Pipeline failed:", error);
-    hidePipelineProgress();
+    // A cancelled request belongs to a run the user already abandoned; it is
+    // not a failure and the run check below discards it quietly anyway.
+    if (!error.isPipelineCancel) console.error("Pipeline failed:", error);
+    // A terminated run never renders a result. The failure replaces the
+    // in-flight state in the same panel and stays there until the user acts.
+    if (!isCurrentPipelineRun(runId)) return;
 
-    if (error.isUsageLimit) {
-      const { count } = getUsage()
-      showPaywallExhausted(count, getRunLimit(), { openModal: true })
-      return
-    }
-
-    trackEvent("Pipeline Failed", {
-      error: error.message,
-      effectiveModel: getEffectiveModel(document.getElementById("code-generator-model").value)
-    });
-
-    // Determine which step failed based on the error context
-    const modelArmorSteps = {
+    const errorStep = resolvePipelineErrorStep(error, {
       architect: 1,
       generator: 2,
       review: 3,
-    };
-    const errorStep = resolvePipelineErrorStep(error, modelArmorSteps);
+    });
+
+    if (error.isUsageLimit) {
+      updateUsageDisplay();
+    } else {
+      trackEvent("Pipeline Failed", {
+        error: error.message,
+        effectiveModel: getEffectiveModel(document.getElementById("code-generator-model").value)
+      });
+    }
 
     selectWorkflowStep(errorStep);
-    const resultDiv = document.getElementById(`step${errorStep}-result`);
-    const loadingDiv = document.getElementById(`step${errorStep}-loading`);
-    const output = document.getElementById(`step${errorStep}-output`);
-
-    // Hide loading and show error
-    if (loadingDiv) loadingDiv.classList.add("hidden");
-    if (resultDiv) resultDiv.classList.remove("hidden");
-
-    if (output) {
-      if (error.isModelArmor) {
-        output.innerHTML = `<div role="alert" class="bg-amber-50 border border-amber-200 rounded-lg p-4" style="white-space:normal;overflow-wrap:anywhere;font-family:'Delight','DM Sans',sans-serif;line-height:1.5;">
-          <h4 class="text-amber-800 font-bold text-xs uppercase mb-2">${escapeHtml(error.userTitle)}</h4>
-          <p class="text-sm text-amber-900">${escapeHtml(error.userMessage)}</p>
-          <p class="mt-3 text-xs text-amber-700">${escapeHtml(error.retryExplanation)}</p>
-        </div>`;
-      } else {
-        // Format error message based on type
-        let errorMessage = error.message;
-        if (error.message.includes("image input")) {
-          errorMessage =
-            `This model doesn't support image input. Please use ${getModelLabel(FREE_MODEL)} for image-based requests or remove image references from your prompt.`;
-        } else if (
-          error.message.includes("Load failed") ||
-          error.message.includes("CORS")
-        ) {
-          errorMessage =
-            "API connection failed. This might be due to CORS restrictions or network issues. Please check your API key and try again.";
-        }
-
-        output.innerHTML = `<div class="bg-red-50 border border-red-200 rounded-lg p-4">
-          <h4 class="text-red-600 font-bold text-xs uppercase mb-2">Connection Error</h4>
-          <p class="text-sm text-red-700">${escapeHtml(errorMessage)}</p>
-          <div class="mt-3 text-xs text-gray-500">
-            <p>Check if API key is valid</p>
-            <p>Try using a different model</p>
-            <p>Ensure network allows API calls</p>
-          </div>
-        </div>`;
-      }
-    }
-
+    showStepLoading(errorStep, false);
+    showPipelineFailure(error, { stage: errorStep, runId });
     updateStepIndicator(errorStep, "error");
   } finally {
-    pipelineState.isRunning = false;
-    if (btn) {
-      btn.disabled = false;
-      btn.innerHTML = `<svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-        <path d="M8 5v14l11-7z"/>
-      </svg>
-      Run Pipeline`;
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false;
+      setRunPipelineButtonBusy(false);
+      updateDeployButtonVisibility();
     }
-
-    updateDeployButtonVisibility();
   }
 }
 
@@ -4042,6 +4617,7 @@ async function regenerateWithErrors(originalError, errorMap) {
   const selectedModel = document.getElementById("code-generator-model").value;
 
   pipelineState.isRunning = true;
+  const runId = startPipelineRun();
 
   const btn = document.getElementById("btn-regenerate-from-error");
   if (btn) {
@@ -4072,19 +4648,25 @@ async function regenerateWithErrors(originalError, errorMap) {
       userFeedback: errorContext,
     });
 
-    showPipelineProgress();
-    updatePipelineProgressStep(2);
+    showPipelineProgress({ runId });
+    updatePipelineProgressStep(2, runId);
 
     // Go to step 2
     selectWorkflowStep(2);
     showStepLoading(2, true);
 
-    // Generate new code
-    pipelineState.step2Result = await runCodeGenerator(
+    // Generate new code. Stage results commit to shared state only after the
+    // run is revalidated, so an abandoned run cannot overwrite a newer one.
+    const step2Result = await runCodeGenerator(
       refinementPrompt,
       selectedModel,
+      [],
+      runId,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step2Result = step2Result;
     updateArtifactBundleFromGeneratedCode();
+    completePipelineStage(2, runId);
 
     const step2Output = document.getElementById("step2-output");
     const cleanStep2 = extractCodeFromMarkdown(pipelineState.step2Result);
@@ -4094,14 +4676,17 @@ async function regenerateWithErrors(originalError, errorMap) {
 
     // Run audit
     selectWorkflowStep(3);
-    updatePipelineProgressStep(3);
+    updatePipelineProgressStep(3, runId);
     showStepLoading(3, true);
 
-    pipelineState.step3Result = await runCodeReview(
+    const step3Result = await runCodeReview(
       pipelineState.step2Result,
       pipelineState.step1Result,
     );
+    if (!isCurrentPipelineRun(runId)) return;
+    pipelineState.step3Result = step3Result;
     updateBundleReviewFromReviewResult();
+    completePipelineStage(3, runId);
 
     const auditOutput = document.getElementById("step3-output");
     auditOutput.textContent = pipelineState.step3Result;
@@ -4113,17 +4698,35 @@ async function regenerateWithErrors(originalError, errorMap) {
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
     console.error("Regeneration failed:", error);
-    hidePipelineProgress();
-    showToast(getPipelineErrorMessage(error, "Regeneration failed"), "error");
-  } finally {
-    pipelineState.isRunning = false;
+    if (!isCurrentPipelineRun(runId)) return;
 
+    const errorStep = resolvePipelineErrorStep(error, {
+      architect: 2,
+      generator: 2,
+      review: 3,
+    });
+
+    if (error.isUsageLimit) {
+      updateUsageDisplay();
+    }
+
+    selectWorkflowStep(errorStep);
+    showStepLoading(errorStep, false);
+    showPipelineFailure(error, {
+      stage: errorStep,
+      runId,
+      retry: () => regenerateWithErrors(originalError, errorMap),
+    });
+    updateStepIndicator(errorStep, "error");
+  } finally {
     if (btn) {
       btn.disabled = false;
       btn.textContent = "Fix Errors & Regenerate";
     }
-
-    updateDeployButtonVisibility();
+    if (isCurrentPipelineRun(runId)) {
+      pipelineState.isRunning = false;
+      updateDeployButtonVisibility();
+    }
   }
 }
 
@@ -4259,8 +4862,19 @@ async function initializeAuth() {
     try {
       const { email, sessionToken } = await verifyMagicLink(magicToken)
       saveSession(email, sessionToken)
+      closeSignInModal()
+      // Land back on whichever surface (composer, plans, billing) the user
+      // asked to sign in from, unless the link itself already carried a hash.
+      const returnHash = consumeSignInReturnSurface()
+      if (returnHash && !window.location.hash) window.location.hash = returnHash
     } catch (err) {
-      showToast(err.message || 'Sign-in link invalid or expired.', 'error')
+      consumeSignInReturnSurface()
+      const message = err.message || 'Sign-in link invalid or expired.'
+      showToast(message, 'error')
+      // Surface the failure inline too, with the retry control right there,
+      // instead of leaving the user to hunt for a way back in.
+      openSignInModal()
+      setSignInMessage(message, 'error')
     }
   } else {
     const { email, sessionToken } = getStoredSession()
@@ -4277,9 +4891,43 @@ async function initializeAuth() {
   updateAuthUI()
 }
 
+// Records which surface (home/composer, plans, or account/billing) the user
+// was on when they opened the sign-in modal, so a magic-link click — which
+// lands as a fresh page load — can return them there. Keyed by URL hash,
+// which is how switchView() already tracks the current surface.
+function rememberSignInReturnSurface() {
+  try {
+    localStorage.setItem(SIGNIN_RETURN_STORAGE_KEY, JSON.stringify({
+      hash: window.location.hash || '#home',
+      ts: Date.now(),
+    }))
+  } catch (err) {
+    console.warn('rememberSignInReturnSurface: failed to persist return surface:', err)
+  }
+}
+
+function consumeSignInReturnSurface() {
+  try {
+    const raw = localStorage.getItem(SIGNIN_RETURN_STORAGE_KEY)
+    localStorage.removeItem(SIGNIN_RETURN_STORAGE_KEY)
+    if (!raw) return null
+    const { hash, ts } = JSON.parse(raw)
+    if (!hash || typeof ts !== 'number' || Date.now() - ts > SIGNIN_RETURN_TTL_MS) return null
+    return hash
+  } catch (err) {
+    console.warn('consumeSignInReturnSurface: failed to read return surface:', err)
+    return null
+  }
+}
+
 function openSignInModal() {
   const modal = document.getElementById('signin-modal')
-  if (modal) openModal(modal)
+  if (!modal) return
+  rememberSignInReturnSurface()
+  const input = document.getElementById('signin-email-input')
+  input?.removeAttribute('aria-invalid')
+  setSignInMessage('')
+  openModal(modal)
 }
 
 function closeSignInModal(event) {
@@ -4288,17 +4936,26 @@ function closeSignInModal(event) {
   if (modal) closeModal(modal)
 }
 
+function setSignInMessage(text, variant) {
+  const msg = document.getElementById('signin-message')
+  if (!msg) return
+  msg.textContent = text || ''
+  msg.classList.remove('signin-message-success', 'signin-message-error')
+  if (variant) msg.classList.add(`signin-message-${variant}`)
+}
+
 async function handleMagicLinkRequest() {
   const input = document.getElementById('signin-email-input')
   const btn = document.getElementById('signin-submit-btn')
-  const msg = document.getElementById('signin-message')
   const email = trimEmail(input?.value)
 
   const emailRegex = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/
   if (!email || !emailRegex.test(email) || email.length > 254) {
-    if (msg) msg.textContent = 'Please enter a valid email address.'
+    input?.setAttribute('aria-invalid', 'true')
+    setSignInMessage('Please enter a valid email address.', 'error')
     return
   }
+  input?.removeAttribute('aria-invalid')
 
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…' }
 
@@ -4306,26 +4963,116 @@ async function handleMagicLinkRequest() {
   // Existing accounts on plus-tagged addresses are still allowed to recover
   // because the server performs the authoritative check.
   const plusAliasHint = explainPlusAliasRule(email)
-  if (msg && plusAliasHint) msg.textContent = plusAliasHint
+  if (plusAliasHint) setSignInMessage(plusAliasHint, 'error')
 
   try {
     const data = await sendMagicLink(email)
-    if (input && data?.code !== PLUS_ALIAS_REJECTED_CODE) input.value = ''
-    if (msg) msg.textContent = getMagicLinkResultMessage(data, email)
-    if (btn) btn.textContent = data?.code === PLUS_ALIAS_REJECTED_CODE ? 'Send Link' : 'Sent!'
-    if (btn && data?.code === PLUS_ALIAS_REJECTED_CODE) btn.disabled = false
+    const isAliasRejected = data?.code === PLUS_ALIAS_REJECTED_CODE
+    if (input && !isAliasRejected) input.value = ''
+    input?.setAttribute('aria-invalid', String(isAliasRejected))
+    setSignInMessage(getMagicLinkResultMessage(data, email), isAliasRejected ? 'error' : 'success')
+    // A successful send must stay retryable — the user may want to resend to
+    // a different address, or send another link if the first one expires —
+    // so the button is re-enabled either way, never left permanently disabled.
+    // "Sent!" is shown briefly for confirmation, then reverts so the control
+    // clearly reads as usable again.
+    if (btn) {
+      btn.disabled = false
+      btn.textContent = isAliasRejected ? 'Send Sign-in Link' : 'Sent!'
+      if (!isAliasRejected) {
+        setTimeout(() => { if (btn.textContent === 'Sent!') btn.textContent = 'Send Sign-in Link' }, 2500)
+      }
+    }
   } catch (err) {
     console.error('handleMagicLinkRequest: sendMagicLink failed', { email, err })
-    if (msg) msg.textContent = 'Something went wrong. Please try again.'
-    if (btn) { btn.disabled = false; btn.textContent = 'Send Link' }
+    setSignInMessage('Something went wrong. Please try again.', 'error')
+    if (btn) { btn.disabled = false; btn.textContent = 'Send Sign-in Link' }
   }
 }
 
 function handleSignOut() {
-  clearSession()
-  clearSubscriptionCache()
-  updateAuthUI()
-  updateSubscriptionUI()
+  // Reset in-memory auth/subscription state first so the immediate re-render
+  // below reflects a signed-out identity/plan.
+  authState.email = null
+  authState.sessionToken = null
+  authState.isVerified = false
+  subscriptionState = createSubscriptionState({ isResolved: true })
+  // Remove the session + subscription cache keys (scoped adapter) and then
+  // synchronously re-render every identity/plan surface.
+  performSignOut({
+    storage: window.localStorage,
+    onIdentityChanged: updateAuthUI,
+    onPlanChanged: updateSubscriptionUI,
+  })
+}
+
+// --- ACCOUNT ACCESS & DATA WIRING (STU-387) ---
+// One "Send new link" controller guards against duplicate requests and reflects
+// the actual response or failure into the row's status line.
+const accessSendNewLink = createSendLinkController({
+  sendLink: sendMagicLink,
+  getEmail: () => authState.email || "",
+  onState: renderSendNewLinkState,
+})
+
+function renderSendNewLinkState(state) {
+  const btn = document.getElementById("send-new-link-btn")
+  const msg = document.getElementById("send-new-link-msg")
+  if (!btn || !msg) return
+  if (state.status === "pending") {
+    btn.disabled = true
+    btn.textContent = "Sending…"
+    msg.className = "acct-access-msg"
+    msg.textContent = "Sending a fresh sign-in link…"
+    return
+  }
+  if (state.status === "sent") {
+    btn.disabled = false
+    btn.textContent = "Send new link"
+    msg.className = "acct-access-msg"
+    msg.textContent = getMagicLinkResultMessage(state.data, authState.email || "") || "Link sent — check your email."
+    return
+  }
+  // status === "error": surface the real failure, never a canned success. The
+  // propagated Error carries a user-safe reason (e.g. "HTTP 429", "HTTP 500")
+  // rather than raw server internals, and a rate-limit must not read identically
+  // to a server error. Fall back to the generic copy only when no reason escaped.
+  btn.disabled = false
+  btn.textContent = "Send new link"
+  msg.className = "acct-access-msg error"
+  const reason = state.error?.message
+    ? `Couldn't send a link right now. ${state.error.message}`
+    : "Couldn't send a link right now. Please try again."
+  msg.textContent = reason
+}
+
+async function handleSendNewLink() {
+  await accessSendNewLink()
+}
+
+function handleClearCache() {
+  // Scoped to the named disposable UI caches only — never usage, identity,
+  // credentials, or the active session, so it cannot hand out new runs.
+  const removed = clearDisposableUiCaches(window.localStorage)
+  const detail = removed.length
+    ? `Cleared disposable UI caches: ${removed.join(", ")}.`
+    : "Nothing disposable to clear."
+  showToast(`${detail} Your run count, identity and stored keys are kept.`, "info")
+}
+
+function handleDeleteAccount() {
+  // Truthful: no backend deletion contract exists in this slice, so this control
+  // only explains that deletion is unavailable. It performs no deletion and
+  // never resets usage, identity, credentials, or the session.
+  if (isDeleteAccountSupported()) return
+  const modal = document.getElementById("delete-unavailable-modal")
+  if (modal) openModal(modal, { trigger: document.activeElement })
+}
+
+function closeDeleteUnavailableModal(event) {
+  if (event && event.target !== event.currentTarget) return
+  const modal = document.getElementById("delete-unavailable-modal")
+  if (modal) closeModal(modal)
 }
 
 function updateAuthUI() {
@@ -4338,6 +5085,8 @@ function updateAuthUI() {
   if (guestUsage) guestUsage.classList.toggle('hidden', signedIn)
   const emailEl = document.getElementById('auth-user-email')
   if (emailEl) emailEl.textContent = authState.email || ''
+  const accessEmailEl = document.getElementById('access-signed-email')
+  if (accessEmailEl) accessEmailEl.textContent = authState.email || ''
   updateGuestUsageCounter()
   updateSubscriptionUI()
 }
@@ -4665,37 +5414,212 @@ function updateModelSelectorGating() {
   updateModelInfo(select.value)
 }
 
-function updateUsageDisplay() {
-  const el = document.getElementById('usage-counter')
-  if (!el) return
+/**
+ * Single source of truth for the monthly-usage presentation shown in the
+ * topbar allowance and the usage/billing dialog. Reads the metered count, the
+ * resolved tier limit and the auth/subscription state, then writes every usage
+ * surface (topbar, dialog, account row, guest counter) consistently. Remaining
+ * runs are clamped to zero and an unresolved plan never surfaces a fake balance.
+ */
+function renderUsageSurfaces() {
+  const signedIn = authState.isVerified && !!authState.email;
+  const loading = signedIn && isSubscriptionLoading();
+  const resolved = !signedIn || isSubscriptionResolved();
 
-  if (authState.isVerified && isSubscriptionLoading()) {
-    el.textContent = 'Checking plan…'
-    el.className = 'text-xs text-gray-500'
-    updateGuestUsageCounter()
-    hidePaywallExhausted()
-    return
+  const usage = getUsage();
+  const count = resolved ? usage.count : 0;
+  const limit = resolved ? getRunLimit() : 0;
+  const remaining = Math.max(0, limit - count);
+  const usedLimitText = `${count} / ${limit} runs this month`;
+  const labels = planLabels;
+  const tier = resolved ? (subscriptionState.tier || "free") : null;
+
+  const topbarCredits = document.getElementById("topbar-credits-count");
+  if (topbarCredits) {
+    if (loading) topbarCredits.textContent = "…";
+    else if (!resolved) topbarCredits.textContent = "—";
+    else topbarCredits.textContent = String(remaining);
   }
 
-  if (authState.isVerified && !isSubscriptionResolved()) {
-    el.textContent = 'Plan check failed'
-    el.className = 'text-xs text-red-600 font-medium'
-    updateGuestUsageCounter()
+  const balance = document.getElementById("credits-balance");
+  if (balance) {
+    if (loading) balance.textContent = "Checking plan…";
+    else if (!resolved) balance.textContent = "Plan check failed";
+    else balance.textContent = usedLimitText;
+  }
+
+  const dialogTier = document.getElementById("usage-dialog-tier");
+  if (dialogTier) {
+    if (loading) dialogTier.textContent = "Checking…";
+    else if (!resolved) dialogTier.textContent = "Unavailable";
+    else dialogTier.textContent = labels[tier] || "Free";
+  }
+
+  const dialogStatus = document.getElementById("usage-dialog-status");
+  if (dialogStatus) {
+    if (loading) dialogStatus.textContent = "Verifying your subscription…";
+    else if (!resolved) dialogStatus.textContent = "Could not verify your subscription. Try again or sign out.";
+    else dialogStatus.textContent = "Runs reset at the start of each month.";
+  }
+
+  const counter = document.getElementById("usage-counter");
+  if (counter) {
+    if (loading && signedIn) {
+      counter.textContent = "Checking plan…";
+      counter.className = "text-xs text-gray-500";
+    } else if (!resolved && signedIn) {
+      counter.textContent = "Plan check failed";
+      counter.className = "text-xs text-red-600 font-medium";
+    } else {
+      counter.textContent = usedLimitText;
+      const pct = limit > 0 ? count / limit : 0;
+      counter.className = pct >= 1
+        ? "text-xs text-red-600 font-medium"
+        : pct >= 0.8
+          ? "text-xs text-yellow-600 font-medium"
+          : "text-xs text-gray-500";
+    }
+  }
+
+  if (!signedIn) {
+    const guestEl = document.getElementById("guest-usage-text");
+    if (guestEl) {
+      const g = getUsageData();
+      const gCount = g.month === getCurrentYearMonth() ? (g.count ?? 0) : 0;
+      guestEl.textContent = `${gCount} / ${TIER_LIMITS.free} generations used`;
+    }
+  }
+
+  renderAccountOverview();
+}
+
+/**
+ * Renders the account overview: identity, plan, usage meter and available
+ * period information. This is the single presentation adapter for the account
+ * view and reads the same session, subscription and metered state as the
+ * topbar (renderUsageSurfaces), so sign-in/out and a usage refresh move all
+ * surfaces together.
+ *
+ * Honesty contract, enforced by render: every number/date/identity traces to a
+ * real field or a documented derivation (email-derived display name/avatar
+ * initial, metered count, tier limit). A renewal/reset date is shown ONLY when
+ * subscriptionState.periodEnd is a real value — never fabricated — and an
+ * unresolved plan surfaces checking/unavailable copy, never a stale balance.
+ */
+function renderAccountOverview() {
+  const signedIn = authState.isVerified && !!authState.email;
+  if (!signedIn) {
+    // Signed-out/guest state has its own container; leave the signed-in
+    // overview untouched in the hidden subtree so no previous identity lingers
+    // anywhere a later sign-in could briefly flash it.
+    return;
+  }
+
+  const loading = isSubscriptionLoading();
+  const resolved = isSubscriptionResolved();
+  const usage = getUsage();
+  const count = resolved ? usage.count : 0;
+  const limit = resolved ? getRunLimit() : 0;
+  const remaining = Math.max(0, limit - count);
+  const tier = resolved ? (subscriptionState.tier || "free") : null;
+  const tierLabel = { free: "Free", professional: "Pro", power: "Power" }[tier] || "Free";
+
+  // --- identity: real email, documented derivations only, no member-since ---
+  const email = authState.email || "";
+  const localPart = email.split("@")[0] || email;
+  const avatar = document.getElementById("acct-avatar");
+  if (avatar) avatar.textContent = (email[0] || "?").toUpperCase();
+  const name = document.getElementById("acct-name");
+  if (name) name.textContent = localPart || "—";
+
+  // --- plan ---
+  const planTier = document.getElementById("acct-plan-tier");
+  const planPrice = document.getElementById("acct-plan-price");
+  const planNote = document.getElementById("acct-plan-note");
+  const renewal = document.getElementById("acct-renewal");
+  if (planTier) {
+    planTier.textContent = loading ? "Checking…" : resolved ? tierLabel : "Plan unavailable";
+  }
+  if (planPrice) {
+    if (loading) planPrice.textContent = "—";
+    else if (!resolved) planPrice.textContent = "—";
+    else if (tier === "free") planPrice.textContent = "$0 / month";
+    else {
+      const money = formatPrice(BASE_PRICES_AUD[tier] ?? 0, detectUserCurrency());
+      planPrice.textContent = `${money} / month`;
+    }
+  }
+  if (planNote) {
+    if (loading) planNote.textContent = "Verifying your subscription…";
+    else if (!resolved) planNote.textContent = "Could not verify your subscription. Check billing or sign out.";
+    else if (tier === "free") planNote.textContent = "No subscription. Upgrade for more generations.";
+    else planNote.textContent = "billed monthly through Stripe";
+  }
+  if (renewal) {
+    const periodEndMs = Date.parse(subscriptionState.periodEnd || "");
+    const hasRealPeriodEnd = resolved && tier !== "free" && !!subscriptionState.periodEnd && !Number.isNaN(periodEndMs);
+    if (loading) renewal.textContent = "";
+    else if (!resolved) renewal.textContent = "";
+    else if (tier === "free") renewal.textContent = "";
+    else if (hasRealPeriodEnd) {
+      const date = new Date(periodEndMs).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+      renewal.textContent = `Renews ${date} · reset at the start of each month.`;
+    } else {
+      // No fabricated date: if the plan has no real period end we say so plainly.
+      renewal.textContent = "Renewal date is not available for this period.";
+    }
+  }
+
+  // --- usage: generations left + meter ---
+  const leftCount = document.getElementById("acct-left-count");
+  const leftLimit = document.getElementById("acct-left-limit");
+  const resetNote = document.getElementById("acct-reset-note");
+  if (leftCount) leftCount.textContent = loading ? "…" : !resolved ? "—" : String(remaining);
+  if (leftLimit) leftLimit.textContent = loading ? "…" : !resolved ? "—" : String(limit);
+  if (resetNote) {
+    if (loading) resetNote.textContent = "Checking plan…";
+    else if (!resolved) resetNote.textContent = "Plan check failed. Refresh or manage billing.";
+    else resetNote.textContent = "Runs reset at the start of each month.";
+  }
+
+  const usedCount = document.getElementById("acct-used-count");
+  const meterFill = document.getElementById("acct-meter-fill");
+  const meterMeta = document.getElementById("acct-meter-meta");
+  const meterTrack = document.getElementById("acct-meter-track");
+  if (usedCount) usedCount.textContent = loading ? "…" : !resolved ? "—" : String(count);
+  if (meterFill) {
+    const pct = resolved && limit > 0 ? Math.min(100, Math.round((count / limit) * 100)) : 0;
+    meterFill.style.width = `${pct}%`;
+  }
+  if (meterMeta) {
+    if (loading) meterMeta.textContent = "Checking…";
+    else if (!resolved) meterMeta.textContent = "Plan check failed";
+    else if (limit === 0) meterMeta.textContent = `${count} of ${limit}`;
+    else {
+      const pct = Math.round((count / limit) * 100);
+      meterMeta.textContent = `${count} of ${limit} · ${pct}%`;
+    }
+  }
+  if (meterTrack) {
+    if (loading) meterTrack.setAttribute("aria-label", "Checking usage…");
+    else if (!resolved) meterTrack.setAttribute("aria-label", "Usage unavailable");
+    else meterTrack.setAttribute("aria-label", `${count} of ${limit} generations used`);
+  }
+
+  // --- FlutterFlow connection (real response-driven state) ---
+  renderApiKeyConnection();
+}
+
+function updateUsageDisplay() {
+  renderUsageSurfaces()
+
+  if (authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())) {
     hidePaywallExhausted()
     return
   }
 
   const { count } = getUsage()
   const limit = getRunLimit()
-  el.textContent = `${count} / ${limit} runs this month`
-  const pct = limit > 0 ? count / limit : 0
-  el.className = pct >= 1
-    ? 'text-xs text-red-600 font-medium'
-    : pct >= 0.8
-      ? 'text-xs text-yellow-600 font-medium'
-      : 'text-xs text-gray-500'
-  updateGuestUsageCounter()
-
   if (count >= limit && !pipelineState.isRunning) {
     showPaywallExhausted(count, limit)
   } else {
@@ -4704,12 +5628,7 @@ function updateUsageDisplay() {
 }
 
 function updateGuestUsageCounter() {
-  const el = document.getElementById('guest-usage-text')
-  if (!el) return
-  const usage = getUsageData()
-  const count = usage.month === getCurrentYearMonth() ? (usage.count ?? 0) : 0
-  const limit = TIER_LIMITS.free
-  el.textContent = `${count} / ${limit} generations used`
+  renderUsageSurfaces()
 }
 
 // --- STRIPE FUNCTIONS ---
@@ -4811,13 +5730,17 @@ async function startCheckout(tierId) {
   }
 }
 
-async function openCustomerPortal() {
+async function openCustomerPortal(trigger) {
   if (!authState.isVerified || !authState.sessionToken) {
     openSignInModal()
     return
   }
 
-  const btn = document.getElementById('manage-billing-btn')
+  // Every Manage Subscription / Manage Billing trigger shares this single
+  // portal request and its loading/error state, so only one fresh session URL
+  // is ever requested.
+  const btn = trigger || document.getElementById('manage-billing-btn')
+  const prevText = btn ? btn.textContent : ''
   if (btn) { btn.disabled = true; btn.textContent = 'Loading…' }
 
   try {
@@ -4833,15 +5756,31 @@ async function openCustomerPortal() {
     window.location.href = url
   } catch (err) {
     console.error('openCustomerPortal failed:', err)
-    if (btn) { btn.disabled = false; btn.textContent = 'Manage billing' }
+    if (btn) { btn.disabled = false; btn.textContent = prevText }
     showToast('Could not open billing portal. Please try again.', 'error')
   }
+}
+
+// Every in-flight BuildShip request registers its controller here so a run
+// the user abandoned can cancel its request instead of only discarding the
+// response when it lands.
+const activeBuildShipControllers = new Set();
+
+/** Cancel every in-flight BuildShip request; the run they served is stale. */
+function abortPipelineRequests() {
+  activeBuildShipControllers.forEach((controller) => controller.abort());
+  activeBuildShipControllers.clear();
 }
 
 async function callBuildShip(step, model, prompt, context = {}, images = []) {
   const BUILDSHIP_TIMEOUT_MS = 120000
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), BUILDSHIP_TIMEOUT_MS)
+  activeBuildShipControllers.add(controller)
+  let timedOut = false
+  const timeoutId = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, BUILDSHIP_TIMEOUT_MS)
 
   try {
     const res = await fetch(PIPELINE_ENDPOINT, {
@@ -4879,6 +5818,9 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
       }
       const usageError = new Error(data.message || 'Monthly usage limit reached. Upgrade to continue.')
       usageError.isUsageLimit = true
+      // The step is the authoritative signal the pipeline view uses to mark
+      // which stage stopped; a quota message carries no step prefix of its own.
+      usageError.pipelineStep = step
       throw usageError
     }
 
@@ -4922,7 +5864,14 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     return output
   } catch (error) {
     if (error.name === 'AbortError') {
-      throw new Error(`BuildShip ${step} timed out after ${BUILDSHIP_TIMEOUT_MS / 1000}s`)
+      if (timedOut) {
+        throw new Error(`BuildShip ${step} timed out after ${BUILDSHIP_TIMEOUT_MS / 1000}s`)
+      }
+      // The run that owned this request was abandoned, so the cancellation
+      // must never read as a service outcome.
+      const cancelled = new Error(`BuildShip ${step} request cancelled`)
+      cancelled.isPipelineCancel = true
+      throw cancelled
     }
     if (error instanceof TypeError) {
       throw new Error(`BuildShip unreachable: ${error.message}`)
@@ -4930,8 +5879,18 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     throw error
   } finally {
     clearTimeout(timeoutId)
+    activeBuildShipControllers.delete(controller)
   }
 }
+
+// Set when the user returns from Stripe with `?checkout=success`. The paid
+// entitlement is never granted by the return param itself — it is only ever
+// set by the subscription reconciliation below. This flag defers the "plan
+// active" confirmation until after reconcileSubscription has confirmed a paid
+// tier, so a return that has NOT reconciled (blocked, webhook lag, or a
+// cancelled/failed session) can never be reported as subscribed (STU-382
+// criterion 3).
+let checkoutConfirmPending = false
 
 function handleCheckoutRedirect() {
   const params = new URLSearchParams(window.location.search)
@@ -4939,11 +5898,28 @@ function handleCheckoutRedirect() {
   if (checkout === 'success') {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     clearSubscriptionCache()
-    showToast('Subscription active! Welcome aboard.', 'success')
+    checkoutConfirmPending = true
   } else if (checkout === 'cancel') {
     window.history.replaceState({}, '', window.location.pathname + window.location.hash)
     showToast('Checkout cancelled.', 'info')
   }
+  return checkout
+}
+
+// Called once the subscription has been reconciled after a checkout return.
+// Only reports a live plan when the contract is actually paid; otherwise it
+// says the subscription is still being confirmed so the UI never claims a
+// subscribed state it cannot back up.
+function confirmCheckoutAfterReconcile() {
+  if (!checkoutConfirmPending) return
+  checkoutConfirmPending = false
+  const isPaid = subscriptionState.tier !== 'free'
+  showToast(
+    isPaid
+      ? 'Subscription active! Your plan is live.'
+      : 'Checkout complete — confirming your subscription. Check Manage billing if it does not update.',
+    isPaid ? 'success' : 'info',
+  )
 }
 
 // --- SUBSCRIPTION UI ---
@@ -4956,7 +5932,7 @@ function updateSubscriptionUI() {
 
   const badge = document.getElementById('subscription-tier-badge')
   if (badge) {
-    const labels = { free: 'Free', professional: 'Professional', power: 'Power Developer' }
+    const labels = planLabels
     const colors = {
       free: 'bg-gray-100 text-gray-600',
       professional: 'bg-indigo-100 text-indigo-700',
@@ -5001,6 +5977,27 @@ function updatePricingModalState(tier) {
   })
   const freeCurrent = document.getElementById('free-tier-current')
   if (freeCurrent) freeCurrent.classList.toggle('hidden', tier !== 'free')
+}
+
+// Render every plan card's feature list from the single PLAN_FEATURES source,
+// so the plans page and the pricing modal share one feature set and can never
+// drift (and a test can never assert a constant the UI does not render). Each
+// .pm-card carries data-tier; its <ul class="pm-features"> is filled from
+// PLAN_FEATURES[tier]. Idempotent: safe to run more than once.
+function renderPlanFeatureLists() {
+  document.querySelectorAll('.pm-card[data-tier]').forEach((card) => {
+    const tier = card.dataset.tier
+    const rows = planFeatures[tier]
+    if (!rows) return
+    const ul = card.querySelector('ul.pm-features')
+    if (!ul) return
+    ul.innerHTML = ''
+    for (const row of rows) {
+      const li = document.createElement('li')
+      li.textContent = row
+      ul.appendChild(li)
+    }
+  })
 }
 
 function updatePricingDisplay() {
@@ -5065,11 +6062,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Initialize welcome video
   initializeWelcomeVideo();
 
+  // Decorative hero mark field (WebGL with 2D fallback); no dependency on generation state.
+  window.__heroField = initHeroMarkField();
+
+  // Decorative pipeline logo loop (120 s authored mark motion in the pipeline
+  // arena). Self-managed: pauses when hidden/offscreen/reduced-motion and is
+  // cleanup-safe on view transition; completion never depends on it.
+  window.__pipelineLogo = createPipelineLogoLoop();
+
   await initializeAuth();
   handleCheckoutRedirect();
   await fetchSubscription();
+  confirmCheckoutAfterReconcile();
   updateSubscriptionUI();
   updatePricingDisplay();
+  renderPlanFeatureLists();
 
   // Initialize API keys and check connection
   await checkConnection();
@@ -5208,7 +6215,12 @@ async function populateConfirmProjectSelect() {
   select.disabled = false;
   select.innerHTML = '<option value="">Loading projects…</option>';
   try {
-    const client = new FlutterFlowApiClient(apiKey, "");
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
     const projects = await client.listProjects();
     if (!isCurrent()) return;
 
@@ -5414,6 +6426,128 @@ function showCommitSuccessModal(result) {
 function showCommitFailureModal(result) {
   hideCommitProgress();
   showCommitError(result);
+}
+
+/**
+ * Populates the shared terminal modal for the two outcomes that are real but
+ * are neither a clean success nor a clean failure: PARTIAL (some custom
+ * classes were written, the remaining sync failed) and UNCONFIRMED (the remote
+ * outcome is unknown because the client stopped waiting or the stream
+ * dropped). It always shows the same target identity the user confirmed, the
+ * per-file outcomes when the runner/push reported them, and reconciliation
+ * guidance that never hides the manual FlutterFlow step of checking the
+ * project.
+ */
+function populateCommitTerminalModal(result, { heading, title, guidance }) {
+  const identity = result.targetIdentity || {};
+  const modal = document.getElementById("commit-terminal-modal");
+  if (!modal) return false;
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val || "";
+  };
+
+  set("terminal-heading", heading);
+  set("terminal-title", title);
+  set("terminal-message", result.error || result.message || "");
+
+  const idList = document.getElementById("terminal-identity-list");
+  if (idList) {
+    const rows = [
+      ["Project", identity.projectId || result.metadata?.projectId],
+      ["Endpoint", identity.endpoint],
+      ["File", identity.fileName || result.metadata?.fileName],
+      ["Artifact", identity.artifactType || result.metadata?.artifactType],
+    ];
+    idList.innerHTML = rows
+      .map(
+        ([label, value]) =>
+          `<div class="flex justify-between gap-3"><span class="text-gray-400">${escapeHtml(
+            label,
+          )}:</span><span class="font-medium text-gray-700">${escapeHtml(
+            String(value ?? "—"),
+          )}</span></div>`,
+      )
+      .join("");
+  }
+
+  const fileList = document.getElementById("terminal-file-outcomes");
+  let errorMap = result.errorMap;
+  if (errorMap && !(errorMap instanceof Map)) {
+    errorMap = new Map(Object.entries(errorMap));
+  }
+  if (fileList && errorMap && errorMap.size > 0) {
+    fileList.innerHTML = [...errorMap.entries()]
+      .map(
+        ([file, info]) =>
+          `<li class="py-1.5 border-b border-gray-100 last:border-0 text-xs text-gray-700"><span class="font-semibold">${escapeHtml(
+            file,
+          )}:</span> ${escapeHtml(formatFlutterFlowFileError(info))}</li>`,
+      )
+      .join("");
+    fileList.classList.remove("hidden");
+  } else if (fileList) {
+    fileList.classList.add("hidden");
+  }
+
+  const guidanceEl = document.getElementById("terminal-guidance");
+  if (guidanceEl) guidanceEl.innerHTML = guidance;
+
+  const ffLink = document.getElementById("terminal-open-ff-link");
+  const projectId = identity.projectId || result.metadata?.projectId;
+  if (ffLink) {
+    ffLink.href = projectId
+      ? `https://app.flutterflow.io/project/${projectId}`
+      : "https://app.flutterflow.io/";
+  }
+
+  openModal(modal);
+  return true;
+}
+
+/**
+ * Terminal outcome: some custom classes were written to FlutterFlow, but the
+ * remaining sync was rejected. "Committed" would lie — part of the deploy did
+ * land, but part failed.
+ */
+function showCommitPartialModal(result) {
+  populateCommitTerminalModal(result, {
+    heading: "Deploy partially applied",
+    title:
+      "Some custom classes reached FlutterFlow, but the deploy did not fully complete.",
+    guidance:
+      "The custom classes the runner confirmed are already in your project and are <strong>not lost</strong>. " +
+      "Review the per-file errors above, fix them in FlutterFlow or regenerate, then deploy again. " +
+      "Open the project to see exactly what landed.",
+  });
+}
+
+/**
+ * Terminal outcome: the client stopped waiting (bounded UI timeout) or the
+ * connection dropped before the runner reported a result. The remote outcome
+ * is unknown — this is never reported as committed or as failed, and the
+ * in-flight write is never cancelled.
+ */
+function showCommitUnconfirmedModal(result) {
+  populateCommitTerminalModal(result, {
+    heading: "Deploy outcome not yet known",
+    title:
+      "This browser stopped waiting before the FlutterFlow server reported a result.",
+    guidance:
+      "The deploy may still be finishing on the server — it was <strong>not cancelled</strong>. " +
+      "Open your FlutterFlow project and confirm whether the class landed before retrying, so you do not " +
+      "push a duplicate or build on top of an unknown state.",
+  });
+}
+
+/**
+ * Closes the shared terminal modal (partial / unconfirmed outcomes).
+ * @param {Event} [event] - Optional click event
+ */
+function closeCommitTerminalModal(event) {
+  if (event && event.target !== event.currentTarget) return;
+  closeModal(document.getElementById("commit-terminal-modal"));
 }
 
 /**
@@ -5665,19 +6799,68 @@ function commitNeedsProvisioning(commitData) {
 /**
  * Confirms the commit after modal review.
  */
+// A deploy is in flight. The confirm action and the deploy toggle are disabled
+// for its whole run, so a user clicking twice cannot start a second push and a
+// second modal cannot be opened over a live one.
+let deployInFlight = false;
+
+function setDeployBusy(busy) {
+  deployInFlight = busy;
+  // The modal's confirm button and every deploy trigger are disabled for the
+  // whole run so a second click cannot start an overlapping push.
+  const confirm = document.querySelector(
+    "#commit-confirm-modal button[data-deploy-confirm]",
+  );
+  if (confirm) confirm.disabled = busy;
+  const triggers = [
+    ...document.querySelectorAll("[data-deploy-start]"),
+    ...document.querySelectorAll("#btn-deploy-to-ff"),
+  ];
+  triggers.forEach((el) => {
+    el.disabled = busy;
+  });
+}
+
+/**
+ * Dispatches a deploy result to the single truthful terminal presentation.
+ * Every outcome releases the UI busy state; only COMMITTED reaches the success
+ * modal. Partial and unconfirmed get their own truthful modals.
+ * @param {Object} result - A deploy result (see deployOutcome.classifyDeployResult)
+ */
+function renderCommitTerminal(result) {
+  hideCommitProgress();
+  setDeployBusy(false);
+  const outcome = classifyDeployResult(result);
+  if (outcome === DeployOutcome.COMMITTED) {
+    showCommitSuccessModal(result);
+  } else if (outcome === DeployOutcome.PARTIAL) {
+    showCommitPartialModal(result);
+  } else if (outcome === DeployOutcome.UNCONFIRMED) {
+    showCommitUnconfirmedModal(result);
+  } else {
+    showCommitFailureModal(result);
+  }
+}
+
 async function confirmCommitToFlutterFlow() {
   if (!pendingCommitData) {
     console.error("No pending commit data");
     return;
   }
+  if (deployInFlight) {
+    console.warn("Deploy already in flight; ignoring duplicate confirm.");
+    return;
+  }
 
   // Null the pending data before any await: it is only cleared at the end of
   // this function otherwise, so a second confirm click landing mid-commit
-  // would read the same data and push twice concurrently.
+  // would read the same data and push twice concurrently. The deploy-in-flight
+  // guard above makes this doubly safe.
   const commitData = pendingCommitData;
   pendingCommitData = null;
   commitTargetProjectId = readCommitTargetProjectId();
   closeCommitConfirmModal();
+  setDeployBusy(true);
   showCommitProgress({ withProvisioning: commitNeedsProvisioning(commitData) });
 
   if (commitData.bundlePlan) {
@@ -5689,14 +6872,7 @@ async function confirmCommitToFlutterFlow() {
     });
 
     commitTargetProjectId = null;
-    hideCommitProgress();
-
-    if (result.success) {
-      showCommitSuccessModal(result);
-    } else {
-      showCommitFailureModal(result);
-    }
-
+    renderCommitTerminal(result);
     return;
   }
 
@@ -5715,13 +6891,7 @@ async function confirmCommitToFlutterFlow() {
   });
 
   commitTargetProjectId = null;
-  hideCommitProgress();
-
-  if (result.success) {
-    showCommitSuccessModal(result);
-  } else {
-    showCommitFailureModal(result);
-  }
+  renderCommitTerminal(result);
 }
 
 // Global exports
@@ -5733,6 +6903,7 @@ window.copyCode = copyCode;
 window.retryWithDifferentModel = retryWithDifferentModel;
 window.openApiKeysModal = openApiKeysModal;
 window.closeApiKeysModal = closeApiKeysModal;
+window.walkthroughConnectAccount = walkthroughConnectAccount;
 window.closeWalkthroughModal = closeWalkthroughModal;
 window.openWalkthroughModal = openWalkthroughModal;
 window.advanceWalkthrough = advanceWalkthrough;
@@ -5761,6 +6932,7 @@ window.openModelSelector = openModelSelector;
 window.handlePromptImageSelect = handlePromptImageSelect;
 window.removePromptImage = removePromptImage;
 window.saveApiKeys = saveApiKeys;
+window.validateFlutterFlowConnection = validateFlutterFlowConnection;
 window.clearAllApiKeys = clearAllApiKeys;
 window.toggleKeyVisibility = toggleKeyVisibility;
 window.handleWelcomeVideoEnd = handleWelcomeVideoEnd;
@@ -5770,6 +6942,9 @@ window.updateFlutterFlowCredentialStatus = updateFlutterFlowCredentialStatus;
 window.openCommitConfirmModal = openCommitConfirmModal;
 window.closeCommitConfirmModal = closeCommitConfirmModal;
 window.closeCommitSuccessModal = closeCommitSuccessModal
+window.closeCommitTerminalModal = closeCommitTerminalModal
+window.showCommitPartialModal = showCommitPartialModal
+window.showCommitUnconfirmedModal = showCommitUnconfirmedModal
 window.showCommitSuccessModal = showCommitSuccessModal
 window.showCommitFailureModal = showCommitFailureModal;
 window.toggleCodePreview = toggleCodePreview;
@@ -5785,17 +6960,333 @@ window.openSignInModal = openSignInModal;
 window.closeSignInModal = closeSignInModal;
 window.handleMagicLinkRequest = handleMagicLinkRequest;
 window.handleSignOut = handleSignOut;
+window.handleSendNewLink = handleSendNewLink;
+window.handleClearCache = handleClearCache;
+window.handleDeleteAccount = handleDeleteAccount;
+window.closeDeleteUnavailableModal = closeDeleteUnavailableModal;
 window.startCheckout = startCheckout;
 window.openCustomerPortal = openCustomerPortal;
 window.openPricingModal = openPricingModal;
 window.closePricingModal = closePricingModal;
 
 // --- PIPELINE PROGRESS BAR & RESULTS VIEW ---
-let pipelineProgressTimer = null;
+//
+// The three-stage view is bound to the real Architect -> Generator -> Review
+// events, so nothing here invents an outcome: the track advances only when a
+// stage actually reports, a stage that never ran is never drawn as completed,
+// and a failure never falls through to a result. The elapsed counter is the
+// only time-driven element, and it reports real elapsed time.
+let pipelineElapsedTimer = null;
 let pipelineStartTime = null;
-const PIPELINE_ESTIMATED_DURATION = 120; // seconds
+// Every view update carries the run it belongs to (pipelineState.runId), so a
+// response that arrives after the user started a newer run is discarded
+// instead of overwriting the newer run's state.
+let pipelineStageStates = { 1: "pending", 2: "pending", 3: "pending" };
+let pipelineActiveStage = 1;
+let pipelineSelectedStage = null;
 
-function showPipelineProgress() {
+const PIPELINE_STAGE_LABELS = {
+  1: "Prompt Architect",
+  2: "Code Generator",
+  3: "Code Review",
+};
+const PIPELINE_STAGE_TITLES = {
+  1: "Understanding your prompt",
+  2: "Generating Dart code",
+  3: "Running the code audit",
+};
+const PIPELINE_STAGE_DONE_TITLES = {
+  1: "Prompt understood",
+  2: "Dart code generated",
+  3: "Code audit complete",
+};
+
+function startPipelineRun() {
+  pipelineState.runId += 1;
+  return pipelineState.runId;
+}
+
+function isCurrentPipelineRun(runId) {
+  return runId === undefined || runId === pipelineState.runId;
+}
+
+/**
+ * Abandon the current run: its captured id stops matching
+ * pipelineState.runId, so every isCurrentPipelineRun check discards whatever
+ * it still has in flight. Used when the user leaves the run mid-flight.
+ */
+function invalidatePipelineRun() {
+  pipelineState.runId += 1;
+}
+
+function pipelineStageButton(step) {
+  return document.getElementById(`pdot-${step}`);
+}
+
+/**
+ * Busy feedback on the control that started the run, and - just as important -
+ * a usable control again when the run terminates, however it terminated.
+ * The redesigned shell submits from the composer's send button; the legacy id
+ * is still honoured so nothing depends on which shell is mounted.
+ */
+function setRunPipelineButtonBusy(busy) {
+  const button =
+    document.getElementById("btn-run-pipeline") ||
+    document.getElementById("hero-send");
+  if (!button) return;
+  button.disabled = busy;
+  button.classList.toggle("is-busy", busy);
+  if (busy) button.setAttribute("aria-busy", "true");
+  else button.removeAttribute("aria-busy");
+}
+
+function setPipelineRunState(state) {
+  const progress = document.getElementById("pipeline-progress");
+  if (progress) progress.dataset.runState = state;
+}
+
+/**
+ * Paint one stage's state. `pending` stages stay unreachable, and a stage that
+ * was never reached is never painted `done`.
+ * @param {number} step
+ * @param {"pending"|"active"|"done"|"failed"|"skipped"} state
+ */
+function setPipelineStageState(step, state) {
+  pipelineStageStates[step] = state;
+  const button = pipelineStageButton(step);
+  if (!button) return;
+  button.dataset.state = state;
+  // A stage that never ran is reported as such; there is nothing to select.
+  button.disabled = state === "pending" || state === "skipped";
+  const stageName = PIPELINE_STAGE_LABELS[step];
+  const stateLabels = {
+    pending: "not started",
+    active: "in progress",
+    done: "complete",
+    failed: "failed",
+    skipped: "not run",
+  };
+  button.setAttribute(
+    "aria-label",
+    `Step ${step} of 3, ${stageName}: ${stateLabels[state] || state}`,
+  );
+  if (state === "active") button.setAttribute("aria-current", "step");
+  else button.removeAttribute("aria-current");
+}
+
+function completedPipelineStageCount() {
+  return [1, 2, 3].filter((step) => pipelineStageStates[step] === "done").length;
+}
+
+function renderPipelineTrack() {
+  const fillEl = document.getElementById("pipeline-progress-fill");
+  if (fillEl) {
+    fillEl.style.width = `${(completedPipelineStageCount() / 3) * 100}%`;
+  }
+  const countEl = document.getElementById("progress-stage-count");
+  if (countEl) countEl.textContent = `Step ${pipelineActiveStage} of 3`;
+}
+
+/**
+ * Write the status line. It lives inside a polite live region, so writing it is
+ * also how the run is announced to assistive technology.
+ */
+function renderPipelineStatus(step, { done = false } = {}) {
+  const titleEl = document.getElementById("progress-title-text");
+  const substepEl = document.getElementById("progress-substep-text");
+  const state = pipelineStageStates[step];
+  const finished = done || state === "done";
+  if (titleEl) {
+    titleEl.textContent = finished
+      ? PIPELINE_STAGE_DONE_TITLES[step]
+      : PIPELINE_STAGE_TITLES[step];
+  }
+  if (substepEl) {
+    const suffix = finished ? " \u2014 complete" : state === "failed" ? " \u2014 stopped" : "";
+    substepEl.textContent = `Step ${step} of 3 \u2014 ${PIPELINE_STAGE_LABELS[step]}${suffix}`;
+  }
+}
+
+/**
+ * Pin the status line to a stage the user chose. Only stages this run actually
+ * reached are reachable, so the control can never report an invented state.
+ */
+function selectPipelineStage(step) {
+  if (pipelineStageStates[step] === "pending" || pipelineStageStates[step] === "skipped") return;
+  pipelineSelectedStage = step;
+  [1, 2, 3].forEach((candidate) => {
+    const button = pipelineStageButton(candidate);
+    if (button) button.setAttribute("aria-pressed", String(candidate === step));
+  });
+  renderPipelineStatus(step);
+}
+
+function clearPipelineStageSelection() {
+  pipelineSelectedStage = null;
+  [1, 2, 3].forEach((step) => {
+    const button = pipelineStageButton(step);
+    if (button) button.removeAttribute("aria-pressed");
+  });
+}
+
+function setPipelineNote(text) {
+  const note = document.getElementById("pipeline-note");
+  if (!note) return;
+  note.textContent = text || "";
+  note.hidden = !text;
+}
+
+/**
+ * A model fallback is a real service event, so it is reported rather than
+ * hidden - but the run is still in flight, so it is a note, not a failure.
+ */
+function notePipelineFallback(primaryModel, fallbackModel, runId) {
+  if (!isCurrentPipelineRun(runId)) return;
+  setPipelineNote(
+    `${getModelLabel(primaryModel)} did not answer. Continuing on ${getModelLabel(fallbackModel)}.`,
+  );
+}
+
+function hidePipelineFailure() {
+  const panel = document.getElementById("pipeline-failure");
+  if (!panel) return;
+  panel.hidden = true;
+  const actions = document.getElementById("pipeline-failure-actions");
+  if (actions) actions.replaceChildren();
+}
+
+// --- COMPOSER -> PIPELINE -> RESULTS OUTLINE MORPH ---
+//
+// The authored hand-off: a coral outline leaves the composer's rect and grows
+// into the generation panel's, then the panel's into the expanded Results
+// view, on the 1120ms --t-morph clock. It is decorative only - the real view
+// is already in place underneath before the outline moves, so the animation
+// can never delay, gate or invent a service outcome. It is skipped under
+// reduced motion and torn down on resize, navigation and interruption.
+const PIPELINE_MORPH_FALLBACK_MS = 1120;
+
+/** The authored morph clock, read from the --t-morph design token. */
+function pipelineMorphDurationMs() {
+  const token = getComputedStyle(document.documentElement)
+    .getPropertyValue("--t-morph")
+    .trim();
+  const parsed = Number.parseFloat(token);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : PIPELINE_MORPH_FALLBACK_MS;
+}
+
+let pipelineMorphGhost = null;
+let pipelineMorphAnimation = null;
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+function cancelPipelineMorph() {
+  if (pipelineMorphAnimation) {
+    try {
+      pipelineMorphAnimation.cancel();
+    } catch {
+      /* an already-finished animation cannot be cancelled */
+    }
+    pipelineMorphAnimation = null;
+  }
+  if (pipelineMorphGhost) {
+    pipelineMorphGhost.remove();
+    pipelineMorphGhost = null;
+  }
+  window.removeEventListener("resize", cancelPipelineMorph);
+}
+
+function runOutlineMorph(fromEl, toEl) {
+  cancelPipelineMorph();
+  if (prefersReducedMotion() || !fromEl || !toEl || !document.body) return;
+  if (typeof Element.prototype.animate !== "function") return;
+
+  const from = fromEl.getBoundingClientRect();
+  const to = toEl.getBoundingClientRect();
+  if (!from.width || !from.height || !to.width || !to.height) return;
+
+  const ghost = document.createElement("div");
+  ghost.className = "composer-morph";
+  ghost.setAttribute("aria-hidden", "true");
+  ghost.style.cssText = `left:${to.left}px;top:${to.top}px;width:${to.width}px;height:${to.height}px;opacity:0;`;
+  document.body.appendChild(ghost);
+
+  const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+  const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+  const sx = from.width / to.width;
+  const sy = from.height / to.height;
+  const base = `translate(${dx}px,${dy}px) scale(${sx},${sy})`;
+
+  // 0-14%: the outline eases in over the surface it is leaving. 14-28%: the
+  // anticipatory shrink. 28-100%: one longer growth that settles with weight.
+  const animation = ghost.animate(
+    [
+      { transform: base, opacity: 0, offset: 0, easing: "cubic-bezier(.2,0,0,1)" },
+      { transform: base, opacity: 1, offset: 0.14, easing: "cubic-bezier(.4,0,.2,1)" },
+      {
+        transform: `translate(${dx}px,${dy}px) scale(${sx * 0.93},${sy * 0.93})`,
+        opacity: 1,
+        offset: 0.28,
+        easing: "cubic-bezier(.32,1.38,.5,1)",
+      },
+      { transform: "translate(0px,0px) scale(1,1)", opacity: 1, offset: 1 },
+    ],
+    { duration: pipelineMorphDurationMs(), fill: "both" },
+  );
+
+  pipelineMorphGhost = ghost;
+  pipelineMorphAnimation = animation;
+  window.addEventListener("resize", cancelPipelineMorph);
+
+  animation.onfinish = () => {
+    if (pipelineMorphGhost !== ghost) return;
+    const out = ghost.animate([{ opacity: 1 }, { opacity: 0 }], {
+      duration: 260,
+      fill: "forwards",
+    });
+    out.onfinish = () => {
+      if (pipelineMorphGhost === ghost) cancelPipelineMorph();
+    };
+  };
+}
+
+/** Composer -> generation panel. */
+function morphComposerToPipeline() {
+  const from = document.getElementById("composer");
+  const fromRect = from?.getBoundingClientRect();
+  if (!fromRect) return;
+  // The generation stage only gains a box once it is revealed a frame later,
+  // so the outline is measured against the panel that is actually on screen.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      runOutlineMorph(
+        { getBoundingClientRect: () => fromRect },
+        document.getElementById("main-stage-container"),
+      );
+    });
+  });
+}
+
+/** Generation panel -> expanded Results view. */
+function morphPipelineToResults() {
+  runOutlineMorph(
+    document.getElementById("pipeline-progress"),
+    document.getElementById("main-stage-container"),
+  );
+}
+
+// Navigating away abandons the hand-off rather than leaving an orphaned
+// outline floating over another surface.
+window.addEventListener("hashchange", cancelPipelineMorph);
+window.addEventListener("popstate", cancelPipelineMorph);
+
+function showPipelineProgress(options = {}) {
+  const { prompt = null, runId } = options;
+  if (!isCurrentPipelineRun(runId)) return;
+  // A previous run's delayed hide must not blank this run's panel.
+  cancelPipelineHideTimer();
+
   setGenerationStageVisible(true);
   const progress = document.getElementById("pipeline-progress");
   const resultsView = document.getElementById("results-view");
@@ -5805,85 +7296,212 @@ function showPipelineProgress() {
   if (resultsView) resultsView.classList.remove("visible");
   document.body.classList.remove("results-fullscreen", "results-with-sidebar");
   if (progress) progress.classList.add("visible");
+  setPipelineRunState("running");
 
-  pipelineStartTime = Date.now();
-
-  // Reset dots
-  for (let i = 1; i <= 3; i++) {
-    const dot = document.getElementById(`pdot-${i}`);
-    if (dot) { dot.className = "progress-dot"; }
+  if (prompt !== null) {
+    const promptEl = document.getElementById("pipeline-submitted-prompt");
+    if (promptEl) promptEl.textContent = prompt;
   }
 
-  updatePipelineProgressStep(1);
+  pipelineStartTime = Date.now();
+  // The elapsed counter is the only time-driven element: start each run at
+  // zero rather than showing the previous run's final reading until the
+  // first tick lands.
+  const elapsedEl = document.getElementById("progress-elapsed");
+  if (elapsedEl) elapsedEl.textContent = "0s";
+  pipelineStageStates = { 1: "pending", 2: "pending", 3: "pending" };
+  clearPipelineStageSelection();
+  hidePipelineFailure();
+  setPipelineNote("");
+  [1, 2, 3].forEach((step) => setPipelineStageState(step, "pending"));
+
+  updatePipelineProgressStep(1, runId);
   startProgressTimer();
 }
 
-function updatePipelineProgressStep(step) {
-  const titles = {
-    1: "Analyzing your prompt...",
-    2: "Generating Dart code...",
-    3: "Running code audit..."
-  };
-  const substeps = {
-    1: "Step 1 of 3 \u2014 Prompt Architect",
-    2: "Step 2 of 3 \u2014 Code Generator",
-    3: "Step 3 of 3 \u2014 Code Review"
-  };
+/**
+ * Enter a stage. Stages before it that never ran stay `skipped` - the refine
+ * and fix-from-errors flows re-enter at stage 2, and their untouched Architect
+ * stage must not read as completed work.
+ */
+function updatePipelineProgressStep(step, runId) {
+  if (!isCurrentPipelineRun(runId)) return;
+  pipelineActiveStage = step;
+  clearPipelineStageSelection();
 
-  const titleEl = document.getElementById("progress-title-text");
-  const substepEl = document.getElementById("progress-substep-text");
-  if (titleEl) titleEl.textContent = titles[step] || titles[1];
-  if (substepEl) substepEl.textContent = substeps[step] || substeps[1];
-
-  // Update dots
-  for (let i = 1; i <= 3; i++) {
-    const dot = document.getElementById(`pdot-${i}`);
-    if (!dot) continue;
-    if (i < step) {
-      dot.className = "progress-dot completed";
-    } else if (i === step) {
-      dot.className = "progress-dot active";
-    } else {
-      dot.className = "progress-dot";
+  [1, 2, 3].forEach((candidate) => {
+    if (candidate === step) {
+      setPipelineStageState(candidate, "active");
+    } else if (candidate < step && pipelineStageStates[candidate] !== "done") {
+      setPipelineStageState(candidate, "skipped");
+    } else if (candidate > step) {
+      setPipelineStageState(candidate, "pending");
     }
+  });
+
+  renderPipelineStatus(step);
+  renderPipelineTrack();
+}
+
+/** Mark a stage complete. Only a real stage response calls this. */
+function completePipelineStage(step, runId) {
+  if (!isCurrentPipelineRun(runId)) return;
+  setPipelineStageState(step, "done");
+  if (pipelineSelectedStage === null) renderPipelineStatus(step, { done: true });
+  renderPipelineTrack();
+}
+
+/** Render the persistent failure state for a terminated run. */
+function showPipelineFailure(error, { stage = 1, runId, retry = retryPipelineRun } = {}) {
+  if (!isCurrentPipelineRun(runId)) return;
+
+  stopProgressTimer();
+  cancelPipelineHideTimer();
+  cancelPipelineMorph();
+  setPipelineRunState("failed");
+  setGenerationStageVisible(true);
+  const progress = document.getElementById("pipeline-progress");
+  if (progress) progress.classList.add("visible");
+  const resultsView = document.getElementById("results-view");
+  if (resultsView) resultsView.classList.remove("visible");
+  document.body.classList.remove("results-fullscreen", "results-with-sidebar");
+
+  setPipelineStageState(stage, "failed");
+  [1, 2, 3].forEach((step) => {
+    if (step > stage) setPipelineStageState(step, "pending");
+  });
+  pipelineActiveStage = stage;
+  clearPipelineStageSelection();
+  renderPipelineStatus(stage);
+  renderPipelineTrack();
+
+  const failure = classifyPipelineError(error);
+  const panel = document.getElementById("pipeline-failure");
+  const titleEl = document.getElementById("pipeline-failure-title");
+  const messageEl = document.getElementById("pipeline-failure-message");
+  const hintEl = document.getElementById("pipeline-failure-hint");
+  const actionsEl = document.getElementById("pipeline-failure-actions");
+  if (!panel || !titleEl || !messageEl || !actionsEl) return;
+
+  panel.dataset.kind = failure.kind;
+  // The stage is named in the panel too, so a failure reads as "this stage
+  // stopped", never as an ambiguous whole-run outcome.
+  titleEl.textContent = `${PIPELINE_STAGE_LABELS[stage]}: ${failure.title}`;
+  messageEl.textContent = failure.message;
+  if (hintEl) {
+    const hint = failure.detail && failure.detail !== failure.message ? failure.detail : "";
+    hintEl.textContent = hint;
+    hintEl.hidden = !hint;
   }
+
+  actionsEl.replaceChildren();
+  // Only offer what can actually help: a blocked safety decision or an
+  // exhausted allowance will not change on a bare retry.
+  const actions = [
+    failure.canUpgrade && { id: "upgrade", label: "View plans", variant: "primary", onClick: () => openPricingModal() },
+    failure.canRetry && { id: "retry", label: "Retry", variant: failure.canUpgrade ? "secondary" : "primary", onClick: retry },
+    failure.canEdit && { id: "edit", label: "Edit prompt", variant: "secondary", onClick: editPipelinePrompt },
+  ].filter(Boolean);
+  // A terminated run must always leave a way back to usable controls, even
+  // when neither retrying nor editing can fix what happened.
+  if (!failure.canEdit && !failure.canRetry) {
+    actions.push({ id: "edit", label: "Back to prompt", variant: "secondary", onClick: editPipelinePrompt });
+  }
+  actions.forEach((action) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.dataset.action = action.id;
+    button.dataset.variant = action.variant;
+    button.addEventListener("click", action.onClick);
+    actionsEl.appendChild(button);
+  });
+
+  panel.hidden = false;
+  // A terminated run must leave a usable, focused control behind.
+  const firstAction = actionsEl.querySelector("button");
+  if (firstAction) firstAction.focus({ preventScroll: true });
+}
+
+/**
+ * Return to the composer with the submitted prompt intact. Editing abandons
+ * the in-flight run: its id is invalidated so a late response is discarded,
+ * its request is cancelled, and the send control is usable again — the run
+ * can never finish behind the composer's back and reopen Results.
+ */
+function editPipelinePrompt() {
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
+  updateDeployButtonVisibility();
+  setPipelineRunState("settled");
+  cancelPipelineMorph();
+  stopProgressTimer();
+  cancelPipelineHideTimer();
+  hidePipelineFailure();
+  const progress = document.getElementById("pipeline-progress");
+  if (progress) progress.classList.remove("visible");
+  setGenerationStageVisible(false);
+  const input = document.getElementById("pipeline-input");
+  if (input) {
+    if (pipelineState.submittedPrompt) input.value = pipelineState.submittedPrompt;
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+}
+
+/** Re-run the prompt and images the user submitted, unchanged. */
+function retryPipelineRun() {
+  const input = document.getElementById("pipeline-input");
+  if (input && pipelineState.submittedPrompt) {
+    input.value = pipelineState.submittedPrompt;
+  }
+  promptImages = pipelineState.submittedImages.slice();
+  renderPromptImages();
+  hidePipelineFailure();
+  runThinkingPipeline();
 }
 
 function startProgressTimer() {
-  if (pipelineProgressTimer) clearInterval(pipelineProgressTimer);
+  stopProgressTimer();
 
-  pipelineProgressTimer = setInterval(() => {
+  pipelineElapsedTimer = setInterval(() => {
     const elapsed = (Date.now() - pipelineStartTime) / 1000;
     const elapsedEl = document.getElementById("progress-elapsed");
-    const fillEl = document.getElementById("pipeline-progress-fill");
-
     if (elapsedEl) elapsedEl.textContent = `${Math.floor(elapsed)}s`;
-
-    // Ease toward ~95% over the estimated duration, never quite reaching 100%
-    const rawPct = (elapsed / PIPELINE_ESTIMATED_DURATION) * 100;
-    const easedPct = Math.min(95, rawPct * (1 - Math.exp(-elapsed / (PIPELINE_ESTIMATED_DURATION * 0.6))) * 1.2);
-    if (fillEl) fillEl.style.width = `${easedPct}%`;
   }, 250);
 }
 
+function stopProgressTimer() {
+  if (pipelineElapsedTimer) {
+    clearInterval(pipelineElapsedTimer);
+    pipelineElapsedTimer = null;
+  }
+}
+
+// The settled run's panel lingers 400ms before it hides; a run that starts
+// inside that window must not be blanked by the previous run's timer.
+let pipelineHideTimer = null;
+
+function cancelPipelineHideTimer() {
+  if (pipelineHideTimer) {
+    clearTimeout(pipelineHideTimer);
+    pipelineHideTimer = null;
+  }
+}
+
 function hidePipelineProgress() {
-  if (pipelineProgressTimer) {
-    clearInterval(pipelineProgressTimer);
-    pipelineProgressTimer = null;
-  }
+  stopProgressTimer();
+  cancelPipelineHideTimer();
+  setPipelineRunState("settled");
+  renderPipelineTrack();
 
-  // Snap to 100%
   const fillEl = document.getElementById("pipeline-progress-fill");
-  if (fillEl) fillEl.style.width = "100%";
-
-  // Mark all dots completed
-  for (let i = 1; i <= 3; i++) {
-    const dot = document.getElementById(`pdot-${i}`);
-    if (dot) dot.className = "progress-dot completed";
-  }
 
   // Brief pause then hide
-  setTimeout(() => {
+  pipelineHideTimer = setTimeout(() => {
+    pipelineHideTimer = null;
     const progress = document.getElementById("pipeline-progress");
     if (progress) progress.classList.remove("visible");
     if (fillEl) fillEl.style.width = "0%";
@@ -5971,6 +7589,19 @@ function renderSummaryDetail(presentation) {
       </ul>
     `
     : "";
+  // Bundle-level warnings (deploy ordering, compatibility findings) belong on
+  // the summary surface as a distinct class of message. They are NOT
+  // per-file issues and must never leak into a selected artifact's review.
+  const bundleWarnings = presentation.warnings.length
+    ? `
+      <section class="summary-bundle-warnings" aria-label="Bundle warnings">
+        <h4>${reviewStatusIcon("warning")} Bundle</h4>
+        <ul>
+          ${presentation.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+        </ul>
+      </section>
+    `
+    : "";
   const manualSteps = presentation.manualSteps.length
     ? `
       <section class="summary-manual-callout">
@@ -5993,6 +7624,7 @@ function renderSummaryDetail(presentation) {
       <div class="review-summary-copy">
         <p class="review-summary-text">${escapeHtml(presentation.summary)}</p>
         ${findings}
+        ${bundleWarnings}
         ${manualSteps}
       </div>
       <div class="review-score-column">
@@ -6005,13 +7637,14 @@ function renderSummaryDetail(presentation) {
         <div class="review-score-feedback">
           <span>Is the generated code correct?</span>
           <div class="review-score-feedback-controls">
-            <button class="feedback-btn" id="btn-feedback-up" onclick="submitResultsFeedback('up')" title="Yes">
+            <button type="button" class="feedback-btn" id="btn-feedback-up" aria-label="Yes, the generated code is correct" aria-pressed="false" onclick="submitResultsFeedback('up')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/></svg>
             </button>
-            <button class="feedback-btn" id="btn-feedback-down" onclick="submitResultsFeedback('down')" title="No">
+            <button type="button" class="feedback-btn" id="btn-feedback-down" aria-label="No, the generated code is not correct" aria-pressed="false" onclick="submitResultsFeedback('down')">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/></svg>
             </button>
           </div>
+          <span id="results-feedback-status" class="sr-only" aria-live="polite"></span>
         </div>
       </div>
     </section>
@@ -6118,12 +7751,22 @@ function renderBundleControls(presentation) {
   const tabs = document.getElementById("artifact-tabs");
   const count = document.getElementById("results-file-count");
   if (summaryTab) {
-    summaryTab.classList.toggle("active", pipelineState.resultsViewMode === "summary");
+    const isSummary = pipelineState.resultsViewMode === "summary";
+    summaryTab.classList.toggle("active", isSummary);
+    summaryTab.setAttribute("role", "tab");
+    summaryTab.setAttribute("aria-selected", String(isSummary));
+    summaryTab.setAttribute("aria-controls", "results-summary-detail");
+    summaryTab.tabIndex = isSummary ? 0 : -1;
+  }
+  if (tabs) {
+    tabs.setAttribute("role", "tablist");
+    tabs.setAttribute("aria-label", "Artifacts in this bundle");
   }
   if (!presentation.artifacts.length) {
     if (count) count.textContent = "0 files";
     if (strip) strip.classList.remove("visible");
     if (tabs) tabs.innerHTML = "";
+    ensureResultsTabKeyboard();
     return;
   }
 
@@ -6132,11 +7775,19 @@ function renderBundleControls(presentation) {
     count.textContent = `${fileCount} ${fileCount === 1 ? "file" : "files"}`;
   }
   if (tabs) {
-    tabs.innerHTML = presentation.artifacts.map((artifact) => `
+    tabs.innerHTML = presentation.artifacts.map((artifact) => {
+      const isSelected = pipelineState.resultsViewMode === "file"
+        && artifact.id === pipelineState.selectedArtifactId;
+      return `
       <button
         type="button"
-        class="artifact-tab${pipelineState.resultsViewMode === "file" && artifact.id === pipelineState.selectedArtifactId ? " active" : ""}"
+        id="artifact-tab-${escapeAttr(artifact.id)}"
+        role="tab"
+        aria-selected="${isSelected ? "true" : "false"}"
+        aria-controls="artifact-results-split"
+        class="artifact-tab${isSelected ? " active" : ""}"
         data-artifact-id="${escapeAttr(artifact.id)}"
+        tabindex="${isSelected ? 0 : -1}"
         title="${escapeAttr(`${reviewStatusLabel(artifact.status)} · ${artifact.fileName || artifact.artifactName}`)}"
       >
         <span class="artifact-tab-status status-${escapeAttr(artifact.status)}">${reviewStatusIcon(artifact.status)}</span>
@@ -6145,16 +7796,59 @@ function renderBundleControls(presentation) {
           <span class="artifact-tab-meta">${escapeHtml(artifact.artifactType)}</span>
         </span>
       </button>
-    `).join("");
+    `;
+    }).join("");
     tabs.onclick = (event) => {
       const tab = event.target.closest(".artifact-tab");
       if (tab?.dataset?.artifactId) {
         selectArtifact(tab.dataset.artifactId);
       }
     };
+    ensureResultsTabKeyboard();
   }
 
   if (strip) strip.classList.add("visible");
+}
+
+// WAI-ARIA tabs pattern: ArrowRight/ArrowLeft move focus through the tablist,
+// Home/End jump to the first/last tab. The selected tab is activated and focus
+// is re-applied after the render so keyboard focus survives the re-render that
+// refreshArtifactTabs performs on selection change.
+function ensureResultsTabKeyboard() {
+  const tablist = document.getElementById("bundle-strip");
+  if (!tablist || tablist.dataset.tabKeyboard === "bound") return;
+  tablist.dataset.tabKeyboard = "bound";
+  tablist.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    const tabs = [
+      document.getElementById("results-summary-tab"),
+      ...Array.from(document.querySelectorAll("#artifact-tabs .artifact-tab")),
+    ].filter(Boolean);
+    if (!tabs.length || !tabs.includes(document.activeElement)) return;
+
+    let targetIndex = -1;
+    const currentIndex = tabs.indexOf(document.activeElement);
+    if (event.key === "ArrowRight") targetIndex = (currentIndex + 1) % tabs.length;
+    else if (event.key === "ArrowLeft") targetIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+    else if (event.key === "Home") targetIndex = 0;
+    else if (event.key === "End") targetIndex = tabs.length - 1;
+    else return;
+
+    event.preventDefault();
+    const target = tabs[targetIndex];
+    if (!target) return;
+    if (target.id === "results-summary-tab") {
+      selectResultsSummary();
+    } else {
+      const artifactId = target.dataset.artifactId;
+      if (artifactId) selectArtifact(artifactId);
+    }
+    // Re-apply focus to the freshly rendered tab after the selection re-render.
+    const freshTab = target.id === "results-summary-tab"
+      ? document.getElementById("results-summary-tab")
+      : document.querySelector(`#artifact-tabs .artifact-tab[data-artifact-id="${target.dataset.artifactId}"]`);
+    if (freshTab) freshTab.focus();
+  });
 }
 
 function updateSelectedArtifactPanels() {
@@ -6167,6 +7861,22 @@ function updateSelectedArtifactPanels() {
   const artifactSplit = document.getElementById("artifact-results-split");
   const presentation = getReviewPresentation();
   const selectedCode = getSelectedArtifactCode();
+
+  // Harden the summary/file tabpanel semantics for the WAI-ARIA tabs pattern.
+  if (summaryDetail) {
+    summaryDetail.setAttribute("role", "tabpanel");
+    summaryDetail.setAttribute("aria-labelledby", "results-summary-tab");
+  }
+  if (artifactSplit) {
+    artifactSplit.setAttribute("role", "tabpanel");
+    const selectedArtifact = presentation?.artifacts?.find(
+      (artifact) => artifact.id === pipelineState.selectedArtifactId,
+    );
+    artifactSplit.setAttribute(
+      "aria-labelledby",
+      selectedArtifact ? `artifact-tab-${selectedArtifact.id}` : "results-summary-tab",
+    );
+  }
 
   renderSummaryDetail(presentation);
   renderBundleControls(presentation);
@@ -6200,11 +7910,32 @@ function showResultsView(codeContent, auditContent) {
   updateSelectedArtifactPanels();
   updateDeployButtonVisibility();
 
-  // Reset feedback buttons
+  // Reset feedback state for the CURRENT generation: a new run must never
+  // carry a prior vote (visual, aria-pressed, pending lock or status) into
+  // code the user has not yet reviewed.
+  resetResultsFeedbackState();
+}
+
+function resetResultsFeedbackState() {
   const upBtn = document.getElementById("btn-feedback-up");
   const downBtn = document.getElementById("btn-feedback-down");
-  if (upBtn) upBtn.className = "feedback-btn";
-  if (downBtn) downBtn.className = "feedback-btn";
+  const statusEl = document.getElementById("results-feedback-status");
+  if (upBtn) {
+    upBtn.className = "feedback-btn";
+    upBtn.setAttribute("aria-pressed", "false");
+    upBtn.disabled = false;
+    upBtn.removeAttribute("aria-disabled");
+  }
+  if (downBtn) {
+    downBtn.className = "feedback-btn";
+    downBtn.setAttribute("aria-pressed", "false");
+    downBtn.disabled = false;
+    downBtn.removeAttribute("aria-disabled");
+  }
+  if (statusEl) {
+    statusEl.textContent = "";
+  }
+  resultsFeedbackPending = false;
 }
 
 function showDebugMultiArtifactResults() {
@@ -6333,11 +8064,86 @@ function selectResultsSummary() {
   updateSelectedArtifactPanels();
 }
 
+// Test/diagnostic hook used by the browser suite to render an arbitrary
+// bundle + review without running paid generation. Mirrors the debug path so
+// the Results Summary / artifact inspection surfaces can be asserted in
+// isolation. Gated on import.meta.env.DEV so the hook (and its ability to
+// force the results view with arbitrary content) is tree-shaken out of the
+// production bundle: it exists only under the Vite dev server, which is what
+// the Playwright suite runs against.
+if (import.meta.env.DEV) {
+  function renderResultsPreview(bundle, review) {
+    const readyState = document.getElementById("ready-state");
+    if (readyState) readyState.classList.add("hidden");
+    const stageContainer = document.getElementById("main-stage-container");
+    if (stageContainer) stageContainer.classList.add("visible");
+    hidePipelineProgress?.();
+    const paywallEl = document.getElementById("paywall-exhausted");
+    if (paywallEl) paywallEl.classList.add("hidden");
+
+    pipelineState.step3Result = typeof review === "string" ? review : JSON.stringify(review);
+    pipelineState.step2Result = typeof bundle === "string" ? bundle : JSON.stringify(bundle);
+    pipelineState.artifactBundle = normalizeArtifactBundle(bundle, {
+      id: bundle?.id,
+      title: bundle?.title,
+      description: bundle?.description,
+    });
+    pipelineState.bundleSpec = pipelineState.artifactBundle;
+    updateBundleReviewFromReviewResult();
+    pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
+    showResultsView(getSelectedArtifactCode(), renderMarkdownAudit(pipelineState.step3Result));
+  }
+  window.__CCC_RENDER_RESULTS__ = renderResultsPreview;
+
+  // Deterministic test hook for STU-380: drives the exact same terminal
+  // presentation the real confirm flow uses, against a fixture result, so the
+  // browser suite can assert truthful outcomes without a real remote write.
+  window.__CCC_RENDER_DEPLOY_TERMINAL__ = renderCommitTerminal;
+  // Lets the browser suite start a live deploy progress overlay so it can
+  // prove a terminal state releases the busy state.
+  window.__CCC_START_DEPLOY_PROGRESS__ = () =>
+    commitProgress.start({ withProvisioning: true });
+  // Lets the browser suite put the deploy into (and out of) its exactly-real
+  // busied state — the same `setDeployBusy` the confirm flow calls — so a test
+  // can prove a terminal outcome releases the busy lock on the deploy controls.
+  window.__CCC_SET_DEPLOY_BUSY__ = setDeployBusy;
+  // Lets the browser suite open the real commit-confirm modal (and set real
+  // `pendingCommitData`) with fixture code, so the duplicate-submit guard in
+  // `confirmCommitToFlutterFlow` can be driven through the real confirm flow
+  // without a real remote write.
+  window.__CCC_OPEN_COMMIT_CONFIRM__ = (codeInfo, checks, deps) =>
+    openCommitConfirmModal(
+      {
+        fileName: "gauge_widget.dart",
+        artifactType: "CustomClass",
+        content: "class GaugeWidget {}",
+        ...codeInfo,
+      },
+      { warnings: [], ...checks },
+      deps || {},
+    );
+}
+
 function copyResultsCode() {
   const btn = document.getElementById("btn-copy-results");
+  const statusEl = document.getElementById("results-copy-status");
   const rawCode = getSelectedArtifactCode();
+  const setStatus = (message, ok) => {
+    if (!statusEl) return;
+    statusEl.textContent = message;
+    statusEl.classList.toggle("ok", Boolean(ok));
+    statusEl.classList.toggle("fail", !ok);
+  };
+
+  if (!navigator.clipboard?.writeText) {
+    // The Clipboard API is unavailable (non-secure context or unsupported).
+    // Surface a non-blocking notice; the results view stays usable.
+    setStatus("Copying isn't supported in this browser.", false);
+    return;
+  }
 
   navigator.clipboard.writeText(rawCode).then(() => {
+    setStatus("Copied to clipboard", true);
     if (btn) {
       btn.classList.add("copied");
       const label = btn.querySelector("span");
@@ -6350,25 +8156,77 @@ function copyResultsCode() {
         }, 2000);
       }
     }
+  }).catch(() => {
+    // Permission denied or transient clipboard failure. This must never block
+    // the results view — the user can still read and select the code.
+    setStatus("Clipboard permission was denied. Select the code to copy it manually.", false);
   });
 }
 
-function submitResultsFeedback(direction) {
+let resultsFeedbackPending = false;
+
+async function submitResultsFeedback(direction) {
   const upBtn = document.getElementById("btn-feedback-up");
   const downBtn = document.getElementById("btn-feedback-down");
+  const statusEl = document.getElementById("results-feedback-status");
+  if (!upBtn || !downBtn) return;
+  // Ignore a rapid double-click (or a second direction) while a submission is
+  // still in flight so we never send a duplicate vote for the same generation.
+  if (resultsFeedbackPending) return;
 
-  // Toggle
-  if (direction === "up") {
-    upBtn.classList.toggle("active-up");
-    downBtn.classList.remove("active-down");
-  } else {
-    downBtn.classList.toggle("active-down");
-    upBtn.classList.remove("active-up");
-  }
+  const announce = (message) => {
+    if (!statusEl) return;
+    statusEl.textContent = "";
+    void statusEl.offsetWidth; // force reflow so repeated announcements re-fire
+    statusEl.textContent = message;
+  };
+
+  const setPending = (pending) => {
+    resultsFeedbackPending = pending;
+    [upBtn, downBtn].forEach((btn) => {
+      btn.disabled = pending;
+      btn.setAttribute("aria-disabled", String(pending));
+    });
+  };
 
   const feedbackType = direction === "up" ? "thumbsUp" : "thumbsDown";
-  callEndpoint(feedbackType, pipelineState.step2Result, pipelineState.step1Result);
-  trackEvent("Generation Feedback", { feedback: feedbackType });
+  setPending(true);
+  announce("Submitting review feedback…");
+
+  // Capture the CURRENT generation up front so a retry always sends the exact
+  // bundle + input the user reviewed — never a prior generation's payload.
+  const payload = { type: feedbackType, code: pipelineState.step2Result, input: pipelineState.step1Result };
+  try {
+    const result = await callEndpoint(payload.type, payload.code, payload.input);
+    // A vote is only claimed as saved after the endpoint positively confirms
+    // success. Requiring the explicit `success: true` the backend contract
+    // returns means a 2xx carrying an error-shaped body ({"error":"quota
+    // exceeded"} or {"ok":false}, with no truthy success field) is never
+    // announced as saved — a failed submission must stay retry-able instead
+    // of silently clearing the pending lock.
+    if (!result || result.success !== true) {
+      // A non-2xx response, network failure, or unconfirmed 2xx is never shown
+      // as saved.
+      setPending(false);
+      announce("Review feedback could not be sent. Tap again to retry.");
+      return;
+    }
+
+    // Only a confirmed submission marks the vote saved; the chosen direction
+    // becomes pressed and the other is cleared (mutually exclusive).
+    upBtn.classList.toggle("active-up", direction === "up");
+    downBtn.classList.toggle("active-down", direction === "down");
+    upBtn.setAttribute("aria-pressed", String(direction === "up"));
+    downBtn.setAttribute("aria-pressed", String(direction === "down"));
+    setPending(false);
+    announce("Review feedback saved.");
+    trackEvent("Generation Feedback", { feedback: feedbackType });
+  } catch (error) {
+    // callEndpoint swallows its own/rejection errors into { success:false },
+    // but a hard throw must also fail open without showing a saved vote.
+    setPending(false);
+    announce("Review feedback could not be sent. Tap again to retry.");
+  }
 }
 
 function showErrorInputPanel() {
@@ -6413,7 +8271,7 @@ function updateShellUI() {
   const loading = signedIn && isSubscriptionLoading();
   const resolved = !signedIn || isSubscriptionResolved();
 
-  const labels = { free: "Free", professional: "Pro", power: "Power" };
+  const labels = planLabels;
   const planLabel = loading ? "Checking…" : resolved ? labels[tier] || "Free" : "—";
 
   const topbarPlan = document.getElementById("topbar-plan");
@@ -6422,14 +8280,7 @@ function updateShellUI() {
   const avatar = document.getElementById("topbar-avatar");
   if (avatar) avatar.textContent = (authState.email || "?")[0].toUpperCase();
 
-  const usage = getUsage();
-  const usageText = `${usage.count} / ${getRunLimit()} runs this month`;
-
-  const topbarCredits = document.getElementById("topbar-credits-count");
-  if (topbarCredits) topbarCredits.textContent = String(usage.count);
-
-  const creditsBalance = document.getElementById("credits-balance");
-  if (creditsBalance) creditsBalance.textContent = usageText;
+  renderUsageSurfaces();
 
   // Plans view current-plan indicators
   const freeCurrent = document.getElementById("plans-free-current");
@@ -6528,5 +8379,9 @@ window.showErrorInputPanel = showErrorInputPanel;
 window.hideErrorInputPanel = hideErrorInputPanel;
 window.setGenerationStageVisible = setGenerationStageVisible;
 window.switchView = switchView;
+// Pipeline view controls used by the generation panel's inline handlers.
+window.selectPipelineStage = selectPipelineStage;
+window.editPipelinePrompt = editPipelinePrompt;
+window.retryPipelineRun = retryPipelineRun;
 window.openCreditsModal = openCreditsModal;
 window.closeCreditsModal = closeCreditsModal;
