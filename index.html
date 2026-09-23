@@ -2128,345 +2128,171 @@
         color: var(--accent);
       }
 
-      /* ── Walkthrough Modal Redesign ─────────────────────── */
-      .wt-hero {
-        display: flex;
-        align-items: center;
-        gap: 28px;
-        padding: 32px 32px 24px;
-        background: linear-gradient(168deg, #f0f4ff 0%, #f8f9ff 40%, #fff 100%);
-        position: relative;
-        overflow: hidden;
-      }
+      /* ── Walkthrough / Tutorial Modal (new visual system) ─── */
+      .wt-modal { max-width: 640px; overflow: hidden; background: var(--surface); }
 
-      .wt-hero::before {
-        content: '';
-        position: absolute;
-        top: -40px;
-        right: -40px;
-        width: 180px;
-        height: 180px;
-        background: radial-gradient(circle, rgba(139, 92, 246, 0.06) 0%, transparent 70%);
-        border-radius: 50%;
-        pointer-events: none;
+      .wt-topbar {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 16px; padding: 18px 24px;
+        border-bottom: 1px solid var(--border);
       }
-
-      .wt-illustration {
-        position: relative;
-        width: 200px;
-        height: 200px;
-        flex-shrink: 0;
-      }
-
-      .wt-orbit {
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        border: 2px solid transparent;
-        animation: wt-orbit-spin 20s linear infinite;
-      }
-
-      .wt-orbit-1 {
-        border-image: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(168, 85, 247, 0.15), transparent 60%) 1;
-        border-radius: 50%;
-        border: 2px solid rgba(99, 102, 241, 0.15);
-      }
-
-      .wt-orbit-2 {
-        inset: 16px;
-        border: 2px dashed rgba(139, 92, 246, 0.12);
-        animation-direction: reverse;
-        animation-duration: 28s;
-      }
-
-      .wt-orbit-3 {
-        inset: 32px;
-        border: 1.5px solid rgba(59, 130, 246, 0.1);
-        animation-duration: 15s;
-      }
-
-      @keyframes wt-orbit-spin {
-        to { transform: rotate(360deg); }
-      }
-
-      .wt-center-gem {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        width: 72px;
-        height: 72px;
-      }
-
-      .wt-gem-shape {
-        width: 100%;
-        height: 100%;
-        filter: drop-shadow(0 4px 12px rgba(99, 102, 241, 0.3));
-      }
-
-      .wt-code-tag {
-        position: absolute;
-        font-family: 'DM Mono', monospace;
-        font-size: 13px;
-        font-weight: 500;
-        color: #8b5cf6;
-        background: rgba(255, 255, 255, 0.9);
-        backdrop-filter: blur(4px);
-        padding: 4px 8px;
-        border-radius: 6px;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-        line-height: 1;
-      }
-
-      .wt-code-tag-1 { bottom: 28px; left: 4px; color: #6366f1; }
-      .wt-code-tag-2 { bottom: 32px; right: 0px; color: #7c3aed; }
-
-      .wt-gear {
-        position: absolute;
-        color: #94a3b8;
-        opacity: 0.5;
-        animation: wt-gear-spin 8s linear infinite;
-      }
-      .wt-gear-1 { top: 12px; right: 28px; width: 22px; height: 22px; }
-      .wt-gear-2 { top: 36px; right: 8px; width: 16px; height: 16px; animation-direction: reverse; animation-duration: 12s; }
-
-      @keyframes wt-gear-spin {
-        to { transform: rotate(360deg); }
-      }
-
-      .wt-sparkle {
-        position: absolute;
-        width: 8px;
-        height: 8px;
-        animation: wt-sparkle-pulse 2s ease-in-out infinite;
-      }
-      .wt-sparkle::before,
-      .wt-sparkle::after {
-        content: '';
-        position: absolute;
-        background: currentColor;
-        border-radius: 1px;
-      }
-      .wt-sparkle::before {
-        width: 2px;
-        height: 100%;
-        left: 50%;
-        transform: translateX(-50%);
-      }
-      .wt-sparkle::after {
-        width: 100%;
-        height: 2px;
-        top: 50%;
-        transform: translateY(-50%);
-      }
-
-      .wt-sparkle-1 { top: 20px; left: 24px; color: #818cf8; animation-delay: 0s; }
-      .wt-sparkle-2 { top: 8px; left: 80px; color: #a78bfa; animation-delay: 0.6s; }
-      .wt-sparkle-3 { top: 44px; left: 56px; color: #6366f1; animation-delay: 1.2s; font-size: 6px; }
-      .wt-sparkle-4 { bottom: 16px; right: 44px; color: #818cf8; animation-delay: 0.3s; }
-
-      @keyframes wt-sparkle-pulse {
-        0%, 100% { opacity: 0.3; transform: scale(0.8); }
-        50% { opacity: 1; transform: scale(1.2); }
-      }
-
-      .wt-free-badge {
-        position: absolute;
-        top: 8px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: linear-gradient(135deg, #22c55e, #16a34a);
-        color: #fff;
-        font-family: 'Delight', 'Outfit', sans-serif;
-        font-size: 10px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        padding: 3px 12px;
-        border-radius: 4px;
-        box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3);
-        z-index: 2;
-      }
-
-      .wt-hero-text {
-        flex: 1;
-        min-width: 0;
-      }
-
-      .wt-hero-heading {
-        font-family: 'Delight', 'Outfit', sans-serif;
-        font-size: 26px;
-        font-weight: 700;
+      .wt-title {
+        font-family: var(--font-display);
+        font-size: var(--fs-h4);
+        font-weight: var(--fw-bold);
         color: var(--fg);
-        letter-spacing: -0.03em;
-        line-height: 1.2;
+        letter-spacing: var(--ls-heading);
       }
 
-      .wt-info-card {
-        margin: 0 24px;
-        padding: 20px 24px;
-        background: linear-gradient(135deg, #eef2ff 0%, #f0f4ff 50%, #ede9fe 100%);
-        border-radius: 14px;
-        text-align: center;
-        position: relative;
-      }
-
-      .wt-info-text {
-        font-family: 'Delight', 'DM Sans', sans-serif;
-        font-size: 14px;
-        color: #334155;
-        line-height: 1.6;
-        margin-bottom: 16px;
-      }
-
-      .wt-info-text strong {
-        font-weight: 700;
-        color: #1e293b;
-      }
-
-      .wt-upgrade-btn {
-        display: block;
-        width: 100%;
-        padding: 14px 24px;
-        background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 50%, #4f46e5 100%);
-        color: #fff;
-        font-family: 'Delight', 'DM Sans', sans-serif;
-        font-size: 14px;
+      .wt-hero { padding: 22px 24px 0; }
+      .wt-hero-kicker {
+        font-family: var(--font-mono);
+        font-size: var(--fs-micro);
         font-weight: 600;
-        border: none;
-        border-radius: 10px;
-        cursor: pointer;
-        letter-spacing: -0.01em;
-        transition: all 0.2s ease;
-        box-shadow: 0 4px 14px -3px rgba(99, 102, 241, 0.4);
+        letter-spacing: var(--ls-mono);
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 8px;
       }
-
-      .wt-upgrade-btn:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 20px -3px rgba(99, 102, 241, 0.5);
-        background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 50%, #4338ca 100%);
+      .wt-hero-heading {
+        font-family: var(--font-display);
+        font-size: var(--fs-h3);
+        font-weight: var(--fw-black);
+        color: var(--fg);
+        letter-spacing: var(--ls-heading);
+        line-height: 1.15;
       }
+      .wt-hero-sub {
+        margin: 8px 0 16px;
+        font-size: var(--fs-small);
+        color: var(--muted);
+        line-height: var(--lh-body);
+        max-width: 58ch;
+      }
+      .wt-video {
+        border-radius: var(--radius-md);
+        overflow: hidden;
+        border: 1px solid var(--border-strong);
+        background: oklch(16% 0.02 265);
+        aspect-ratio: 16 / 9;
+      }
+      .wt-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
 
       .wt-steps {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 14px;
-        padding: 20px 24px 0;
+        list-style: none;
+        margin: 20px 0 0;
+        padding: 0 24px;
+        display: grid; gap: 10px;
       }
-
       .wt-step-card {
-        background: #fff;
-        border: 1px solid #e8ebf0;
-        border-radius: 12px;
-        padding: 18px;
-        transition: border-color 0.2s, box-shadow 0.2s;
+        display: flex; align-items: flex-start; gap: 14px;
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        transition: border-color var(--t-fast) var(--ease),
+          box-shadow var(--t-fast) var(--ease),
+          opacity var(--t-fast) var(--ease);
       }
-
-      .wt-step-card:hover {
-        border-color: #c7d2fe;
-        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.08);
+      .wt-step-card.wt-current {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
+      .wt-step-card.wt-pending { opacity: 0.72; }
 
       .wt-step-num {
-        width: 28px;
-        height: 28px;
-        background: #3b82f6;
-        color: #fff;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 13px;
-        font-weight: 700;
-        font-family: 'Delight', 'DM Sans', sans-serif;
-        margin-bottom: 10px;
+        flex: none; width: 28px; height: 28px; border-radius: 50%;
+        display: grid; place-items: center;
+        font-family: var(--font-mono);
+        font-size: var(--fs-caption);
+        font-weight: 600;
+        color: var(--fg);
+        border: 1px solid var(--border-strong);
+        background: var(--surface-sunken);
       }
+      .wt-current .wt-step-num { background: var(--accent); border-color: var(--accent); color: var(--on-dark); }
+      .wt-done .wt-step-num { background: var(--ok); border-color: var(--ok); color: var(--on-dark); }
 
+      .wt-step-body { flex: 1; min-width: 0; }
       .wt-step-title {
-        font-family: 'Delight', 'Outfit', sans-serif;
-        font-size: 14px;
-        font-weight: 600;
-        color: #1e293b;
-        margin-bottom: 4px;
+        display: block;
+        font-family: var(--font-body);
+        font-size: var(--fs-body);
+        font-weight: var(--fw-bold);
+        color: var(--fg);
+        letter-spacing: -0.01em;
       }
-
       .wt-step-desc {
-        font-size: 12.5px;
-        color: #64748b;
+        display: block; margin-top: 3px;
+        font-size: var(--fs-caption);
+        color: var(--muted);
         line-height: 1.5;
-        margin-bottom: 10px;
       }
-
       .wt-step-link {
-        font-size: 12.5px;
-        font-weight: 600;
-        color: #3b82f6;
+        margin-top: 9px; padding: 0;
+        background: none; border: none; cursor: pointer;
+        font-family: var(--font-body);
+        font-size: var(--fs-small);
+        font-weight: var(--fw-bold);
+        color: var(--accent);
         text-decoration: none;
-        cursor: pointer;
-        background: none;
-        border: none;
-        padding: 0;
-        font-family: 'Delight', 'DM Sans', sans-serif;
-        transition: color 0.15s;
       }
-      .wt-step-link:hover { color: #2563eb; }
+      .wt-step-link:hover { text-decoration: underline; }
+
+      .wt-upgrade {
+        margin: 16px 24px 0; padding: 14px 18px;
+        border: 1px dashed var(--border-strong);
+        border-radius: var(--radius-sm);
+        background: var(--surface-sunken);
+        display: flex; flex-wrap: wrap; align-items: center;
+        justify-content: space-between; gap: 12px;
+      }
+      .wt-info-text {
+        flex: 1 1 250px;
+        font-size: var(--fs-small); color: var(--muted);
+        line-height: var(--lh-body);
+      }
+      .wt-info-text strong { font-weight: var(--fw-bold); color: var(--fg); }
+      .wt-upgrade-btn {
+        padding: 10px 16px;
+        background: var(--accent); color: var(--on-dark);
+        font-family: var(--font-body);
+        font-size: var(--fs-small); font-weight: var(--fw-bold);
+        border: none; border-radius: var(--radius-control);
+        cursor: pointer;
+        transition: box-shadow var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+      }
+      .wt-upgrade-btn:hover { box-shadow: var(--shadow-control); }
 
       .wt-footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 16px 24px 20px;
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 12px; padding: 16px 24px 20px;
       }
-
-      .wt-dont-show {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        cursor: pointer;
-      }
-
+      .wt-dont-show { display: flex; align-items: center; gap: 8px; cursor: pointer; }
       .wt-dont-show input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
-        border-radius: 4px;
-        border: 1.5px solid #cbd5e1;
-        accent-color: #3b82f6;
-        cursor: pointer;
+        width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
       }
-
-      .wt-dont-show span {
-        font-size: 12px;
-        color: #94a3b8;
-        font-family: 'Delight', 'DM Sans', sans-serif;
-      }
-
+      .wt-dont-show span { font-size: var(--fs-caption); color: var(--muted-2); }
       .wt-gotit-btn {
-        padding: 10px 22px;
-        background: #3b82f6;
-        color: #fff;
-        font-family: 'Delight', 'DM Sans', sans-serif;
-        font-size: 14px;
-        font-weight: 600;
-        border: none;
-        border-radius: 10px;
+        min-height: var(--control-h);
+        padding: 10px 20px;
+        background: var(--fg); color: var(--surface);
+        font-family: var(--font-body);
+        font-size: var(--fs-body); font-weight: var(--fw-bold);
+        border: none; border-radius: var(--radius-control);
         cursor: pointer;
-        transition: background 0.15s;
-        display: flex;
-        align-items: center;
-        gap: 6px;
+        display: flex; align-items: center; gap: 6px;
+        transition: background-color var(--t-fast) var(--ease);
       }
-      .wt-gotit-btn:hover { background: #2563eb; }
-
-      .wt-gotit-btn svg {
-        width: 16px;
-        height: 16px;
-      }
+      .wt-gotit-btn:hover { background: oklch(from var(--fg) calc(l + 0.12) c h); }
+      .wt-gotit-btn svg { width: 15px; height: 15px; }
 
       @media (max-width: 640px) {
-        .wt-hero { flex-direction: column; text-align: center; gap: 16px; padding: 24px; }
-        .wt-illustration { width: 160px; height: 160px; }
-        .wt-hero-heading { font-size: 22px; }
-        .wt-steps { grid-template-columns: 1fr; }
-        .wt-info-card { margin: 0 16px; }
+        .wt-hero { padding: 18px 16px 0; }
+        .wt-steps { padding: 0 16px; }
+        .wt-upgrade { margin-left: 16px; margin-right: 16px; flex-direction: column; align-items: stretch; }
+        .wt-upgrade-btn { text-align: center; }
+        .wt-footer { padding-left: 16px; padding-right: 16px; }
       }
 
       /* ── Pricing Modal Redesign ─────────────────────── */
@@ -3462,6 +3288,7 @@
       <a href="#home" class="nav-link" data-view="home" aria-current="page">Home</a>
       <a href="#account" class="nav-link" data-view="account">Account</a>
       <a href="#plans" class="nav-link" data-view="plans">Plans</a>
+      <a href="#tutorial" class="nav-link" id="wt-reopen" aria-haspopup="dialog" onclick="openWalkthroughModal(); return false;">Tutorial</a>
     </nav>
 
     <div class="topbar-account">
@@ -4071,96 +3898,62 @@
       </div>
     </div>
 
-    <!-- Walkthrough Modal -->
+    <!-- Walkthrough / Onboarding Tutorial Modal -->
     <div id="walkthrough-modal" class="modal-overlay" data-modal-close-handler="closeWalkthroughModal" onclick="closeWalkthroughModal(event)">
-      <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 640px; padding: 0; overflow: hidden;">
+      <div class="modal-content wt-modal" onclick="event.stopPropagation()">
 
         <!-- Header -->
-        <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 class="font-semibold text-base text-gray-900">Welcome to Custom Code Connect</h2>
-          <button onclick="closeWalkthroughModal()" class="modal-close">
+        <div class="wt-topbar">
+          <h2 class="wt-title" id="walkthrough-title">Welcome to Custom Code Connect</h2>
+          <button onclick="closeWalkthroughModal()" class="modal-close" type="button" aria-label="Close tutorial">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
           </button>
         </div>
 
-        <!-- Hero Section -->
+        <!-- Hero + tutorial video -->
         <div class="wt-hero">
-          <!-- Illustration -->
-          <div class="wt-illustration">
-            <!-- Orbiting rings -->
-            <div class="wt-orbit wt-orbit-1"></div>
-            <div class="wt-orbit wt-orbit-2"></div>
-            <div class="wt-orbit wt-orbit-3"></div>
-
-            <!-- Center gem -->
-            <div class="wt-center-gem">
-              <svg class="wt-gem-shape" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                  <linearGradient id="gem-grad" x1="10" y1="8" x2="62" y2="64" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stop-color="#818cf8"/>
-                    <stop offset="50%" stop-color="#6366f1"/>
-                    <stop offset="100%" stop-color="#4f46e5"/>
-                  </linearGradient>
-                  <linearGradient id="gem-shine" x1="20" y1="10" x2="52" y2="62" gradientUnits="userSpaceOnUse">
-                    <stop offset="0%" stop-color="#c7d2fe" stop-opacity="0.6"/>
-                    <stop offset="100%" stop-color="#818cf8" stop-opacity="0"/>
-                  </linearGradient>
-                </defs>
-                <polygon points="36,4 64,24 58,56 14,56 8,24" fill="url(#gem-grad)"/>
-                <polygon points="36,4 64,24 36,20 8,24" fill="url(#gem-shine)"/>
-                <polygon points="36,20 64,24 58,56 14,56 8,24" fill="url(#gem-grad)" opacity="0.9"/>
-                <line x1="36" y1="20" x2="36" y2="56" stroke="#a5b4fc" stroke-width="0.5" opacity="0.5"/>
-                <line x1="36" y1="20" x2="58" y2="56" stroke="#a5b4fc" stroke-width="0.5" opacity="0.3"/>
-                <line x1="36" y1="20" x2="14" y2="56" stroke="#a5b4fc" stroke-width="0.5" opacity="0.3"/>
-              </svg>
-            </div>
-
-            <!-- Code tags -->
-            <span class="wt-code-tag wt-code-tag-1">&lt;/&gt;</span>
-            <span class="wt-code-tag wt-code-tag-2">{ }</span>
-
-            <!-- Gears -->
-            <svg class="wt-gear wt-gear-1" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64L19.43 12.97z"/></svg>
-            <svg class="wt-gear wt-gear-2" viewBox="0 0 24 24" fill="currentColor"><path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64L19.43 12.97z"/></svg>
-
-            <!-- Sparkles -->
-            <div class="wt-sparkle wt-sparkle-1"></div>
-            <div class="wt-sparkle wt-sparkle-2"></div>
-            <div class="wt-sparkle wt-sparkle-3"></div>
-            <div class="wt-sparkle wt-sparkle-4"></div>
-
-            <!-- FREE badge -->
-            <div class="wt-free-badge">FREE</div>
+          <span class="wt-hero-kicker">Tutorial</span>
+          <h3 class="wt-hero-heading">Make FlutterFlow widgets in minutes</h3>
+          <p class="wt-hero-sub">Watch the short tour below, connect your FlutterFlow account, and generate your first custom widget.</p>
+          <div class="wt-video">
+            <video id="wt-tutorial-video" controls preload="metadata" playsinline aria-label="Product walkthrough video">
+              <source src="/CCC.mp4" type="video/mp4" />
+            </video>
           </div>
-
-          <!-- Hero text -->
-          <div class="wt-hero-text">
-            <h3 class="wt-hero-heading">Get Started with<br/>Our Free Tier!</h3>
-          </div>
-        </div>
-
-        <!-- Info card -->
-        <div class="wt-info-card">
-          <p class="wt-info-text">
-            You get <strong>2 free generations per month</strong> to try Custom Code Connect. Need more power?
-          </p>
-          <button class="wt-upgrade-btn" onclick="closeWalkthroughModal(); openPricingModal();">Unlock More &mdash; Upgrade Plan</button>
         </div>
 
         <!-- Steps -->
-        <div class="wt-steps">
-          <div id="walkthrough-step1" class="wt-step-card bg-blue-50 border-blue-200">
-            <div class="wt-step-num bg-blue-500">1</div>
-            <div class="wt-step-title">Describe What You Want</div>
-            <div class="wt-step-desc">Type a detailed prompt describing the custom widget, action, or function you need.</div>
-            <button class="wt-step-link" onclick="closeWalkthroughModal(); focusPromptInput();">Add Prompt &rarr;</button>
-          </div>
-          <div id="walkthrough-step2" class="wt-step-card opacity-60 bg-gray-50 border-gray-200">
-            <div class="wt-step-num bg-gray-400">2</div>
-            <div class="wt-step-title">Hit Run!</div>
-            <div class="wt-step-desc">Click Run Pipeline and watch as AI generates FlutterFlow-ready code.</div>
-            <button class="wt-step-link" onclick="closeWalkthroughModal(); runThinkingPipeline();">Run Pipeline &rarr;</button>
-          </div>
+        <ol class="wt-steps" role="list">
+          <li id="walkthrough-step1" class="wt-step-card wt-current">
+            <div class="wt-step-num">1</div>
+            <div class="wt-step-body">
+              <div class="wt-step-title">Connect your FlutterFlow account</div>
+              <div class="wt-step-desc">Add your API key and pick a project so your generated code can deploy.</div>
+              <button class="wt-step-link" type="button" onclick="walkthroughConnectAccount()">Connect account &rarr;</button>
+            </div>
+          </li>
+          <li id="walkthrough-step2" class="wt-step-card wt-pending">
+            <div class="wt-step-num">2</div>
+            <div class="wt-step-body">
+              <div class="wt-step-title">Describe what you want</div>
+              <div class="wt-step-desc">Type a detailed prompt describing the custom widget, action, or function you need.</div>
+              <button class="wt-step-link" type="button" onclick="closeWalkthroughModal(); focusPromptInput();">Add Prompt &rarr;</button>
+            </div>
+          </li>
+          <li id="walkthrough-step3" class="wt-step-card wt-pending">
+            <div class="wt-step-num">3</div>
+            <div class="wt-step-body">
+              <div class="wt-step-title">Hit Run!</div>
+              <div class="wt-step-desc">Click Run Pipeline and watch as AI generates FlutterFlow-ready code.</div>
+              <button class="wt-step-link" type="button" onclick="closeWalkthroughModal(); runThinkingPipeline();">Run Pipeline &rarr;</button>
+            </div>
+          </li>
+        </ol>
+
+        <!-- Upgrade -->
+        <div class="wt-upgrade">
+          <p class="wt-info-text">You get <strong>2 free generations per month</strong> to try Custom Code Connect. Need more power?</p>
+          <button class="wt-upgrade-btn" type="button" onclick="closeWalkthroughModal(); openPricingModal();">Unlock More &mdash; Upgrade Plan</button>
         </div>
 
         <!-- Footer -->
@@ -4169,7 +3962,7 @@
             <input type="checkbox" id="walkthrough-dont-show"/>
             <span>Don't show this again</span>
           </label>
-          <button class="wt-gotit-btn" onclick="closeWalkthroughModal()">
+          <button class="wt-gotit-btn" type="button" onclick="closeWalkthroughModal()">
             Got It!
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
           </button>
@@ -4177,7 +3970,6 @@
 
       </div>
     </div>
-
     <!-- Commit Confirmation Modal -->
     <div id="commit-confirm-modal" class="modal-overlay" data-modal-close-handler="closeCommitConfirmModal" onclick="closeCommitConfirmModal(event)">
       <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 620px;">

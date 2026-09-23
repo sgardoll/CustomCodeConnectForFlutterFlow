@@ -989,7 +989,14 @@ async function initializeApiKeys() {
 
 // --- API KEY UI FUNCTIONS ---
 
-function openApiKeysModal() {
+// Onboarding-scoped editor re-entry. The walkthrough's own "connect account"
+// step sets this before opening the shared API-key editor so that closing it
+// returns to (and advances) the tour. Settings opened from any other surface
+// (account card, gear, commit flow) stays false, so closing those never
+// launches or advances the walkthrough.
+let walkthroughSettingsActive = false;
+
+function openApiKeysModalBody() {
   const modal = document.getElementById("api-keys-modal");
   openModal(modal);
 
@@ -1003,17 +1010,47 @@ function openApiKeysModal() {
   }
 }
 
+function openApiKeysModal() {
+  // A standalone settings visit, not onboarding: closing it must not touch the
+  // walkthrough.
+  walkthroughSettingsActive = false;
+  openApiKeysModalBody();
+}
+
+// Entered by the walkthrough's "Connect your FlutterFlow account" step. Routes
+// the user to the real account control and remembers, on this one close, to
+// return to the originating tour step.
+function walkthroughConnectAccount() {
+  walkthroughSettingsActive = true;
+  // Close the tour first so the shared editor never stacks on top of it.
+  const wt = document.getElementById("walkthrough-modal");
+  if (wt) closeModal(wt);
+  openApiKeysModalBody();
+}
+
 function closeApiKeysModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("api-keys-modal");
   if (modal) {
     closeModal(modal);
   }
-  // Show walkthrough again after closing API keys
-  const walkthroughModal = document.getElementById("walkthrough-modal");
-  if (walkthroughModal) {
-    advanceWalkthrough();
-    openModal(walkthroughModal);
+  const fromWalkthrough = walkthroughSettingsActive;
+  walkthroughSettingsActive = false;
+  if (fromWalkthrough) {
+    // Return to the originating walkthrough step. Advance only when the
+    // account is genuinely connected, per the STU-384 canonical connection
+    // state (ffConnectionState), which is set only from a successful
+    // listProjects outcome — never from the mere presence of stored key bytes.
+    // A failed or cancelled connection returns to the same connect step so the
+    // user can retry instead of being pushed forward past an unconnected
+    // account.
+    const walkthroughModal = document.getElementById("walkthrough-modal");
+    if (walkthroughModal) {
+      if (ffConnectionState === "connected") {
+        advanceWalkthrough();
+      }
+      openModal(walkthroughModal);
+    }
   }
 }
 
@@ -1030,38 +1067,17 @@ function updateWalkthroughUI() {
   if (!steps.length) return;
   steps.forEach((stepEl, idx) => {
     const i = idx + 1;
+    stepEl.classList.remove("wt-current", "wt-done", "wt-pending");
+    const numEl = stepEl.querySelector(".wt-step-num");
     if (i === walkthroughStep) {
-      stepEl.classList.remove("opacity-60", "bg-gray-50", "border-gray-200");
-      stepEl.classList.add("bg-blue-50", "border-blue-200");
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-gray-400");
-        numEl.classList.add("bg-blue-500");
-        numEl.innerHTML = i;
-      }
+      stepEl.classList.add("wt-current");
+      if (numEl) numEl.textContent = i;
     } else if (i < walkthroughStep) {
-      stepEl.classList.remove("opacity-60", "bg-blue-50", "border-blue-200");
-      stepEl.classList.add("bg-green-50", "border-green-200");
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-blue-500", "bg-gray-400");
-        numEl.classList.add("bg-green-500");
-        numEl.innerHTML = "✓";
-      }
+      stepEl.classList.add("wt-done");
+      if (numEl) numEl.textContent = "✓";
     } else {
-      stepEl.classList.add("opacity-60", "bg-gray-50", "border-gray-200");
-      stepEl.classList.remove(
-        "bg-blue-50",
-        "border-blue-200",
-        "bg-green-50",
-        "border-green-200",
-      );
-      const numEl = stepEl.querySelector("div:first-child");
-      if (numEl) {
-        numEl.classList.remove("bg-blue-500", "bg-green-500");
-        numEl.classList.add("bg-gray-400");
-        numEl.innerHTML = i;
-      }
+      stepEl.classList.add("wt-pending");
+      if (numEl) numEl.textContent = i;
     }
   });
 }
@@ -1207,10 +1223,11 @@ function updateApiKeyStatusIndicators() {
 async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
+  const enteredKey = flutterflowInput.value.trim();
 
   // Only save if user entered a new value
-  if (flutterflowInput.value.trim()) {
-    await saveApiKey("flutterflow", flutterflowInput.value);
+  if (enteredKey) {
+    await saveApiKey("flutterflow", enteredKey);
   }
 
   const selectedProjectId = projectSelect?.value.trim() || "";
@@ -1225,6 +1242,15 @@ async function saveApiKeys() {
 
   // Reinitialize keys
   await initializeApiKeys();
+
+  // If a key was (re)entered, wait for the REAL connection outcome before the
+  // editor closes, so the walkthrough advance decision in closeApiKeysModal
+  // sees a settled canonical state rather than an in-flight "validating" or
+  // the mere presence of stored bytes. STU-384 owns this state; it is only
+  // "connected" after a real listProjects returns at least one project.
+  if (enteredKey) {
+    await validateFlutterFlowConnection();
+  }
 
   // Update UI
   loadApiKeyInputs();
@@ -6894,6 +6920,7 @@ window.copyCode = copyCode;
 window.retryWithDifferentModel = retryWithDifferentModel;
 window.openApiKeysModal = openApiKeysModal;
 window.closeApiKeysModal = closeApiKeysModal;
+window.walkthroughConnectAccount = walkthroughConnectAccount;
 window.closeWalkthroughModal = closeWalkthroughModal;
 window.openWalkthroughModal = openWalkthroughModal;
 window.advanceWalkthrough = advanceWalkthrough;

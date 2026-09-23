@@ -99,6 +99,37 @@ async function steadyFramesIn(page, ms = 500) {
   return after - before;
 }
 
+// Measures the logo's painted frames against the number of actual display
+// frames over the SAME wall-clock window. A single loop paints at most once per
+// display frame (ratio ~1); a leaked second loop paints ~2x per display frame
+// (ratio ~2). Because both counts share one window, CPU contention sags them
+// together and cannot inflate the ratio — unlike comparing two separate window
+// counts, which is how a slower CI runner stalls the baseline and trips a
+// `framesB < framesA * c` style assertion. This is the load-robust spelling of
+// "the loop resumed without accumulating a second loop."
+async function framesPerDisplayFrame(page, ms = 500) {
+  await page.evaluate(() => {
+    if (!window.__displayFrames) {
+      window.__displayFrames = 0;
+      (function tick() {
+        window.__displayFrames += 1;
+        requestAnimationFrame(tick);
+      })();
+    }
+  });
+  await page.waitForTimeout(250); // let the display counter run at steady rate
+  const before = await page.evaluate(() => [
+    window.__pipelineLogo?.frameCount() ?? 0,
+    window.__displayFrames || 0,
+  ]);
+  await page.waitForTimeout(ms);
+  const after = await page.evaluate(() => [
+    window.__pipelineLogo?.frameCount() ?? 0,
+    window.__displayFrames || 0,
+  ]);
+  return { logo: after[0] - before[0], display: after[1] - before[1] };
+}
+
 // Bring the pipeline arena onto screen without a backend run. The progress
 // panel lives in #generation-stage (hidden until a run begins) inside
 // #main-stage-container (opacity 0 unless .visible). showPipelineProgress
@@ -224,8 +255,6 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     await page.setViewportSize(DESKTOP);
     await openHome(page);
     await revealPipeline(page);
-    const framesOn = await steadyFramesIn(page);
-    expect(framesOn).toBeGreaterThan(5);
 
     await page.emulateMedia({ reducedMotion: "reduce" });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(false);
@@ -247,12 +276,18 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     expect(pieces.a).toBe(1);
     expect(pieces.b).toBe(1);
 
-    // Live toggle back on resumes without accumulating loops.
+    // Live toggle back on resumes without accumulating a second loop. Compare
+    // the resumed logo frames against display frames in the same window rather
+    // than against a separate baseline window: the ratio is load-invariant
+    // (contention slows both counters together), so it cannot trip on a slow CI
+    // runner while still failing if the loop genuinely doubled (~2x per frame).
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
-    const framesResumed = await steadyFramesIn(page);
-    expect(framesResumed).toBeGreaterThan(5);
-    expect(framesResumed).toBeLessThan(framesOn * 1.7);
+    const resumed = await framesPerDisplayFrame(page, 500);
+    expect(resumed.logo, "the loop should have resumed painting").toBeGreaterThan(5);
+    expect(resumed.display, "the window should contain real display frames").toBeGreaterThan(0);
+    // One loop paints at most once per display frame; a doubled loop would ~2x.
+    expect(resumed.logo).toBeLessThan(resumed.display * 1.6);
   });
 });
 
