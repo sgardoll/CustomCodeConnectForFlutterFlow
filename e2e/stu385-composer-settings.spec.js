@@ -22,7 +22,11 @@ import {
 
 const GEAR = '.tools [aria-label="Generation settings"]';
 const SETTINGS = "#composer-settings-modal";
-const MODEL_SELECT = `${SETTINGS} #code-generator-model`;
+// The dialog's model selector is a mirror of the canonical #code-generator-model
+// that stays on the page; selections made here forward to it, so they reach the
+// actual generation request unchanged.
+const MODEL_SELECT = `${SETTINGS} #composer-settings-model`;
+const FREE_NOTICE = `${SETTINGS} #composer-settings-free-notice`;
 const PRO_MODEL = "openai/gpt-5.6-sol";
 const NON_VISION_PRO_MODEL = "openrouter/deepseek/deepseek-v4-pro";
 
@@ -87,9 +91,8 @@ test.describe("model availability by subscription tier", () => {
     // Pro models are labelled and the upgrade action is visible inside the dialog.
     const proOption = page.locator(`${MODEL_SELECT} option[value="${PRO_MODEL}"]`);
     await expect(proOption).toContainText("(PRO)");
-    await expect(
-      page.locator(`${SETTINGS} #model-selector-free-notice`),
-    ).toContainText("Upgrade for all models");
+    await expect(page.locator(FREE_NOTICE)).toBeVisible();
+    await expect(page.locator(FREE_NOTICE)).toContainText("Upgrade for all models");
 
     // Selecting a gated Pro model never silently grants it: it reverts to the
     // free model and surfaces the pricing action (the transparent upgrade).
@@ -107,14 +110,17 @@ test.describe("model availability by subscription tier", () => {
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
     await page.goto("/");
+    // Wait for the subscription to settle (canonical selector is re-labelled on
+    // resolve) before opening the dialog so its mirror syncs the settled state.
+    await expect(
+      page.locator('#code-generator-model option[value="' + PRO_MODEL + '"]'),
+    ).not.toContainText("(PRO)");
     await openSettings(page);
 
     const proOption = page.locator(`${MODEL_SELECT} option[value="${PRO_MODEL}"]`);
     await expect(proOption).toBeEnabled();
     await expect(proOption).not.toContainText("(PRO)");
-    await expect(
-      page.locator(`${SETTINGS} #model-selector-free-notice`),
-    ).toHaveCount(0);
+    await expect(page.locator(FREE_NOTICE)).toBeHidden();
   });
 
   test("an unresolved plan never pretends to be a free-only tier", async ({ page }) => {
@@ -124,15 +130,17 @@ test.describe("model availability by subscription tier", () => {
       [ENDPOINTS.getSubscription]: unresolvedSubscription(),
     });
     await page.goto("/");
+    // Let the unresolved contract settle (never labelled a free-only tier).
+    await expect(
+      page.locator('#code-generator-model option[value="' + PRO_MODEL + '"]'),
+    ).not.toContainText("(PRO)");
     await openSettings(page);
 
     // While the plan can't be resolved, the dialog must not claim a free-only
     // limitation: no (PRO) gate, no free-only upgrade notice.
     const proOption = page.locator(`${MODEL_SELECT} option[value="${PRO_MODEL}"]`);
     await expect(proOption).not.toContainText("(PRO)");
-    await expect(
-      page.locator(`${SETTINGS} #model-selector-free-notice`),
-    ).toHaveCount(0);
+    await expect(page.locator(FREE_NOTICE)).toBeHidden();
   });
 });
 
@@ -155,6 +163,9 @@ test.describe("the dialog stays wired to the generation request", () => {
     });
 
     await page.goto("/");
+    await expect(
+      page.locator('#code-generator-model option[value="' + PRO_MODEL + '"]'),
+    ).not.toContainText("(PRO)"); // await pro entitlement settlement
     await openSettings(page);
     await page.locator(MODEL_SELECT).selectOption("anthropic/claude-opus-5");
     await closeSettings(page, { via: "done" });
@@ -173,6 +184,9 @@ test.describe("the dialog stays wired to the generation request", () => {
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
     await page.goto("/");
+    await expect(
+      page.locator('#code-generator-model option[value="' + PRO_MODEL + '"]'),
+    ).not.toContainText("(PRO)"); // await pro entitlement settlement
     await openSettings(page);
 
     const capability = page.locator("#composer-image-capability");

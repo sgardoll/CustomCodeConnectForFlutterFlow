@@ -3313,7 +3313,7 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-LZn-7N0Z.js"></script>
+    <script type="module" crossorigin src="/assets/index-BdVVPYTC.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-DcLSblVK.css">
   </head>
   <body>
@@ -3398,6 +3398,19 @@
         </div>
 
         <div class="hero-settings reveal" id="hero-settings">
+          <div id="code-options-content" style="display:contents">
+            <label class="sr-only" for="code-generator-model">Code generation model</label>
+            <select id="code-generator-model" onchange="updateModelInfo(this.value)">
+              <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
+              <option value="anthropic/claude-opus-5">Claude Opus 5</option>
+              <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="z-ai/glm-5.2">GLM 5.2</option>
+              <option value="moonshotai/kimi-k3">Kimi K3</option>
+              <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
+              <option value="openrouter/free">OpenRouter: Free Models</option>
+              <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
+            </select>
+          </div>
           <button class="settings-link" type="button" onclick="openApiKeysModal()">Configure API Keys</button>
         </div>
       </div>
@@ -3947,19 +3960,18 @@
         </div>
         <div class="p-6 space-y-5" style="overflow-y:auto; flex:1;">
           <div>
-            <label class="block text-sm font-medium text-gray-600 mb-1.5" for="code-generator-model">Code generation model</label>
-            <div id="code-options-content">
-              <select id="code-generator-model" onchange="updateModelInfo(this.value)">
-                <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
-                <option value="anthropic/claude-opus-5">Claude Opus 5</option>
-                <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
-                <option value="z-ai/glm-5.2">GLM 5.2</option>
-                <option value="moonshotai/kimi-k3">Kimi K3</option>
-                <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
-                <option value="openrouter/free">OpenRouter: Free Models</option>
-                <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
-              </select>
-            </div>
+            <label class="block text-sm font-medium text-gray-600 mb-1.5" for="composer-settings-model">Code generation model</label>
+            <select id="composer-settings-model">
+              <option value="google/gemini-3.7-flash" selected>Gemini 3.7 Flash</option>
+              <option value="anthropic/claude-opus-5">Claude Opus 5</option>
+              <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+              <option value="z-ai/glm-5.2">GLM 5.2</option>
+              <option value="moonshotai/kimi-k3">Kimi K3</option>
+              <option value="openrouter/auto-beta">OpenRouter: Auto Router</option>
+              <option value="openrouter/free">OpenRouter: Free Models</option>
+              <option value="openrouter/deepseek/deepseek-v4-pro">DeepSeek v4 Pro</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-1" id="composer-settings-free-notice" hidden></p>
           </div>
 
           <div>

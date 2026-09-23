@@ -1148,6 +1148,37 @@ function walkthroughConnectAccount() {
 let composerSettingsChangeWired = false;
 
 /**
+ * Keep the dialog's model mirror in step with the canonical #code-generator-model
+ * selector that still lives on the page. The mirror copies the canonical value,
+ * reuses the canonical availability labels (free tier marks PRO models "(PRO)"),
+ * and mirrors the canonical free-tier upgrade notice — so the dialog never
+ * drifts from the page or the pipeline. #code-generator-model remains the single
+ * element the generation request reads.
+ */
+function syncComposerSettingsModel() {
+  const canonical = document.getElementById("code-generator-model");
+  const mirror = document.getElementById("composer-settings-model");
+  if (!canonical || !mirror) return;
+  mirror.value = canonical.value;
+  const canonicalOptions = Array.from(canonical.options);
+  Array.from(mirror.options).forEach((mo, i) => {
+    const co = canonicalOptions[i];
+    if (co) mo.textContent = co.textContent;
+  });
+  const mirrorNotice = document.getElementById("composer-settings-free-notice");
+  if (mirrorNotice) {
+    if (document.getElementById("model-selector-free-notice")) {
+      mirrorNotice.hidden = false;
+      mirrorNotice.innerHTML =
+        `Free plan — Gemini only. ` +
+        `<button type="button" onclick="openPricingModal()" style="color:#3b82f6;background:none;border:none;cursor:pointer;font:inherit;padding:0;text-decoration:underline;">Upgrade for all models</button>`;
+    } else {
+      mirrorNotice.hidden = true;
+    }
+  }
+}
+
+/**
  * Reflect the selected model's supported generation options into the dialog and
  * keep the composer's image-attach affordance in step (vision model → attach
  * allowed; non-vision model → attach hidden and any attached images dropped).
@@ -1174,13 +1205,21 @@ function openComposerSettings() {
   // A standalone settings visit, not onboarding: closing it must not touch the
   // walkthrough (same contract as openApiKeysModal).
   walkthroughSettingsActive = false;
+  syncComposerSettingsModel();
   renderComposerSettingsOptions();
   if (!composerSettingsChangeWired) {
-    const select = document.getElementById("code-generator-model");
-    if (select) {
-      select.addEventListener("change", () => {
+    const mirror = document.getElementById("composer-settings-model");
+    if (mirror) {
+      mirror.addEventListener("change", () => {
+        // Forward the dialog selection to the canonical selector and let its
+        // existing handler apply gating (PRO-on-free resets to FREE_MODEL and
+        // opens pricing), model info and image-capability updates. Then resync
+        // the mirror to reflect any reset and refresh the dialog's rows.
+        const canonical = document.getElementById("code-generator-model");
+        canonical.value = mirror.value;
+        canonical.dispatchEvent(new Event("change"));
+        syncComposerSettingsModel();
         renderComposerSettingsOptions();
-        updateModelInfo(select.value);
       });
     }
     composerSettingsChangeWired = true;
