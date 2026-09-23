@@ -247,6 +247,11 @@ export function initComposer({ onSubmit }) {
   function fillChip(chip) {
     const text = chip.dataset.prompt || "";
     cancelChipTyping();
+    // A suggestion timer pending from earlier typing must not resolve against
+    // the half-typed chip text; programmatic fills emit no input events, so
+    // the stale timer would survive clearSuggestion() otherwise.
+    clearTimeout(debounceTimer);
+    debounceTimer = null;
     clearSuggestion();
     chips.forEach((other) => {
       const on = other === chip;

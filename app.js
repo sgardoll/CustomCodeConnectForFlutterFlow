@@ -148,6 +148,11 @@ function createSubscriptionState(overrides = {}) {
 
 let subscriptionState = createSubscriptionState({ isResolved: true })
 
+// Settles once startup auth + subscription fetches finish. The composer binds
+// before they complete, so a submission that lands early waits on this rather
+// than checking entitlements against free-tier defaults.
+let sessionReadiness = Promise.resolve()
+
 // --- PIPELINE ---
 const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}/service/runpipeline`
 
@@ -4300,6 +4305,11 @@ async function runThinkingPipeline() {
   const runId = startPipelineRun();
 
   try {
+    // A submission can beat startup auth/subscription reconciliation; wait for
+    // it so entitlement checks see the real session instead of free defaults.
+    await sessionReadiness;
+    if (!isCurrentPipelineRun(runId)) return;
+
     if (!(await canRunPipeline())) return;
     if (!isCurrentPipelineRun(runId)) return;
 
@@ -6084,12 +6094,23 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Bind the composer before the first awaited startup call so the send
   // button's listener exists while auth/subscription requests are still in
-  // flight; the pipeline's own gates handle a submission that lands early.
+  // flight; runThinkingPipeline waits on sessionReadiness before checking
+  // entitlements.
   initComposer({ onSubmit: runThinkingPipeline });
 
-  await initializeAuth();
-  handleCheckoutRedirect();
-  await fetchSubscription();
+  // Startup auth + subscription share one promise: the pipeline awaits it so
+  // an early submission sees the resolved session instead of free defaults.
+  // It always resolves — a failed init must not hang a waiting run.
+  sessionReadiness = (async () => {
+    try {
+      await initializeAuth();
+      handleCheckoutRedirect();
+      await fetchSubscription();
+    } catch (err) {
+      console.warn("Startup auth/subscription initialization failed:", err);
+    }
+  })();
+  await sessionReadiness;
   confirmCheckoutAfterReconcile();
   updateSubscriptionUI();
   updatePricingDisplay();
