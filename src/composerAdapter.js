@@ -114,6 +114,8 @@ export function initComposer({ onSubmit }) {
   const accept = document.getElementById("tab-hint");
   const status = document.getElementById("suggest-status");
   const chips = Array.from(document.querySelectorAll("#example-chips .chip"));
+  const attachBtn = document.getElementById("btn-add-images");
+  const attachInput = document.getElementById("prompt-image-input");
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   const session = createSuggestionSession();
@@ -202,6 +204,10 @@ export function initComposer({ onSubmit }) {
     composer.classList.toggle("is-busy", busy);
     send.classList.toggle("is-busy", busy);
     send.setAttribute("aria-label", busy ? "Generating" : "Generate");
+    // An attachment can't join a run that's already in flight: the control
+    // and file input stay disabled for the whole submitting interval.
+    if (attachBtn) attachBtn.disabled = busy;
+    if (attachInput) attachInput.disabled = busy;
     syncSend();
   }
 

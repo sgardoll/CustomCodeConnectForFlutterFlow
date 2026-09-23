@@ -232,9 +232,10 @@ const PIPELINE_IMAGE_ENDPOINT =
 let promptImages = [] // Array of { dataUrl, name, url }
 
 // In-flight attachment uploads, one promise per file resolving to
-// "added"/"failed"/"dropped". A selection reserves its slots synchronously so
-// a second selection can't overfill the cap, and a submission that lands
-// mid-upload waits on these before snapshotting promptImages.
+// "added"/"failed"/"dropped". A submission that lands mid-upload waits on
+// these before snapshotting promptImages, and the composer gates Send/Enter
+// while any are pending. Ordering and cap claims live on the reserved slots
+// in promptImages itself (url === null while a slot is pending).
 const pendingImageUploads = []
 
 // Handle returned by initComposer; lets attachment state gate the Send button.
@@ -297,11 +298,18 @@ function uploadedFileUrl(uploaded) {
   return ""
 }
 
-// Uploads one selected file and commits it to promptImages on success.
-// Resolves "added", "failed" (no usable upload URL), or "dropped" (a
-// non-vision model was selected while the upload was in flight).
-async function addPromptImage(file) {
+// Uploads one selected file into its reserved promptImages slot. The slot
+// fixes the file's position and its claim on the cap at selection time; on
+// failure the slot is removed, on user removal the commit is skipped.
+// Resolves "added", "failed" (no usable upload URL), or "dropped" (the slot
+// was removed while the upload was in flight).
+async function addPromptImage(file, slot) {
   const dataUrl = await readAsDataUrl(file)
+  if (dataUrl && promptImages.includes(slot)) {
+    // Fast local preview while the upload is still in flight.
+    slot.dataUrl = dataUrl
+    renderPromptImages()
+  }
   let url = ""
   if (dataUrl) {
     try {
@@ -310,14 +318,19 @@ async function addPromptImage(file) {
       url = ""
     }
   }
+  // The slot may have been removed while the upload was in flight (remove
+  // button, or a non-vision model switch clearing attachments) — commit
+  // nothing then.
+  if (!promptImages.includes(slot)) return "dropped"
   // A file that never produced an upload URL is reported by the caller and
-  // skipped — attaching it anyway would render a thumbnail the pipeline
+  // its slot removed — keeping it would render a thumbnail the pipeline
   // silently filters out of the payload.
-  if (!dataUrl || !url) return "failed"
-  // A non-vision model may have been selected while uploading; don't restore
-  // images that the model-change handler cleared.
-  if (!modelSupportsImages(document.getElementById("code-generator-model")?.value)) return "dropped"
-  promptImages.push({ dataUrl, name: file.name, url })
+  if (!dataUrl || !url) {
+    promptImages.splice(promptImages.indexOf(slot), 1)
+    renderPromptImages()
+    return "failed"
+  }
+  slot.url = url
   renderPromptImages()
   return "added"
 }
@@ -332,6 +345,13 @@ async function handlePromptImageSelect(event) {
   // Clear immediately so picking the same files again fires a change event.
   event.target.value = ""
 
+  // A run already in flight has snapshotted its attachments; refuse new
+  // selections so an upload can't appear to belong to a run that omitted it.
+  if (pipelineState.isRunning) {
+    showToast("Wait for the current generation to finish before attaching images.", "info")
+    return
+  }
+
   // Drop oversized files up front rather than uploading/reading them.
   const oversized = files.filter((f) => f.size > MAX_PROMPT_IMAGE_BYTES)
   if (oversized.length) {
@@ -343,9 +363,9 @@ async function handlePromptImageSelect(event) {
   const validFiles = files.filter((f) => f.size <= MAX_PROMPT_IMAGE_BYTES)
   if (!validFiles.length) return
 
-  // Pending uploads count against the cap: a second selection can't claim
-  // slots the first one is still filling.
-  const remaining = MAX_PROMPT_IMAGES - promptImages.length - pendingImageUploads.length
+  // Reserved slots already count toward the cap, so a second selection can't
+  // claim slots the first one is still filling.
+  const remaining = MAX_PROMPT_IMAGES - promptImages.length
   const toAdd = validFiles.slice(0, remaining)
   if (validFiles.length > remaining) {
     showToast(`You can attach up to ${MAX_PROMPT_IMAGES} images.`, "info")
@@ -353,7 +373,11 @@ async function handlePromptImageSelect(event) {
   if (!toAdd.length) return
 
   const jobs = toAdd.map((file) => {
-    const job = addPromptImage(file)
+    // Reserve the ordered slot synchronously: thumbnails and the payload keep
+    // selection order even when uploads finish out of order.
+    const slot = { dataUrl: null, name: file.name, url: null }
+    promptImages.push(slot)
+    const job = addPromptImage(file, slot)
     pendingImageUploads.push(job)
     job.finally(() => {
       const i = pendingImageUploads.indexOf(job)
@@ -362,6 +386,7 @@ async function handlePromptImageSelect(event) {
     })
     return job
   })
+  renderPromptImages()
   updateAttachmentPending()
 
   const results = await Promise.all(jobs)
@@ -384,9 +409,11 @@ function renderPromptImages() {
   container.innerHTML = ""
   promptImages.forEach((img, i) => {
     const el = document.createElement("div")
-    el.className = "prompt-img-thumb"
+    // A slot whose upload is still in flight (url === null) renders dimmed
+    // with a spinner; it can already carry a local dataUrl preview.
+    el.className = "prompt-img-thumb" + (img.url ? "" : " is-pending")
     el.innerHTML =
-      `<img src="${escapeAttr(img.dataUrl)}" alt="Prompt image">` +
+      (img.dataUrl ? `<img src="${escapeAttr(img.dataUrl)}" alt="Prompt image">` : "") +
       `<button type="button" class="prompt-img-remove" title="Remove image" onclick="removePromptImage(${i})">×</button>`
     container.appendChild(el)
   })

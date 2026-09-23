@@ -255,6 +255,20 @@
         object-fit: cover;
         display: block;
       }
+      .prompt-img-thumb.is-pending img { opacity: 0.55; }
+      .prompt-img-thumb.is-pending::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        margin: auto;
+        width: 16px;
+        height: 16px;
+        border-radius: 9999px;
+        border: 2px solid rgba(15, 23, 42, 0.15);
+        border-top-color: rgba(15, 23, 42, 0.6);
+        animation: prompt-img-spin 0.8s linear infinite;
+      }
+      @keyframes prompt-img-spin { to { transform: rotate(360deg); } }
       .prompt-img-remove {
         position: absolute;
         top: 3px;
