@@ -289,6 +289,8 @@ export function initComposer({ onSubmit }) {
       event.preventDefault();
       acceptSuggestion();
     } else if (event.key === "Escape") {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
       clearSuggestion();
     } else if (
       event.key === "Enter" &&

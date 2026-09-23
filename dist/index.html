@@ -2697,6 +2697,20 @@
         cursor: pointer;
       }
       .icon-btn svg { width: 18px; height: 18px; }
+      .prompt-image-upload {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .prompt-image-upload.hidden { display: none; }
+      .prompt-image-thumbnails {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .prompt-image-thumbnails:empty { display: none; }
+      .composer .prompt-img-thumb { width: 40px; height: 40px; border-radius: 8px; }
+      .composer .prompt-img-remove { width: 16px; height: 16px; top: 2px; right: 2px; font-size: 11px; }
       .icon-btn:hover { background: oklch(95% 0.01 260); color: var(--fg); }
       .send {
         position: absolute;
@@ -2862,7 +2876,7 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-C_S2EkEm.js"></script>
+    <script type="module" crossorigin src="/assets/index-DMRXA2V6.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-DjaSE9ws.css">
   </head>
   <body>
@@ -2907,18 +2921,22 @@
           <span id="suggest-status" class="sr-only" aria-live="polite"></span>
           <button class="tab-hint" type="button" id="tab-hint" tabindex="-1" hidden=""><kbd aria-hidden="true">Tab</kbd><span class="tab-hint-label">to accept</span></button>
           <div class="tools">
-            <button class="icon-btn" type="button" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
-              </svg>
-            </button>
+            <div id="prompt-image-upload" class="prompt-image-upload">
+              <button class="icon-btn" type="button" id="btn-add-images" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
+                </svg>
+                <span id="prompt-image-btn-label" class="sr-only">Add images</span>
+              </button>
+              <div id="prompt-image-thumbnails" class="prompt-image-thumbnails"></div>
+              <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
+            </div>
             <button class="icon-btn" type="button" aria-label="Generation settings" onclick="openApiKeysModal()">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>
               </svg>
             </button>
           </div>
-          <input type="file" id="prompt-image-input" accept="image/png,image/jpeg,image/webp,image/gif" multiple class="hidden" onchange="handlePromptImageSelect(event)" />
           <button class="send" id="hero-send" type="button" aria-label="Generate">
             <svg class="send-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7"></path>
