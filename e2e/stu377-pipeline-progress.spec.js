@@ -44,6 +44,19 @@ function stepOf(route) {
 }
 
 /**
+ * STU-385 moved model selection into the composer settings dialog the gear
+ * opens. Pick a model there, then close the dialog so the background is no
+ * longer inert before the generation is triggered.
+ */
+async function selectModelThroughSettings(page, value) {
+  await page.click('.tools [aria-label="Generation settings"]');
+  await page
+    .locator("#composer-settings-modal #code-generator-model")
+    .selectOption(value);
+  await page.click("#composer-settings-modal [data-modal-initial-focus]");
+}
+
+/**
  * Route the pipeline endpoint per stage. `hold` names the stages whose
  * response the test releases by hand; everything else answers immediately.
  */
@@ -269,7 +282,7 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await selectModelThroughSettings(page, "anthropic/claude-opus-5");
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);
@@ -320,7 +333,7 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await selectModelThroughSettings(page, "anthropic/claude-opus-5");
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);

@@ -1129,6 +1129,73 @@ function walkthroughConnectAccount() {
   openApiKeysModalBody();
 }
 
+// --- Composer generation settings (STU-385) ---
+//
+// The composer's gear opens this dialog, which presents the existing model
+// selector and supported generation options. #code-generator-model still lives
+// here and remains the single element the generation pipeline reads, so
+// selections made in this dialog reach the actual request unchanged — no
+// key-storage or transport change. Provider-key management is a shortcut into
+// the canonical account connection editor (openApiKeysModal, STU-384), never a
+// second independent editor.
+//
+// Closing this dialog from normal use must never reopen the walkthrough: the
+// featured bug the milestone tracks is an ordinary settings close resuming
+// onboarding. openComposerSettings runs with the standalone flag set (NOT the
+// walkthrough-originating flag), so closeComposerSettings leaves the walkthrough
+// untouched; only the walkthrough's own connect step flips that flag.
+
+let composerSettingsChangeWired = false;
+
+/**
+ * Reflect the selected model's supported generation options into the dialog and
+ * keep the composer's image-attach affordance in step (vision model → attach
+ * allowed; non-vision model → attach hidden and any attached images dropped).
+ */
+function renderComposerSettingsOptions() {
+  const select = document.getElementById("code-generator-model");
+  const capability = document.getElementById("composer-image-capability");
+  const note = document.getElementById("composer-image-capability-note");
+  if (!select) return;
+  const label = getModelLabel(select.value);
+  const supports = modelSupportsImages(select.value);
+  if (capability) {
+    capability.textContent = supports ? "Supported" : "Not supported";
+  }
+  if (note) {
+    note.textContent = supports
+      ? `${label} accepts reference images you attach to the prompt.`
+      : `Images can't be attached with ${label}. Attached images are removed when you switch to it.`;
+  }
+  updatePromptImageAvailability();
+}
+
+function openComposerSettings() {
+  // A standalone settings visit, not onboarding: closing it must not touch the
+  // walkthrough (same contract as openApiKeysModal).
+  walkthroughSettingsActive = false;
+  renderComposerSettingsOptions();
+  if (!composerSettingsChangeWired) {
+    const select = document.getElementById("code-generator-model");
+    if (select) {
+      select.addEventListener("change", () => {
+        renderComposerSettingsOptions();
+        updateModelInfo(select.value);
+      });
+    }
+    composerSettingsChangeWired = true;
+  }
+  const trigger = document.querySelector(
+    '.composer [aria-label="Generation settings"]',
+  );
+  openModal("composer-settings-modal", { trigger });
+}
+
+function closeComposerSettings(event) {
+  if (event && event.target !== event.currentTarget) return;
+  closeModal("composer-settings-modal");
+}
+
 function closeApiKeysModal(event) {
   if (event && event.target !== event.currentTarget) return;
   const modal = document.getElementById("api-keys-modal");
@@ -7055,6 +7122,8 @@ window.copyCode = copyCode;
 window.retryWithDifferentModel = retryWithDifferentModel;
 window.openApiKeysModal = openApiKeysModal;
 window.closeApiKeysModal = closeApiKeysModal;
+window.openComposerSettings = openComposerSettings;
+window.closeComposerSettings = closeComposerSettings;
 window.walkthroughConnectAccount = walkthroughConnectAccount;
 window.closeWalkthroughModal = closeWalkthroughModal;
 window.openWalkthroughModal = openWalkthroughModal;
