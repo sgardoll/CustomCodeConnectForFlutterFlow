@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   mergeDependenciesIntoYaml,
+  parseDependencyBlock,
+  parseExistingDependencies,
   parseExistingDependencyNames,
   validateProjectPubspec,
 } from "./pubspecSync.js";
@@ -172,4 +174,93 @@ test("accepts a real project pubspec and rejects a synthesized stub", () => {
   assert.deepEqual(stub.errors, ["pubspec.yaml missing Flutter SDK dependency"]);
 
   assert.equal(validateProjectPubspec("").valid, false);
+});
+
+test("reads where a block-form dependency comes from", () => {
+  const declared = parseExistingDependencies(PROJECT_PUBSPEC);
+
+  // The first own-key is what says whether a package can be reproduced outside
+  // the project, so it is read rather than inferred from the package's name.
+  assert.equal(declared.get("flutter").sourceKey, "sdk");
+  assert.equal(declared.get("flutter").sourceValue, "flutter");
+  assert.equal(declared.get("cloud_firestore").sourceKey, null);
+  assert.equal(declared.get("cloud_firestore").isScalar, true);
+});
+
+test("does not read a following sibling dependency's key as the previous entry's source", () => {
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  alpha:
+  beta: ^2.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // `alpha` is block form with no mapping under it. Scanning past the entry
+  // would reach `beta` and attribute its constraint to `alpha`.
+  assert.equal(declared.get("alpha").isScalar, false);
+  assert.equal(declared.get("alpha").sourceKey, null);
+  assert.equal(declared.get("beta").constraint, "^2.0.0");
+});
+
+test("a nested version block is read as a constraint, not as a source", () => {
+  const pubspec = `dependencies:
+  intl:
+    version: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("intl").sourceKey, "version");
+  assert.equal(declared.get("intl").sourceValue, "^0.20.3");
+});
+
+test("a hosted source is read even when version: is written before it", () => {
+  // YAML mapping order is not significant, so this is the same dependency as
+  // hosted-then-version. Reading only the first own-key would classify it as a
+  // plain constraint and the verification manifest would resolve it from
+  // pub.dev instead of the project's own host.
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  plain_thing:
+    version: ^2.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("plain_thing").sourceKey, "version");
+  assert.equal(declared.get("plain_thing").sourceValue, "^2.0.0");
+});
+
+test("a git source keeps only its first key, whatever the nested shape", () => {
+  const pubspec = `dependencies:
+  private_thing:
+    git:
+      url: https://example.invalid/private.git
+      ref: main
+  hosted_thing:
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+    version: ^1.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("private_thing").sourceKey, "git");
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+});
+
+test("reads a source from dependency_overrides too", () => {
+  const overrides = parseDependencyBlock(
+    `dependency_overrides:
+  flutter_web_plugins:
+    sdk: flutter
+`,
+    "dependency_overrides",
+  );
+
+  assert.equal(overrides.get("flutter_web_plugins").sourceKey, "sdk");
 });

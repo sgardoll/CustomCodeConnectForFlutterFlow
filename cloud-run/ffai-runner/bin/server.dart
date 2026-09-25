@@ -5,6 +5,8 @@ import 'dart:io';
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
 const maxDependenciesPerRequest = 200;
+// pub.dev's own ceiling on a package name.
+const maxPackageNameLength = 64;
 
 const analysisPackageName = 'ccc_custom_code_analysis';
 const defaultSdkConstraint = '>=3.0.0 <4.0.0';
@@ -19,15 +21,13 @@ final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
 // unrepresentable rather than merely discouraged.
 final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
 
-// The packages the Flutter SDK supplies, i.e. the only valid `sdk: flutter`
-// entries besides `flutter` itself.
-const allowedSdkPackages = <String>{
-  'flutter',
-  'flutter_test',
-  'flutter_driver',
-  'flutter_localizations',
-  'integration_test',
-};
+// Which packages the Flutter SDK supplies is not decided here. A caller names
+// the packages its project declares as `sdk: flutter`, and this runner emits
+// them as `name: {sdk: flutter}` - a value it writes itself, never one a caller
+// sent. There was an allowlist of SDK package names here, and it refused good
+// deploys: the client classified a package correctly by its pubspec source, and
+// the runner rejected it for not appearing on a list that had gone stale.
+// `_packageNamePattern` is what actually keeps a key from carrying YAML.
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -524,7 +524,7 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
   final result = <String, String>{};
   for (final entry in value.entries) {
     final name = '${entry.key}';
-    if (!_packageNamePattern.hasMatch(name)) {
+    if (!_isValidPackageName(name)) {
       throw FormatException('Invalid package name in verification.$field: $name.');
     }
     final constraint = '${entry.value}'.trim();
@@ -538,24 +538,38 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
   return result;
 }
 
-/// Reads the SDK-supplied package names. Restricted to the packages the Flutter
-/// SDK actually provides, so a caller cannot request an arbitrary `sdk:` value.
+/// Reads the SDK-supplied package names a caller's project declares.
+///
+/// Validated as package names rather than against a list of the packages the
+/// Flutter SDK happens to ship: a name the SDK does not provide fails
+/// `pub get` with an honest error, whereas a list refuses correct deploys the
+/// moment it falls behind the SDK. The pattern is the load-bearing check - each
+/// name becomes a key in the generated pubspec.
 List<String> _normalizeSdkPackages(Object? value) {
   if (value == null) return const <String>[];
   if (value is! List) {
     throw const FormatException('verification.sdkPackages must be an array.');
   }
+  // Bounded like the dependency maps: each entry expands into the generated
+  // pubspec, so an unbounded array is caller-controlled work before pub get
+  // ever sees it.
+  if (value.length > maxDependenciesPerRequest) {
+    throw const FormatException('Too many entries in verification.sdkPackages.');
+  }
 
-  final result = <String>[];
+  final result = <String>{};
   for (final raw in value) {
     final name = '$raw';
-    if (!allowedSdkPackages.contains(name)) {
-      throw FormatException('Unsupported SDK package: $name.');
+    if (!_isValidPackageName(name)) {
+      throw FormatException('Invalid SDK package name: $name.');
     }
-    if (!result.contains(name)) result.add(name);
+    result.add(name);
   }
-  return result;
+  return result.toList();
 }
+
+bool _isValidPackageName(String name) =>
+    name.length <= maxPackageNameLength && _packageNamePattern.hasMatch(name);
 
 String _validateConstraint(
   String field,

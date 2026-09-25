@@ -79,34 +79,54 @@ in `.dart` untouched so a re-deploy is a no-op and an editor rename survives.
 
 Before writing anything to the project the runner compiles the generated
 classes in a throwaway Flutter package built from the project's own dependency
-versions and refuses the deploy (HTTP 422) if the analyzer reports an error.
+versions, and refuses the deploy (HTTP 422) if the analyzer reports an error.
 The FlutterFlow DSL only checks that code is formattable, which accepts a call
 to a named argument the package never declared. This needs the Flutter SDK in
 the image, so the runner takes longer to build and to cold-start, and the
 deploy script raises Cloud Run's request timeout to 900s.
 
-A class that imports FlutterFlow scaffolding (`/backend/schema/structs/index.dart`)
-is compiled too: the deploy gathers the transitive closure of each class's
-project-relative imports from the export and ships it alongside, bounded by
-file and byte caps. The class is written to `lib/custom_code/<stem>.dart` -
-where FlutterFlow files it, so a relative import resolves from the right
-directory - and the project's generated Dart under `lib/`, which is what the
-leading slash resolves against. Analysis is scoped to the deployed class files
-with `--no-fatal-warnings`, so an error inside the project's own scaffolding,
-or a warning-only class, cannot refuse code that compiles.
+A class is compiled when every package it imports resolves the same way the
+project resolves it. Two cases are left out of the compile set, and each is
+reported rather than silently dropped:
+
+* It imports something FlutterFlow only generates once the app is built -
+  `/backend/schema/structs/index.dart`, `../flutter_flow/lat_lng.dart`. Those
+  files do not exist until after the deploy.
+* It imports a package the project declares from a source this manifest cannot
+  express: a `git:` or `path:` source, or a nested `hosted:` block. The scratch
+  package would resolve different code, and a check against the wrong version
+  reports a result that does not describe what ships.
+
+The second case is decided **per class**, from that class's own imports. A
+`git:` dependency stops only the classes that import it; classes that do not are
+still compiled. Deciding it once for the whole project meant one such entry left
+an entire deploy uncompiled.
+
+**Which packages the Flutter SDK supplies is read from the project's own
+pubspec** - a dependency written in block form under `sdk:` is an SDK package by
+definition. Nothing keeps a list of SDK package names, because a list goes stale
+the moment the SDK ships one it has not heard of, and a stale list reads a
+perfectly valid package as unreproducible. That is not hypothetical: a list
+missing `flutter_web_plugins` refused whole deploys for projects that declared
+it.
 
 The manifest is sent as package names and version constraints, never as
 pubspec.yaml text, and the runner builds the document itself - it runs
 `pub get` against it on a publicly reachable route, so a caller must not be
 able to name a git or path source. `dependency_overrides` are carried over,
 because a scratch package resolving different versions than the project would
-approve code the project rejects.
+approve code the project rejects. The runner validates each name against a
+package-name pattern rather than against a list of SDK packages, and writes
+`sdk: flutter` itself, so that value never comes from a caller.
 
 A client still sending the older `pubspec` format is recognized, never
 executed, and its deploy proceeds with the check reported as unavailable.
 
-**Nothing unverified is deployed.** The web app refuses the deploy on any class
-it cannot compile, naming each one and why, before the runner is called.
+**What could not be verified still deploys, and is reported.** A class with a
+real analyzer error refuses the deploy - HTTP 422, naming the error. A class the
+deploy could not compile, for either reason above, does not: it is pushed, and
+the warning naming it is logged *before* the provisioning request, so it
+describes the mutation before it happens rather than after.
 
 The runner streams its progress. When the request body sets `"stream": true`
 the response is NDJSON — one `{"event":"phase"|"log"|"result"}` object per
