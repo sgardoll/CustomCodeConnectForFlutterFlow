@@ -214,6 +214,27 @@ test("a nested version block is read as a constraint, not as a source", () => {
   assert.equal(declared.get("intl").sourceValue, "^0.20.3");
 });
 
+test("a hosted source is read even when version: is written before it", () => {
+  // YAML mapping order is not significant, so this is the same dependency as
+  // hosted-then-version. Reading only the first own-key would classify it as a
+  // plain constraint and the verification manifest would resolve it from
+  // pub.dev instead of the project's own host.
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  plain_thing:
+    version: ^2.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("plain_thing").sourceKey, "version");
+  assert.equal(declared.get("plain_thing").sourceValue, "^2.0.0");
+});
+
 test("a git source keeps only its first key, whatever the nested shape", () => {
   const pubspec = `dependencies:
   private_thing:

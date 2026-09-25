@@ -104,7 +104,7 @@ function splitValueAndComment(rest) {
 }
 
 /**
- * Reads the first key of a block-form dependency's own mapping.
+ * Reads the source key of a block-form dependency's own mapping.
  *
  * A block-form entry says where a package comes from on a following, more
  * deeply indented line: `sdk:`, `git:`, `path:`, a nested `hosted:`, or a
@@ -115,29 +115,45 @@ function splitValueAndComment(rest) {
  * ships a package the list has not heard of, and every project declaring that
  * package then reads it as unreproducible.
  *
+ * YAML mapping order is not significant, so `version:` may precede `hosted:`.
+ * Every own-key is read and a source key (anything other than `version:`)
+ * wins over a bare `version:`; a constraint only stands on its own when no
+ * source accompanies it.
+ *
  * @param {string[]} lines - pubspec.yaml split into lines
  * @param {number} entryIndex - Index of the dependency entry's own line
  * @param {number} endIndex - Exclusive end of the enclosing block
  * @param {number} parentIndent - Indent of the dependency entry itself
- * @returns {{key: string, value: string}|null} First own-key, or null if the
- *   entry has no mapping below it
+ * @returns {{key: string, value: string}|null} Source own-key, else the
+ *   `version:` own-key, or null if the entry has no mapping below it
  */
 function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
+  let ownIndent = null;
+  let version = null;
   for (let i = entryIndex + 1; i < endIndex; i += 1) {
     const line = lines[i];
     if (isBlankOrComment(line)) continue;
+    const indent = indentOf(line);
     // Shallower or equal indent means the entry's mapping has ended and this is
     // a sibling dependency, so there is nothing of this entry's own to read.
-    if (indentOf(line) <= parentIndent) return null;
+    if (indent <= parentIndent) break;
+    // The first mapping line fixes the own-key indent; anything deeper belongs
+    // to one of the own-keys (`git:` -> `url:`) and is not a source itself.
+    if (ownIndent === null) ownIndent = indent;
+    if (indent !== ownIndent) continue;
     const trimmed = line.trim();
     const key = parseDependencyName(trimmed);
     if (!key) continue;
     const { value } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
+    if (key === "version") {
+      version = { key, value };
+      continue;
+    }
     return { key, value };
   }
-  return null;
+  return version;
 }
 
 /**

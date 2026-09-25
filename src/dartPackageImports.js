@@ -100,7 +100,9 @@ export function extractImportUris(code = "") {
 export function extractPackageImports(code = "") {
   const names = [];
   const seen = new Set();
-  const importRegex = /\bimport\s+['"]package:([a-zA-Z0-9_]+)\//g;
+  // `export 'package:x/x.dart'` pulls the package in exactly as `import` does,
+  // so both directives name a dependency the code needs.
+  const importRegex = /\b(?:import|export)\s+['"]package:([a-zA-Z0-9_]+)\//g;
   const stripped = stripComments(code);
   let match;
 

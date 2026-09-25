@@ -164,6 +164,26 @@ class UsesPrivateThing {}
   assert.match(plan.skipped[0].reason, /it imports private_thing/);
 });
 
+test("a class that exports the unreproducible dependency is skipped, not refused", () => {
+  // `export` pulls the package in exactly as `import` does. If exports were
+  // not read, the class would be compiled against a manifest missing the
+  // package and the analyzer would refuse the deploy over a URI it could not
+  // resolve, instead of the class being reported as unverified.
+  const exportsPrivateThing = `export 'package:private_thing/private_thing.dart';
+
+class ReExportsPrivateThing {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "ReExportsPrivateThing", content: exportsPrivateThing }],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /it imports private_thing/);
+});
+
 test("an SDK package no list has heard of is reproduced from its pubspec source", () => {
   // The regression: flutter_web_plugins is a genuine Flutter SDK package that
   // the hand-kept list omitted, so every project declaring it - which is every

@@ -5,6 +5,8 @@ import 'dart:io';
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
 const maxDependenciesPerRequest = 200;
+// pub.dev's own ceiling on a package name.
+const maxPackageNameLength = 64;
 
 const analysisPackageName = 'ccc_custom_code_analysis';
 const defaultSdkConstraint = '>=3.0.0 <4.0.0';
@@ -522,7 +524,7 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
   final result = <String, String>{};
   for (final entry in value.entries) {
     final name = '${entry.key}';
-    if (!_packageNamePattern.hasMatch(name)) {
+    if (!_isValidPackageName(name)) {
       throw FormatException('Invalid package name in verification.$field: $name.');
     }
     final constraint = '${entry.value}'.trim();
@@ -548,17 +550,26 @@ List<String> _normalizeSdkPackages(Object? value) {
   if (value is! List) {
     throw const FormatException('verification.sdkPackages must be an array.');
   }
+  // Bounded like the dependency maps: each entry expands into the generated
+  // pubspec, so an unbounded array is caller-controlled work before pub get
+  // ever sees it.
+  if (value.length > maxDependenciesPerRequest) {
+    throw const FormatException('Too many entries in verification.sdkPackages.');
+  }
 
-  final result = <String>[];
+  final result = <String>{};
   for (final raw in value) {
     final name = '$raw';
-    if (!_packageNamePattern.hasMatch(name)) {
+    if (!_isValidPackageName(name)) {
       throw FormatException('Invalid SDK package name: $name.');
     }
-    if (!result.contains(name)) result.add(name);
+    result.add(name);
   }
-  return result;
+  return result.toList();
 }
+
+bool _isValidPackageName(String name) =>
+    name.length <= maxPackageNameLength && _packageNamePattern.hasMatch(name);
 
 String _validateConstraint(
   String field,
