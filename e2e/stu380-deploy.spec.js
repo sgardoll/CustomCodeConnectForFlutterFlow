@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import JSZip from "jszip";
 import { applyDefaultRoutes, ENDPOINTS } from "./fixtures/apiFixtures.js";
 
 /**
@@ -533,5 +534,48 @@ test.describe("STU-380 transport outcome regressions", () => {
 
     expect(outcome.settled).toBe("resolved");
     expect(outcome.calls).toBe(1);
+  });
+
+  test("an unconfirmed provisioning drops the cached project snapshot", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const projectZip = await zip.generateAsync({ type: "base64" });
+
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip: projectZip } }),
+      });
+    });
+    // The runner accepts the connection but never answers — the outcome is
+    // unconfirmed while it may still write the class server-side.
+    await page.route(ENDPOINTS.deployCustomClasses, () => new Promise(() => {}));
+
+    // Seed the project-source cache exactly like a deploy's pubspec merge does.
+    const seeded = await page.evaluate(() =>
+      window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}),
+    );
+    expect(seeded.remoteFilePaths).toEqual([]);
+    expect(exportCalls).toBe(1);
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap, uiTimeoutMs: 60 }],
+    );
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+
+    // The next deploy must re-export the project — a stale snapshot would lack
+    // gauge_model.dart and provision it a second time.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
   });
 });

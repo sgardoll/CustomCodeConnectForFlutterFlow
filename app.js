@@ -2676,70 +2676,82 @@ async function provisionMissingCodeFiles(
   // otherwise hang the deploy past the UI bound. A fetch that rejects before
   // any response is still an unknown outcome — the POST may have reached the
   // server — so it maps to unconfirmed, not failed.
-  const result = await withUiTimeout(
-    (async () => {
-      let response;
-      try {
-        response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            apiKey: apiClient.apiKey,
-            projectId: apiClient.projectId,
-            baseUrl: apiClient.baseUrl,
-            commitMessage,
-            customClasses: missingCodeFiles,
-            verification,
-            stream: true,
-          }),
+  let result;
+  try {
+    result = await withUiTimeout(
+      (async () => {
+        let response;
+        try {
+          response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              apiKey: apiClient.apiKey,
+              projectId: apiClient.projectId,
+              baseUrl: apiClient.baseUrl,
+              commitMessage,
+              customClasses: missingCodeFiles,
+              verification,
+              stream: true,
+            }),
+          });
+        } catch (fetchError) {
+          throw new UnconfirmedDeployError(
+            "The provisioning request did not return a response. The deploy may have reached the " +
+              "FlutterFlow server — open your FlutterFlow project to reconcile before retrying.",
+          );
+        }
+        return readProvisionResponse(response, {
+          onPhase: (message) => {
+            if (progressLive) commitProgress.setSubstatus(message);
+          },
+          onLog: (message) => {
+            if (progressLive) console.log(`[custom class deploy] ${message}`);
+          },
         });
-      } catch (fetchError) {
-        throw new UnconfirmedDeployError(
-          "The provisioning request did not return a response. The deploy may have reached the " +
-            "FlutterFlow server — open your FlutterFlow project to reconcile before retrying.",
+      })(),
+      uiTimeoutMs,
+      (resolve, reject) => {
+        progressLive = false;
+        reject(
+          new UnconfirmedDeployError(
+            "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
+              "Your custom classes may or may not have been written — the outcome is not yet known. " +
+              "Open your FlutterFlow project to reconcile before retrying the deploy.",
+          ),
+        );
+      },
+    );
+
+    // A stream that ended (or a body that carried) no definitive result leaves
+    // the remote decision ambiguous. There are two distinct cases which must not
+    // be flattened: a server that explicitly refused the request (a 403/5xx
+    // `response.ok === false`) has made a definitive decision — the write did not
+    // happen — so that is a FAILURE, not an unknown outcome; only an ok response
+    // whose stream dropped before a result (or a client wait expiry) leaves the
+    // remote state genuinely unknown and must be reported UNCONFIRMED.
+    if (!result.finalResultReceived) {
+      if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
+        throw new Error(
+          result.error ||
+            `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
         );
       }
-      return readProvisionResponse(response, {
-        onPhase: (message) => {
-          if (progressLive) commitProgress.setSubstatus(message);
-        },
-        onLog: (message) => {
-          if (progressLive) console.log(`[custom class deploy] ${message}`);
-        },
-      });
-    })(),
-    uiTimeoutMs,
-    (resolve, reject) => {
-      progressLive = false;
-      reject(
-        new UnconfirmedDeployError(
-          "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
-            "Your custom classes may or may not have been written — the outcome is not yet known. " +
-            "Open your FlutterFlow project to reconcile before retrying the deploy.",
-        ),
-      );
-    },
-  );
-
-  // A stream that ended (or a body that carried) no definitive result leaves
-  // the remote decision ambiguous. There are two distinct cases which must not
-  // be flattened: a server that explicitly refused the request (a 403/5xx
-  // `response.ok === false`) has made a definitive decision — the write did not
-  // happen — so that is a FAILURE, not an unknown outcome; only an ok response
-  // whose stream dropped before a result (or a client wait expiry) leaves the
-  // remote state genuinely unknown and must be reported UNCONFIRMED.
-  if (!result.finalResultReceived) {
-    if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
-      throw new Error(
-        result.error ||
-          `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
+      throw new UnconfirmedDeployError(
+        "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
+          "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+          "before retrying.",
       );
     }
-    throw new UnconfirmedDeployError(
-      "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
-        "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
-        "before retrying.",
-    );
+  } catch (error) {
+    // An unconfirmed provisioning may have written classes on the runner after
+    // the client stopped waiting, so the cached pre-write project snapshot is
+    // stale — a later deploy must re-read the project instead of provisioning
+    // the same classes a second time.
+    if (error instanceof UnconfirmedDeployError) {
+      invalidateProjectSourceCache(apiClient);
+    }
+    throw error;
   }
 
   if (!result.success) {
@@ -8489,6 +8501,24 @@ if (import.meta.env.DEV) {
   // received status instead of leaking the raw read error.
   window.__CCC_PARSE_PUSH_RESPONSE__ = (response) =>
     parsePushCodeResponse(response);
+  // Lets the browser suite seed/observe the project-source cache: a deploy
+  // that lost its provisioning result must leave the cache empty so the next
+  // one re-reads the project instead of re-provisioning written classes.
+  window.__CCC_RESOLVE_PROJECT_PUBSPEC__ = async (deps) => {
+    const result = await resolveProjectPubspec(
+      new FlutterFlowApiClient(
+        "test-key",
+        "ff-proj-0007",
+        "main",
+        FF_API_ENDPOINTS.production,
+      ),
+      deps || {},
+    );
+    return {
+      remoteFilePaths: [...result.remoteFiles.keys()],
+      added: result.added,
+    };
+  };
 }
 
 function copyResultsCode() {
