@@ -74,6 +74,7 @@ test.describe("STU-380 deployment terminal outcomes", () => {
   test("a 403 rejection is a failure that never claims committed", async ({ page }) => {
     await render(page, {
       success: false,
+      remoteRefusal: true,
       targetIdentity: identity,
       error: "HTTP 403 Forbidden — your FlutterFlow API key lacks write access.",
     });
@@ -90,6 +91,7 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     const terminal = page.locator("#commit-terminal-modal");
     await expect(terminal).toBeVisible();
     await expect(terminal).toContainText("Deploy failed");
+    await expect(terminal).toContainText("FlutterFlow refused this deploy");
     await expect(terminal).toContainText("403");
     await expect(terminal).toContainText(identity.projectId);
     await expect(terminal).not.toContainText("Committed");
@@ -98,6 +100,7 @@ test.describe("STU-380 deployment terminal outcomes", () => {
   test("a per-file rejection surfaces each file's error, not a blanket success", async ({ page }) => {
   await render(page, {
     success: false,
+    remoteRefusal: true,
     targetIdentity: identity,
     error: "FlutterFlow rejected 1 of 1 files.",
     errorMap: {
@@ -130,10 +133,13 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     await expect(output).toContainText("does not compile");
     await expect(output).not.toContainText("committed");
 
-    // The analyzer refusal reaches the visible terminal too.
+    // The analyzer refusal reaches the visible terminal too — a local gate,
+    // so it must not claim FlutterFlow refused a request it never received.
     const terminal = page.locator("#commit-terminal-modal");
     await expect(terminal).toBeVisible();
     await expect(terminal).toContainText("Deploy failed");
+    await expect(terminal).toContainText("before FlutterFlow confirmed anything");
+    await expect(terminal).not.toContainText("refused this deploy");
     await expect(terminal).toContainText("does not compile");
   });
 
@@ -565,6 +571,47 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.settled).toBe("rejected");
     expect(outcome.name).toBe("UnconfirmedDeployError");
     expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a timed-out push issues no further writes once the UI gives up", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // The bound expires mid-attempt; when the stalled request finally answers
+    // 500, the loop must not send another POST — the outcome is already
+    // reported and the user may have started a new deploy.
+    const outcome = await page.evaluate(async () => {
+      let calls = 0;
+      window.fetch = (url) => {
+        if (!String(url).includes("syncCustomCodeChanges")) {
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }
+        calls += 1;
+        return new Promise((resolve) =>
+          setTimeout(() => resolve(new Response("err", { status: 500 })), 120),
+        );
+      };
+      try {
+        await window.__CCC_PUSH_CODE_WITH_TIMEOUT__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          75,
+        );
+        return { settled: "resolved", calls };
+      } catch (error) {
+        // Wait past the retry sleep so a further attempt would have fired.
+        await new Promise((r) => setTimeout(r, 1500));
+        return {
+          settled: "rejected",
+          calls,
+          name: error.name,
+          outcome: error.outcome,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    expect(outcome.calls).toBe(1);
   });
 
   test("a sync body that stalls mid-read is unconfirmed under the same bound", async ({ page }) => {

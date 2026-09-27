@@ -2162,7 +2162,7 @@ class FlutterFlowApiClient {
    * @param {string} pushCodeRequest.functions_map - JSON string of function definitions
    * @returns {Promise<Response>} Fetch response object
    */
-  async pushCodeWithRetry(pushCodeRequest, maxRetries = 3) {
+  async pushCodeWithRetry(pushCodeRequest, maxRetries = 3, stopToken = null) {
     const endpointUrls = [
       FF_API_ENDPOINTS.production,
       FF_API_ENDPOINTS.staging,
@@ -2178,6 +2178,14 @@ class FlutterFlowApiClient {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       for (let ei = startEndpoint; ei < endpointUrls.length; ei++) {
         const baseUrl = endpointUrls[ei];
+
+        // Once the UI bound expired, the outcome was already reported
+        // unconfirmed and the user may have started a new deploy — issuing
+        // another write would overlap it. An in-flight request is never
+        // aborted; this only stops attempts not yet sent.
+        if (stopToken?.stop) {
+          throw exhaustedPushError({ httpStatus: lastHttpStatus });
+        }
 
         // Only a fetch rejection is a lost response: once headers arrive, a
         // refusal status is a definitive answer for this endpoint — and a body
@@ -2271,8 +2279,8 @@ class FlutterFlowApiClient {
     throw exhaustedPushError({ httpStatus: lastHttpStatus });
   }
 
-  async pushCode(pushCodeRequest) {
-    return this.pushCodeWithRetry(pushCodeRequest);
+  async pushCode(pushCodeRequest, stopToken = null) {
+    return this.pushCodeWithRetry(pushCodeRequest, 3, stopToken);
   }
 
   /**
@@ -2663,20 +2671,27 @@ async function pushCodeWithUiTimeout(
   pushRequest,
   uiTimeoutMs = DEPLOY_UI_TIMEOUT_MS,
 ) {
+  // Tells the retry loop to stop issuing writes once the bound expires: an
+  // in-flight request is left to settle on its own (its late result is
+  // ignored), but no further attempts may start — they could overlap a deploy
+  // the user just retried.
+  const stopToken = { stop: false };
   return withUiTimeout(
     (async () => {
-      const response = await apiClient.pushCode(pushRequest);
+      const response = await apiClient.pushCode(pushRequest, stopToken);
       return parsePushCodeResponse(response);
     })(),
     uiTimeoutMs,
-    (resolve, reject) =>
+    (resolve, reject) => {
+      stopToken.stop = true;
       reject(
         new UnconfirmedDeployError(
           "FlutterFlow did not answer the sync in time — the push may still " +
             "have been applied. The outcome is not yet known: open your " +
             "FlutterFlow project to reconcile before retrying the deploy.",
         ),
-      ),
+      );
+    },
   );
 }
 
@@ -2790,10 +2805,12 @@ async function provisionMissingCodeFiles(
     // remote state genuinely unknown and must be reported UNCONFIRMED.
     if (!result.finalResultReceived) {
       if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
-        throw new Error(
+        const refusal = new Error(
           result.error ||
             `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
         );
+        refusal.remoteRefusal = true;
+        throw refusal;
       }
       throw new UnconfirmedDeployError(
         "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
@@ -2814,9 +2831,13 @@ async function provisionMissingCodeFiles(
 
   if (!result.success) {
     const details = result.details ? ` ${result.details}` : "";
-    throw new Error(
+    // The runner streamed a definitive failure result — a remote decision,
+    // not a local one.
+    const refusal = new Error(
       `${result.error || "FlutterFlow custom class provisioning failed."}${details}`,
     );
+    refusal.remoteRefusal = true;
+    throw refusal;
   }
 
   invalidateProjectSourceCache(apiClient);
@@ -3518,7 +3539,9 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     } else {
       const errorMsg =
         result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
-      throw new Error(errorMsg);
+      const refusal = new Error(errorMsg);
+      refusal.remoteRefusal = true;
+      throw refusal;
     }
 
     return {
@@ -3547,6 +3570,7 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     return {
       success: false,
       error: error.message,
+      remoteRefusal: error.remoteRefusal === true,
       state: commitState.currentState,
     };
   }
@@ -3737,6 +3761,7 @@ async function executeCommit(code, options = {}) {
         result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
       const errorWithMap = new Error(errorMsg);
       errorWithMap.errorMap = result.errorMap;
+      errorWithMap.remoteRefusal = true;
       throw errorWithMap;
     }
   } catch (error) {
@@ -3792,6 +3817,7 @@ async function executeCommit(code, options = {}) {
       success: false,
       error: error.message,
       errorMap: errorMap,
+      remoteRefusal: error.remoteRefusal === true,
       targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
@@ -3947,6 +3973,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     const errorMsg = result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
     const errorWithMap = new Error(errorMsg);
     errorWithMap.errorMap = result.errorMap;
+    errorWithMap.remoteRefusal = true;
     throw errorWithMap;
   } catch (error) {
     console.error("Bundle commit execution failed:", error);
@@ -6817,13 +6844,20 @@ function showCommitSuccessModal(result) {
 function showCommitFailureModal(result) {
   hideCommitProgress();
   showCommitError(result);
+  // Only a remote refusal is FlutterFlow's answer — a local failure (missing
+  // credentials, validation) never reached the server, so it must not be
+  // labelled a refusal. Either way a FAILED outcome is provably pre-write:
+  // nothing was applied and retrying after a fix is safe.
+  const remote = result.remoteRefusal === true;
   populateCommitTerminalModal(result, {
     heading: "Deploy failed",
-    title:
-      "FlutterFlow refused this deploy — nothing was confirmed written.",
-    guidance:
-      "Review the error and any per-file outcomes above, fix them in your code or in FlutterFlow, then deploy again. " +
-      "A refusal is definitive: no part of this deploy was applied, so retrying is safe once the problem is fixed.",
+    title: remote
+      ? "FlutterFlow refused this deploy — nothing was confirmed written."
+      : "The deploy failed before FlutterFlow confirmed anything.",
+    guidance: remote
+      ? "Review the error and any per-file outcomes above, fix them in your code or in FlutterFlow, then deploy again. " +
+        "A refusal is definitive: no part of this deploy was applied, so retrying is safe once the problem is fixed."
+      : "Review the error above, fix it, then deploy again. The deploy stopped before a write was confirmed, so nothing was applied.",
   });
 }
 
