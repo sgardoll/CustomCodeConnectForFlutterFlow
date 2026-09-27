@@ -994,7 +994,7 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(exportCalls).toBe(2);
   });
 
-  test("a late-settling provision invalidates a snapshot cached mid-write", async ({ page }) => {
+  test("a dropped provisioning stream keeps exports uncached until the file is seen", async ({ page }) => {
     await loadDeployHooks(page);
 
     const zip = new JSZip();
@@ -1003,19 +1003,26 @@ test.describe("STU-380 transport outcome regressions", () => {
       "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
     );
     const projectZip = await zip.generateAsync({ type: "base64" });
+    zip.file(
+      "lib/custom_code/gauge_model.dart",
+      "class GaugeModel { final int value; GaugeModel(this.value); }",
+    );
+    const projectZipWithClass = await zip.generateAsync({ type: "base64" });
 
+    // The export only shows gauge_model.dart once the runner's write "lands" —
+    // before that, every export is a mid-write snapshot that must not cache.
+    let gaugeLanded = false;
     let exportCalls = 0;
     await page.route("**/exportCode", async (route) => {
       exportCalls += 1;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ value: { project_zip: projectZip } }),
+        body: JSON.stringify({
+          value: { project_zip: gaugeLanded ? projectZipWithClass : projectZip },
+        }),
       });
     });
-    // The runner's stream opens but stays open past the UI bound — the
-    // underlying request keeps running (it may still write server-side).
-    // The test closes the stream afterwards to simulate late settlement.
     await page.evaluate(() => {
       const realFetch = window.fetch;
       window.fetch = (url, ...args) => {
@@ -1036,9 +1043,7 @@ test.describe("STU-380 transport outcome regressions", () => {
       };
     });
 
-    const seeded = await page.evaluate(() =>
-      window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}),
-    );
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(1);
 
     const outcome = await settleAsOutcome(
@@ -1048,20 +1053,24 @@ test.describe("STU-380 transport outcome regressions", () => {
     );
     expect(outcome.name).toBe("UnconfirmedDeployError");
 
-    // A deploy that starts while the runner is still working re-exports and
-    // caches a snapshot that can predate the write.
+    // A follow-up deploy exports fresh but must not cache: the file may land
+    // later and leave this snapshot stale forever.
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(2);
 
-    // When the provision request finally settles (runner finished, stream
-    // closed), that mid-write snapshot is dropped — the next deploy re-reads
-    // the project instead of provisioning the same class twice.
+    // Even the request settling proves nothing about the remote write — a
+    // dropped stream can precede it — so exports stay uncached.
     await page.evaluate(() => window.__CCC_PROVISION_STREAM__.close());
-    await expect
-      .poll(async () => {
-        await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-        return exportCalls;
-      })
-      .toBe(3);
+    await page.waitForTimeout(50);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(3);
+
+    // The first export that actually shows the file proves the write landed;
+    // the path clears and caching resumes.
+    gaugeLanded = true;
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
   });
 });

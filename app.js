@@ -2669,12 +2669,36 @@ function getFileNameFromPath(filePath) {
 // the session. Fetching them means one full project export.
 const projectSourceCache = new Map();
 
+// File paths whose provisioning outcome is unconfirmed, per cache key — the
+// request ended without a verified answer, so the runner may still be writing
+// them. While any dirty path is outstanding, fresh exports must not be
+// cached: a snapshot taken mid-write would keep telling later deploys the
+// file is missing and provision it again. A fresh export that contains a
+// dirty path proves the write landed, and is the only signal that clears it —
+// the request settling is not proof (a disconnected stream can precede the
+// write).
+const projectSourceDirtyPaths = new Map();
+
 function projectSourceCacheKey(apiClient) {
   return `${apiClient.baseUrl}|${apiClient.projectId}|${apiClient.branchName}`;
 }
 
 function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
+}
+
+function markProjectSourceDirty(apiClient, paths) {
+  const key = projectSourceCacheKey(apiClient);
+  const dirty = projectSourceDirtyPaths.get(key) ?? new Set();
+  for (const path of paths) dirty.add(path);
+  projectSourceDirtyPaths.set(key, dirty);
+}
+
+function clearProjectSourceDirty(apiClient, paths) {
+  const dirty = projectSourceDirtyPaths.get(projectSourceCacheKey(apiClient));
+  if (!dirty) return;
+  for (const path of paths) dirty.delete(path);
+  if (dirty.size === 0) projectSourceDirtyPaths.delete(projectSourceCacheKey(apiClient));
 }
 
 /**
@@ -2804,12 +2828,8 @@ async function provisionMissingCodeFiles(
   // any response is still an unknown outcome — the POST may have reached the
   // server — so it maps to unconfirmed, not failed.
   let result;
-  // Kept outside the try: when the UI bound expires the work keeps running on
-  // the runner, and its eventual settlement needs to invalidate the cache a
-  // second time (a snapshot exported mid-write is still stale).
-  let provisionWork;
   try {
-    provisionWork = (async () => {
+    const provisionWork = (async () => {
       let response;
       try {
         response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
@@ -2904,21 +2924,25 @@ async function provisionMissingCodeFiles(
     // the same classes a second time.
     if (error instanceof UnconfirmedDeployError) {
       invalidateProjectSourceCache(apiClient);
-      // The runner can still be writing after this browser stopped waiting.
-      // A deploy that starts in the meantime exports and caches a snapshot
-      // taken mid-write — stale the moment the runner's write lands. Drop the
-      // cache again when this request actually settles; snapshots cached
-      // after settlement postdate the write and are left alone. At worst a
-      // correct snapshot is dropped and the next deploy re-exports once.
-      provisionWork?.then(
-        () => invalidateProjectSourceCache(apiClient),
-        () => invalidateProjectSourceCache(apiClient),
+      // Every file this request may have written stays dirty until a fresh
+      // export shows it — the runner can keep working after the request is
+      // lost or the bound expires, and its settlement is not proof the write
+      // finished (or started). While dirty, exports are never cached.
+      markProjectSourceDirty(
+        apiClient,
+        missingCodeFiles.map((entry) => entry.path),
       );
     }
     throw error;
   }
 
   invalidateProjectSourceCache(apiClient);
+  // A confirmed result proves these files were written — they are no longer
+  // dirty even if they were provisioned uncertainly in an earlier deploy.
+  clearProjectSourceDirty(
+    apiClient,
+    missingCodeFiles.map((entry) => entry.path),
+  );
 
   if (result.verificationSkipped) {
     console.warn(`[custom class deploy] ${result.verificationSkipped}`);
@@ -2986,7 +3010,18 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
       );
     }
 
-    projectSourceCache.set(cacheKey, projectSource);
+    const dirtyPaths = projectSourceDirtyPaths.get(cacheKey);
+    if (dirtyPaths) {
+      // This fresh export is the authoritative read: every dirty path it
+      // shows is proven written and clears; the rest keep exports uncached.
+      for (const path of [...dirtyPaths]) {
+        if (projectSource.files.has(path)) dirtyPaths.delete(path);
+      }
+      if (dirtyPaths.size === 0) projectSourceDirtyPaths.delete(cacheKey);
+    }
+    if (!projectSourceDirtyPaths.has(cacheKey)) {
+      projectSourceCache.set(cacheKey, projectSource);
+    }
   }
 
   const plan = await planDependencyChanges(
