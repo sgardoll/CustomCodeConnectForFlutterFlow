@@ -1073,4 +1073,115 @@ test.describe("STU-380 transport outcome regressions", () => {
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(4);
   });
+
+  test("a retry's success cannot clear an earlier write that may still land", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const gaugeA = "class GaugeModel { final int value; GaugeModel(this.value); }";
+    const gaugeB = "class GaugeModel { final String value; GaugeModel(this.value); }";
+    const makeZip = async (content) => {
+      const zip = new JSZip();
+      zip.file(
+        "pubspec.yaml",
+        "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+      );
+      if (content) zip.file("lib/custom_code/gauge_model.dart", content);
+      return zip.generateAsync({ type: "base64" });
+    };
+    const zipEmpty = await makeZip(null);
+    const zipA = await makeZip(gaugeA);
+    const zipB = await makeZip(gaugeB);
+
+    // landed controls what the export shows: none → A's content → B's content.
+    let landed = "none";
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      const project_zip =
+        landed === "a" ? zipA : landed === "b" ? zipB : zipEmpty;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip } }),
+      });
+    });
+    // First provision hangs past the bound; the second answers success.
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      let provisionCalls = 0;
+      window.fetch = (url, ...args) => {
+        if (String(url).includes("deployCustomClasses")) {
+          provisionCalls += 1;
+          if (provisionCalls === 1) {
+            return Promise.resolve(
+              new Response(new ReadableStream({ start() {} }), {
+                status: 200,
+                headers: { "Content-Type": "application/x-ndjson" },
+              }),
+            );
+          }
+          return Promise.resolve(
+            new Response(
+              '{"event":"result","success":true}\n',
+              { status: 200, headers: { "Content-Type": "application/x-ndjson" } },
+            ),
+          );
+        }
+        return realFetch(url, ...args);
+      };
+    });
+
+    const fileMapA = {
+      "gauge_model.dart": {
+        artifactName: "GaugeModel",
+        content: gaugeA,
+        type: "C",
+        path: "lib/custom_code/gauge_model.dart",
+      },
+    };
+    const fileMapB = {
+      "gauge_model.dart": {
+        artifactName: "GaugeModel",
+        content: gaugeB,
+        type: "C",
+        path: "lib/custom_code/gauge_model.dart",
+      },
+    };
+
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(1);
+
+    // Provision A times out — its write may still land later.
+    const outcomeA = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: fileMapA, uiTimeoutMs: 60 }],
+    );
+    expect(outcomeA.name).toBe("UnconfirmedDeployError");
+
+    // Provision B (edited content, same path) succeeds — it proves only its
+    // own write; A's outstanding write stays dirty.
+    const outcomeB = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: fileMapB, remoteFiles: {} }],
+    );
+    expect(outcomeB.settled).toBe("resolved");
+
+    // An export showing B's content cannot clear A's write — it can still
+    // land afterwards and replace it, so nothing may be cached yet.
+    landed = "b";
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(3); // still uncached — A remains outstanding
+
+    // Only an export carrying A's exact content proves that write landed;
+    // then the dirty set empties and caching resumes.
+    landed = "a";
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
+  });
 });

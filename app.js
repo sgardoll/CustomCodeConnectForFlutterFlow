@@ -2669,15 +2669,18 @@ function getFileNameFromPath(filePath) {
 // the session. Fetching them means one full project export.
 const projectSourceCache = new Map();
 
-// File paths whose provisioning outcome is unconfirmed, per cache key — the
-// request ended without a verified answer, so the runner may still be writing
-// them. While any dirty path is outstanding, fresh exports must not be
-// cached: a snapshot taken mid-write would keep telling later deploys the
-// file is missing and provision it again. A fresh export that contains a
-// dirty path proves the write landed, and is the only signal that clears it —
-// the request settling is not proof (a disconnected stream can precede the
-// write).
-const projectSourceDirtyPaths = new Map();
+// File writes whose provisioning outcome is unconfirmed, per cache key —
+// each dirty path holds the contents its outstanding requests tried to write.
+// The request ending (bound expiry, dropped stream) is not proof the runner
+// stopped: a disconnect can precede the write. While any dirty write is
+// outstanding, fresh exports must not be cached — a snapshot taken mid-write
+// would keep telling later deploys the file is missing, or pin content a
+// still-running writer later replaces. An export clears a dirty write only
+// when it contains that path with exactly the carried content — the
+// authoritative observation of that write; a confirmed provision removes the
+// contents it verified. A later success for the same path cannot clear an
+// earlier write whose content differs — it may still land afterwards.
+const projectSourceDirtyWrites = new Map();
 
 function projectSourceCacheKey(apiClient) {
   return `${apiClient.baseUrl}|${apiClient.projectId}|${apiClient.branchName}`;
@@ -2687,18 +2690,28 @@ function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
 }
 
-function markProjectSourceDirty(apiClient, paths) {
+function markProjectSourceDirty(apiClient, entries) {
   const key = projectSourceCacheKey(apiClient);
-  const dirty = projectSourceDirtyPaths.get(key) ?? new Set();
-  for (const path of paths) dirty.add(path);
-  projectSourceDirtyPaths.set(key, dirty);
+  const dirty = projectSourceDirtyWrites.get(key) ?? new Map();
+  for (const { path, content } of entries) {
+    const writes = dirty.get(path) ?? new Set();
+    writes.add(content);
+    dirty.set(path, writes);
+  }
+  projectSourceDirtyWrites.set(key, dirty);
 }
 
-function clearProjectSourceDirty(apiClient, paths) {
-  const dirty = projectSourceDirtyPaths.get(projectSourceCacheKey(apiClient));
+function clearProjectSourceDirty(apiClient, entries) {
+  const key = projectSourceCacheKey(apiClient);
+  const dirty = projectSourceDirtyWrites.get(key);
   if (!dirty) return;
-  for (const path of paths) dirty.delete(path);
-  if (dirty.size === 0) projectSourceDirtyPaths.delete(projectSourceCacheKey(apiClient));
+  for (const { path, content } of entries) {
+    const writes = dirty.get(path);
+    if (!writes) continue;
+    writes.delete(content);
+    if (writes.size === 0) dirty.delete(path);
+  }
+  if (dirty.size === 0) projectSourceDirtyWrites.delete(key);
 }
 
 /**
@@ -2925,24 +2938,20 @@ async function provisionMissingCodeFiles(
     if (error instanceof UnconfirmedDeployError) {
       invalidateProjectSourceCache(apiClient);
       // Every file this request may have written stays dirty until a fresh
-      // export shows it — the runner can keep working after the request is
-      // lost or the bound expires, and its settlement is not proof the write
-      // finished (or started). While dirty, exports are never cached.
-      markProjectSourceDirty(
-        apiClient,
-        missingCodeFiles.map((entry) => entry.path),
-      );
+      // export shows the same content — the runner can keep working after the
+      // request is lost or the bound expires, and its settlement is not proof
+      // the write finished (or started). While dirty, exports are never
+      // cached.
+      markProjectSourceDirty(apiClient, missingCodeFiles);
     }
     throw error;
   }
 
   invalidateProjectSourceCache(apiClient);
-  // A confirmed result proves these files were written — they are no longer
-  // dirty even if they were provisioned uncertainly in an earlier deploy.
-  clearProjectSourceDirty(
-    apiClient,
-    missingCodeFiles.map((entry) => entry.path),
-  );
+  // A confirmed result proves this request's writes landed — only its own
+  // contents clear; an earlier unconfirmed write of different content to the
+  // same path may still be in flight and stays dirty.
+  clearProjectSourceDirty(apiClient, missingCodeFiles);
 
   if (result.verificationSkipped) {
     console.warn(`[custom class deploy] ${result.verificationSkipped}`);
@@ -3010,16 +3019,20 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
       );
     }
 
-    const dirtyPaths = projectSourceDirtyPaths.get(cacheKey);
-    if (dirtyPaths) {
-      // This fresh export is the authoritative read: every dirty path it
-      // shows is proven written and clears; the rest keep exports uncached.
-      for (const path of [...dirtyPaths]) {
-        if (projectSource.files.has(path)) dirtyPaths.delete(path);
+    const dirty = projectSourceDirtyWrites.get(cacheKey);
+    if (dirty) {
+      // This fresh export is the authoritative read: a dirty write clears
+      // only when the export contains its path with exactly the content that
+      // write carried — different content means another writer may still
+      // overwrite it, so the entry (and the cache) stays out of play.
+      for (const [path, writes] of [...dirty]) {
+        const observed = projectSource.files.get(path);
+        if (observed !== undefined) writes.delete(observed);
+        if (writes.size === 0) dirty.delete(path);
       }
-      if (dirtyPaths.size === 0) projectSourceDirtyPaths.delete(cacheKey);
+      if (dirty.size === 0) projectSourceDirtyWrites.delete(cacheKey);
     }
-    if (!projectSourceDirtyPaths.has(cacheKey)) {
+    if (!projectSourceDirtyWrites.has(cacheKey)) {
       projectSourceCache.set(cacheKey, projectSource);
     }
   }
