@@ -1184,4 +1184,154 @@ test.describe("STU-380 transport outcome regressions", () => {
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(4);
   });
+
+  test("an identical retry's success cannot retire the earlier uncertain write", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const gaugeX = "class GaugeModel { final int value; GaugeModel(this.value); }";
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const zipEmpty = await zip.generateAsync({ type: "base64" });
+    zip.file("lib/custom_code/gauge_model.dart", gaugeX);
+    const zipX = await zip.generateAsync({ type: "base64" });
+
+    let landed = false;
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          value: { project_zip: landed ? zipX : zipEmpty },
+        }),
+      });
+    });
+    // First provision hangs past the bound; the retry answers success.
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      let provisionCalls = 0;
+      window.fetch = (url, ...args) => {
+        if (String(url).includes("deployCustomClasses")) {
+          provisionCalls += 1;
+          if (provisionCalls === 1) {
+            return Promise.resolve(
+              new Response(new ReadableStream({ start() {} }), {
+                status: 200,
+                headers: { "Content-Type": "application/x-ndjson" },
+              }),
+            );
+          }
+          return Promise.resolve(
+            new Response('{"event":"result","success":true}\n', {
+              status: 200,
+              headers: { "Content-Type": "application/x-ndjson" },
+            }),
+          );
+        }
+        return realFetch(url, ...args);
+      };
+    });
+
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(1);
+
+    const outcomeA = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap, uiTimeoutMs: 60 }],
+    );
+    expect(outcomeA.name).toBe("UnconfirmedDeployError");
+
+    // Identical retry succeeds — it credits one verified write of X, but A's
+    // uncertain write is a separate attempt and must stay outstanding.
+    const outcomeB = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap, remoteFiles: {} }],
+    );
+    expect(outcomeB.settled).toBe("resolved");
+
+    // First X-sighting is attributable to the verified retry — A's write can
+    // still be in flight, so the snapshot must not cache.
+    landed = true;
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    // Second sighting has no verified credit left — it retires A's write and
+    // this export becomes the cached snapshot.
+    expect(exportCalls).toBe(3);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(3);
+  });
+
+  test("a push still in flight keeps exports uncached until it settles", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const projectZip = await zip.generateAsync({ type: "base64" });
+
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip: projectZip } }),
+      });
+    });
+    // The push hangs past the UI bound; the test releases it afterwards.
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      window.__CCC_PUSH_RELEASE__ = null;
+      window.fetch = (url, ...args) => {
+        if (String(url).includes("syncCustomCodeChanges")) {
+          return new Promise((resolve) => {
+            window.__CCC_PUSH_RELEASE__ = () =>
+              resolve(new Response('{"success":true}', { status: 200 }));
+          });
+        }
+        return realFetch(url, ...args);
+      };
+    });
+
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(1);
+
+    const outcome = await page.evaluate(async () => {
+      try {
+        await window.__CCC_PUSH_CODE_WITH_TIMEOUT__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          60,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return { settled: "rejected", name: error.name };
+      }
+    });
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+
+    // While the push is still in flight its writes can land at any moment —
+    // exports must not be cached.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(3);
+
+    // Once the request settles, no write can arrive later — the next export
+    // is authoritative and caches again.
+    await page.evaluate(() => window.__CCC_PUSH_RELEASE__());
+    await page.waitForTimeout(50);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(4);
+  });
 });

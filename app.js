@@ -59,6 +59,7 @@ import {
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import {
   deployOutcomeOfStreamResult,
+  isPreWriteRunnerFailure,
   readProvisionResponse,
 } from "./src/provisionStream.js";
 import {
@@ -2670,17 +2671,22 @@ function getFileNameFromPath(filePath) {
 const projectSourceCache = new Map();
 
 // File writes whose provisioning outcome is unconfirmed, per cache key —
-// each dirty path holds the contents its outstanding requests tried to write.
-// The request ending (bound expiry, dropped stream) is not proof the runner
-// stopped: a disconnect can precede the write. While any dirty write is
-// outstanding, fresh exports must not be cached — a snapshot taken mid-write
-// would keep telling later deploys the file is missing, or pin content a
-// still-running writer later replaces. An export clears a dirty write only
-// when it contains that path with exactly the carried content — the
-// authoritative observation of that write; a confirmed provision removes the
-// contents it verified. A later success for the same path cannot clear an
-// earlier write whose content differs — it may still land afterwards.
+// each dirty path maps content -> { uncertain, verified }: `uncertain` counts
+// provision attempts that may still write that content (a lost/dropped
+// request is not proof the runner stopped), and `verified` credits confirmed
+// writes an export sighting must consume first. An export showing content X
+// can retire an uncertain X-write only when no verified X-write explains the
+// observation — so a confirmed retry can never clear an earlier attempt whose
+// identical write may still land over a newer edit. While any entry is
+// outstanding, fresh exports are never cached.
 const projectSourceDirtyWrites = new Map();
+
+// Unconfirmed sync pushes whose underlying request is still in flight, per
+// cache key. Unlike provisioning, a push writes inside its own request
+// handling — once the request settles (response or dropped connection) no
+// write can land afterwards, so an export taken after settlement is
+// authoritative again.
+const projectSourcePendingPushes = new Map();
 
 function projectSourceCacheKey(apiClient) {
   return `${apiClient.baseUrl}|${apiClient.projectId}|${apiClient.branchName}`;
@@ -2690,28 +2696,40 @@ function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
 }
 
-function markProjectSourceDirty(apiClient, entries) {
+function adjustProjectSourceDirty(apiClient, entries, delta) {
   const key = projectSourceCacheKey(apiClient);
   const dirty = projectSourceDirtyWrites.get(key) ?? new Map();
   for (const { path, content } of entries) {
-    const writes = dirty.get(path) ?? new Set();
-    writes.add(content);
-    dirty.set(path, writes);
-  }
-  projectSourceDirtyWrites.set(key, dirty);
-}
-
-function clearProjectSourceDirty(apiClient, entries) {
-  const key = projectSourceCacheKey(apiClient);
-  const dirty = projectSourceDirtyWrites.get(key);
-  if (!dirty) return;
-  for (const { path, content } of entries) {
-    const writes = dirty.get(path);
-    if (!writes) continue;
-    writes.delete(content);
-    if (writes.size === 0) dirty.delete(path);
+    const contents = dirty.get(path) ?? new Map();
+    const record = contents.get(content) ?? { uncertain: 0, verified: 0 };
+    if (delta.uncertain) record.uncertain += delta.uncertain;
+    if (delta.verified) record.verified += delta.verified;
+    if (record.uncertain <= 0 && record.verified <= 0) {
+      contents.delete(content);
+    } else {
+      contents.set(content, record);
+    }
+    if (contents.size === 0) dirty.delete(path);
+    else dirty.set(path, contents);
   }
   if (dirty.size === 0) projectSourceDirtyWrites.delete(key);
+  else projectSourceDirtyWrites.set(key, dirty);
+}
+
+function markProjectSourceDirty(apiClient, entries) {
+  adjustProjectSourceDirty(apiClient, entries, { uncertain: 1 });
+}
+
+function markProjectSourcePushPending(apiClient) {
+  const key = projectSourceCacheKey(apiClient);
+  projectSourcePendingPushes.set(key, (projectSourcePendingPushes.get(key) ?? 0) + 1);
+}
+
+function clearProjectSourcePushPending(apiClient) {
+  const key = projectSourceCacheKey(apiClient);
+  const pending = (projectSourcePendingPushes.get(key) ?? 0) - 1;
+  if (pending <= 0) projectSourcePendingPushes.delete(key);
+  else projectSourcePendingPushes.set(key, pending);
 }
 
 /**
@@ -2767,14 +2785,25 @@ async function pushCodeWithUiTimeout(
   // ignored), but no further attempts may start — they could overlap a deploy
   // the user just retried.
   const stopToken = { stop: false };
+  const pushWork = (async () => {
+    const response = await apiClient.pushCode(pushRequest, stopToken);
+    return parsePushCodeResponse(response);
+  })();
   return withUiTimeout(
-    (async () => {
-      const response = await apiClient.pushCode(pushRequest, stopToken);
-      return parsePushCodeResponse(response);
-    })(),
+    pushWork,
     uiTimeoutMs,
     (resolve, reject) => {
       stopToken.stop = true;
+      // The in-flight request is left running; its writes can still land
+      // until it settles (a push writes inside its own request handling —
+      // settlement is the boundary after which nothing can arrive). While
+      // pending, the project's exports must not be cached.
+      invalidateProjectSourceCache(apiClient);
+      markProjectSourcePushPending(apiClient);
+      pushWork.then(
+        () => clearProjectSourcePushPending(apiClient),
+        () => clearProjectSourcePushPending(apiClient),
+      );
       reject(
         new UnconfirmedDeployError(
           "FlutterFlow did not answer the sync in time — the push may still " +
@@ -2841,8 +2870,12 @@ async function provisionMissingCodeFiles(
   // any response is still an unknown outcome — the POST may have reached the
   // server — so it maps to unconfirmed, not failed.
   let result;
+  // Kept outside the try: a verified result that arrives after the bound
+  // resolves this attempt's dirty entries (success → verified credit,
+  // provable pre-write failure → retired).
+  let provisionWork;
   try {
-    const provisionWork = (async () => {
+    provisionWork = (async () => {
       let response;
       try {
         response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
@@ -2938,20 +2971,41 @@ async function provisionMissingCodeFiles(
     if (error instanceof UnconfirmedDeployError) {
       invalidateProjectSourceCache(apiClient);
       // Every file this request may have written stays dirty until a fresh
-      // export shows the same content — the runner can keep working after the
-      // request is lost or the bound expires, and its settlement is not proof
-      // the write finished (or started). While dirty, exports are never
-      // cached.
+      // export observes that exact content with no verified write to explain
+      // it — the runner can keep working after the request is lost or the
+      // bound expires. While dirty, exports are never cached.
       markProjectSourceDirty(apiClient, missingCodeFiles);
+      // A result event that arrives after the bound still proves this
+      // attempt's outcome: success converts its writes to verified (the sighting
+      // they produce is then attributable), a provable pre-write failure
+      // retires them outright.
+      provisionWork?.then(
+        (late) => {
+          if (late?.finalResultReceived && late.success) {
+            adjustProjectSourceDirty(apiClient, missingCodeFiles, {
+              uncertain: -1,
+              verified: 1,
+            });
+          } else if (
+            late?.finalResultReceived &&
+            isPreWriteRunnerFailure(late)
+          ) {
+            adjustProjectSourceDirty(apiClient, missingCodeFiles, {
+              uncertain: -1,
+            });
+          }
+        },
+        () => {},
+      );
     }
     throw error;
   }
 
   invalidateProjectSourceCache(apiClient);
-  // A confirmed result proves this request's writes landed — only its own
-  // contents clear; an earlier unconfirmed write of different content to the
-  // same path may still be in flight and stays dirty.
-  clearProjectSourceDirty(apiClient, missingCodeFiles);
+  // A confirmed result credits this request's writes as verified: export
+  // sightings of that content are attributable to it, so earlier uncertain
+  // writes of the same path stay dirty until their own landing is observed.
+  adjustProjectSourceDirty(apiClient, missingCodeFiles, { verified: 1 });
 
   if (result.verificationSkipped) {
     console.warn(`[custom class deploy] ${result.verificationSkipped}`);
@@ -3021,18 +3075,32 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
 
     const dirty = projectSourceDirtyWrites.get(cacheKey);
     if (dirty) {
-      // This fresh export is the authoritative read: a dirty write clears
-      // only when the export contains its path with exactly the content that
-      // write carried — different content means another writer may still
-      // overwrite it, so the entry (and the cache) stays out of play.
-      for (const [path, writes] of [...dirty]) {
+      // This fresh export is the authoritative read: an observed content
+      // first consumes a verified write credit (the sighting is explained by
+      // a confirmed provision), and only retires an uncertain write when no
+      // verified write could have produced it.
+      for (const [path, contents] of [...dirty]) {
         const observed = projectSource.files.get(path);
-        if (observed !== undefined) writes.delete(observed);
-        if (writes.size === 0) dirty.delete(path);
+        if (observed !== undefined) {
+          const record = contents.get(observed);
+          if (record) {
+            if (record.verified > 0) record.verified -= 1;
+            else record.uncertain -= 1;
+            if (record.uncertain <= 0 && record.verified <= 0) {
+              contents.delete(observed);
+            }
+          }
+        }
+        if (contents.size === 0) dirty.delete(path);
       }
       if (dirty.size === 0) projectSourceDirtyWrites.delete(cacheKey);
     }
-    if (!projectSourceDirtyWrites.has(cacheKey)) {
+    // Pending pushes keep exports uncached too: a request still in flight can
+    // still land its writes.
+    if (
+      !projectSourceDirtyWrites.has(cacheKey) &&
+      !projectSourcePendingPushes.has(cacheKey)
+    ) {
       projectSourceCache.set(cacheKey, projectSource);
     }
   }
