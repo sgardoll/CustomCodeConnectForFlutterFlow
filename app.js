@@ -2230,21 +2230,19 @@ class FlutterFlowApiClient {
 
         lastHttpStatus = response.status;
         // The status alone classifies this response — the body read is
-        // diagnostic only, so it runs detached: a stalled error body must
-        // not hide a definitive refusal behind the UI bound.
-        response
-          .clone()
-          .text()
-          .then(
-            (responseText) =>
-              console.log(
-                `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
-              ),
-            () =>
-              console.log(
-                `Push to ${baseUrl} returned ${response.status} (unreadable response body)`,
-              ),
-          );
+        // diagnostic only: detached so it can't block the refusal path, and
+        // bounded+cancelled so a stalled body can't leave a reader (and its
+        // connection) open past the bound.
+        readBodyBounded(response.clone(), PUSH_BODY_READ_TIMEOUT_MS).then(
+          (responseText) =>
+            console.log(
+              `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
+            ),
+          () =>
+            console.log(
+              `Push to ${baseUrl} returned ${response.status} (unreadable response body)`,
+            ),
+        );
 
         // A 5xx is the server's own failure report: it can be raised after
         // the write was applied, so it can never prove a refusal.
@@ -2378,6 +2376,38 @@ class FlutterFlowApiClient {
 }
 
 /**
+ * Reads a response body to text under a bound. Unlike `text()`, it keeps the
+ * reader so that on expiry the stream is cancelled for real — `body.cancel()`
+ * rejects while a `text()`/`json()` read holds the lock, but `reader.cancel()`
+ * is valid even mid-read, so a stalled body releases its connection instead
+ * of leaving a pending reader alive after the waiter settled.
+ * @param {Response} response - Response whose body to read
+ * @param {number} ms - How long to wait for the body
+ * @returns {Promise<string>} Rejects when the body stalls or the read fails
+ */
+function readBodyBounded(response, ms) {
+  const reader = response.body?.getReader?.();
+  const work = reader
+    ? (async () => {
+        const decoder = new TextDecoder();
+        let text = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += decoder.decode(value, { stream: true });
+        }
+        return text + decoder.decode();
+      })()
+    : Promise.resolve("");
+  return withUiTimeout(work, ms, (resolve, reject) => {
+    try {
+      reader?.cancel()?.catch?.(() => {});
+    } catch {}
+    reject(new Error("The response body stalled before it finished."));
+  });
+}
+
+/**
  * Parses the response from pushCode API call.
  * @param {Response} response - Fetch response object
  * @returns {Promise<Object>} Parsed result with file warnings
@@ -2391,14 +2421,10 @@ async function parsePushCodeResponse(
 
   try {
     // The status alone classifies the response — the body only carries the
-    // error detail, so this read is bounded: a stalled body must not hide a
-    // definitive refusal (or an acceptance) behind the outer UI bound.
-    jsonResult = await withUiTimeout(
-      response.json(),
-      bodyTimeoutMs,
-      (resolve, reject) =>
-        reject(new Error("The push response body stalled before it finished.")),
-    );
+    // error detail, so this read is bounded and cancellable: a stalled body
+    // must not hide a definitive refusal (or an acceptance) behind the outer
+    // UI bound nor leave a pending reader behind.
+    jsonResult = JSON.parse(await readBodyBounded(response, bodyTimeoutMs));
   } catch (error) {
     // Both reads share the same connection: a body dropped mid-flight makes
     // the clone reject too. The received status is still definitive — a non-ok
@@ -2406,11 +2432,7 @@ async function parsePushCodeResponse(
     // before the body was lost.
     let text = "";
     try {
-      text = await withUiTimeout(
-        originalResponse.text(),
-        bodyTimeoutMs,
-        (resolve, reject) => reject(new Error("stalled")),
-      );
+      text = await readBodyBounded(originalResponse, bodyTimeoutMs);
     } catch (readError) {
       // The body never arrived; classify on the status alone.
     }

@@ -760,12 +760,17 @@ test.describe("STU-380 transport outcome regressions", () => {
 
     // A 4xx that sends a byte then keeps the body open is still a definitive
     // refusal — the status alone decides, so the parse must not wait on the
-    // body past the diagnostic bound.
+    // body past the diagnostic bound. And the bounded read must cancel the
+    // stream, not leave a pending reader holding the connection.
     const outcome = await page.evaluate(async () => {
+      let streamCancelled = false;
       const body = new ReadableStream({
         start(controller) {
           controller.enqueue(new TextEncoder().encode("{"));
           // Never closes — the stalled body must not block classification.
+        },
+        cancel() {
+          streamCancelled = true;
         },
       });
       try {
@@ -773,15 +778,21 @@ test.describe("STU-380 transport outcome regressions", () => {
           new Response(body, { status: 403 }),
           50,
         );
-        return { settled: "resolved", parsed };
+        return { settled: "resolved", parsed, streamCancelled };
       } catch (error) {
-        return { settled: "rejected", name: error.name, message: error.message };
+        return {
+          settled: "rejected",
+          name: error.name,
+          message: error.message,
+          streamCancelled,
+        };
       }
     });
 
     expect(outcome.settled).toBe("resolved");
     expect(outcome.parsed.success).toBe(false);
     expect(outcome.parsed.responseCode).toBe(403);
+    expect(outcome.streamCancelled).toBe(true);
   });
 
   test("a server error with an unreadable body still lands as unconfirmed", async ({ page }) => {
