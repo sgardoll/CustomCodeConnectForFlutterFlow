@@ -406,6 +406,53 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.outcome).toBe("unconfirmed");
   });
 
+  test("a runner failure after the deploy began is unconfirmed, not a refusal", async ({ page }) => {
+    await loadDeployHooks(page);
+    // The runner answers definitively — but only after the deploy phase
+    // started, so classes may already be written.
+    await page.route(ENDPOINTS.deployCustomClasses, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body:
+          '{"event":"phase","phase":"deploy_start","message":"Deploying 1 custom class to FlutterFlow..."}\n' +
+          '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy failed.","exitCode":1}\n',
+      });
+    });
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap }],
+    );
+
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    expect(outcome.message).toMatch(/after the deploy began/);
+  });
+
+  test("a provisioning failure before the deploy phase stays a refusal", async ({ page }) => {
+    await loadDeployHooks(page);
+    await page.route(ENDPOINTS.deployCustomClasses, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body:
+          '{"event":"phase","phase":"verifying","message":"Compiling your custom code..."}\n' +
+          '{"event":"result","success":false,"error":"The generated custom code does not compile, so nothing was deployed to FlutterFlow.","analyzerErrors":["bad arg"]}\n',
+      });
+    });
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap }],
+    );
+
+    expect(outcome.name).toBe("Error");
+    expect(outcome.message).toMatch(/does not compile/);
+  });
+
   test("a push that loses every response is unconfirmed, not a fabricated partial/failure", async ({ page }) => {
     await loadDeployHooks(page);
     // Both sync endpoints drop the request without a response — the push may

@@ -246,16 +246,94 @@ test("a delivered result is classified by the ordinary rule, not the rejection c
   );
   assert.equal(deployOutcomeOfStreamResult(shipped), DeployOutcome.COMMITTED);
 
-  const runnerFailed = await readProvisionResponse(
+  // A compile-gate rejection is a verified pre-write failure: analyzerErrors
+  // prove verification ran and the deploy script never started.
+  const compileGateFailed = await readProvisionResponse(
     provisionAtStatus(
       [
-        '{"event":"result","success":false,"error":"compile gate failed","exitCode":1}\n',
+        '{"event":"phase","phase":"verifying","message":"Compiling..."}\n',
+        '{"event":"result","success":false,"error":"The generated custom code does not compile, so nothing was deployed to FlutterFlow.","analyzerErrors":["bad arg"]}\n',
       ],
       200,
     ),
   );
   assert.equal(
-    deployOutcomeOfStreamResult(runnerFailed),
+    deployOutcomeOfStreamResult(compileGateFailed),
     DeployOutcome.FAILED,
   );
+});
+
+// --- STU-380: a runner failure after the deploy began is not a refusal -----
+// A streamed `{success:false}` proves the runner finished, not that nothing
+// was written: the deploy CLI can die after its upload phase already wrote
+// classes. Only provably pre-write failures stay FAILED.
+
+test("a failure after the deploy phase began is unconfirmed, not a clean refusal", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"deploy_start","message":"Deploying..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy failed.","exitCode":1}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "deploy_start");
+  assert.equal(
+    deployOutcomeOfStreamResult(result),
+    DeployOutcome.UNCONFIRMED,
+  );
+});
+
+test("a failure reported during upload is unconfirmed even though the runner answered", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"deploy_start","message":"Deploying..."}\n',
+        '{"event":"phase","phase":"uploading","message":"Saving the changes to FlutterFlow..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy timed out."}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "uploading");
+  assert.equal(
+    deployOutcomeOfStreamResult(result),
+    DeployOutcome.UNCONFIRMED,
+  );
+});
+
+test("a runner failure before the deploy phase is a definitive refusal", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"workspace_init","message":"Preparing..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI workspace initialization failed.","exitCode":1}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "workspace_init");
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.FAILED);
+});
+
+test("a non-streaming runner failure is refused on 4xx, unconfirmed on 5xx", async () => {
+  const refused = await readProvisionResponse(
+    new Response(
+      JSON.stringify({ success: false, error: "verification must be an object." }),
+      { status: 400 },
+    ),
+  );
+  assert.equal(deployOutcomeOfStreamResult(refused), DeployOutcome.FAILED);
+
+  const cliFailed = await readProvisionResponse(
+    new Response(
+      JSON.stringify({ success: false, error: "FlutterFlow AI DSL deploy failed." }),
+      { status: 502 },
+    ),
+  );
+  assert.equal(deployOutcomeOfStreamResult(cliFailed), DeployOutcome.UNCONFIRMED);
 });

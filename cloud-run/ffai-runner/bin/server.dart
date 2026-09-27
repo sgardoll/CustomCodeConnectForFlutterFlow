@@ -52,6 +52,7 @@ Future<void> _handle(HttpRequest request) async {
       await channel.result(HttpStatus.notFound, {
         'success': false,
         'error': 'Not found.',
+        'preWrite': true,
       });
       return;
     }
@@ -89,6 +90,8 @@ Future<void> _handle(HttpRequest request) async {
             : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
+        // Workspace setup precedes any write to FlutterFlow.
+        'preWrite': true,
       });
       return;
     }
@@ -106,6 +109,8 @@ Future<void> _handle(HttpRequest request) async {
             'deployed to FlutterFlow.',
         'details': analysis.report,
         'analyzerErrors': analysis.errors,
+        // The compile gate runs before the deploy script starts.
+        'preWrite': true,
       });
       return;
     }
@@ -153,6 +158,8 @@ Future<void> _handle(HttpRequest request) async {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy timed out.',
         'details': _trimOutput(result.output),
+        // The CLI may already have uploaded classes before timing out.
+        'preWrite': false,
       });
       return;
     }
@@ -163,6 +170,7 @@ Future<void> _handle(HttpRequest request) async {
         'error': 'FlutterFlow AI DSL deploy failed.',
         'details': _trimOutput(result.output),
         'exitCode': result.exitCode,
+        'preWrite': false,
       });
       return;
     }
@@ -184,6 +192,8 @@ Future<void> _handle(HttpRequest request) async {
     await channel.result(HttpStatus.badRequest, {
       'success': false,
       'error': error.message,
+      // Request validation precedes any work against the project.
+      'preWrite': true,
     });
   } catch (error, stackTrace) {
     stderr.writeln(error);
@@ -191,6 +201,8 @@ Future<void> _handle(HttpRequest request) async {
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
+      // The stage is unknown, so the write cannot be proven not to have run.
+      'preWrite': false,
     });
   }
 }

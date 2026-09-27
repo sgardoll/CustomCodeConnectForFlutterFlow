@@ -2831,11 +2831,18 @@ async function provisionMissingCodeFiles(
 
   if (!result.success) {
     const details = result.details ? ` ${result.details}` : "";
-    // The runner streamed a definitive failure result — a remote decision,
-    // not a local one.
-    const refusal = new Error(
-      `${result.error || "FlutterFlow custom class provisioning failed."}${details}`,
-    );
+    const message = `${result.error || "FlutterFlow custom class provisioning failed."}${details}`;
+    // A runner-reported failure is only a definitive refusal when it provably
+    // precedes the write; a failure after the deploy began can follow classes
+    // already uploaded, so it must be reported unconfirmed.
+    if (deployOutcomeOfStreamResult(result) === DeployOutcome.UNCONFIRMED) {
+      throw new UnconfirmedDeployError(
+        `${message} The failure arrived after the deploy began — custom classes ` +
+          "may already be written. Open your FlutterFlow project to reconcile " +
+          "before retrying.",
+      );
+    }
+    const refusal = new Error(message);
     refusal.remoteRefusal = true;
     throw refusal;
   }
