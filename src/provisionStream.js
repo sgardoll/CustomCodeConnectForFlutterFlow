@@ -95,11 +95,11 @@ export async function readProvisionResponse(response, handlers = {}) {
     // remote write.
     httpRejected: !response.ok,
     httpStatus: response.status,
-    error: readError
-      ? "The connection to the FlutterFlow deploy runner dropped before it reported a result."
-      : response.ok
-        ? "The FlutterFlow deploy runner closed the connection before it finished."
-        : `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`,
+    error: !response.ok
+      ? `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`
+      : readError
+        ? "The connection to the FlutterFlow deploy runner dropped before it reported a result."
+        : "The FlutterFlow deploy runner closed the connection before it finished.",
   };
 }
 

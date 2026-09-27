@@ -138,6 +138,23 @@ test("a 403 with no streamed result is surfaced as an explicit HTTP rejection", 
   assert.match(result.error, /HTTP 403/);
 });
 
+test("a refusal whose body is unreadable still reports its HTTP status", async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.error(new Error("connection reset"));
+    },
+  });
+  const result = await readProvisionResponse(
+    new Response(body, { status: 403 }),
+  );
+
+  // An unreadable body must not reclassify a received refusal as a dropped
+  // connection — the status was delivered and still names the reason.
+  assert.equal(result.httpRejected, true);
+  assert.equal(result.httpStatus, 403);
+  assert.match(result.error, /HTTP 403/);
+});
+
 test("an explicit HTTP rejection (403) is a failure, not unconfirmed", async () => {
   const result = await readProvisionResponse(
     provisionAtStatus(
