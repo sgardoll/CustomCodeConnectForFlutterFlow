@@ -408,4 +408,130 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.name).not.toBe("UnconfirmedDeployError");
     expect(outcome.message).toContain("HTTP 500");
   });
+
+  test("a sync response whose body drops mid-read is unconfirmed, not failed", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // A 200 arrives, then the connection resets before the JSON completes:
+    // response.json() rejects AND the clone's text() rejects — both share the
+    // dead source. The accepted status means the push may have been applied.
+    const outcome = await page.evaluate(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"succ'));
+          controller.error(new Error("connection reset"));
+        },
+      });
+      try {
+        await window.__CCC_PARSE_PUSH_RESPONSE__(
+          new Response(body, { status: 200 }),
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a refusal whose body drops mid-read is still a definitive failure", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const outcome = await page.evaluate(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          controller.error(new Error("connection reset"));
+        },
+      });
+      try {
+        const parsed = await window.__CCC_PARSE_PUSH_RESPONSE__(
+          new Response(body, { status: 500 }),
+        );
+        return { settled: "resolved", parsed };
+      } catch (error) {
+        return { settled: "rejected", name: error.name, message: error.message };
+      }
+    });
+
+    expect(outcome.settled).toBe("resolved");
+    expect(outcome.parsed.success).toBe(false);
+    expect(outcome.parsed.responseCode).toBe(500);
+  });
+
+  test("a refusal with an unreadable body is not mistaken for a lost response", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // Every endpoint replies 500 but closes its body early: the statuses are
+    // definitive answers, so exhaustion must report the refusal — not claim
+    // the push outcome is unknown because a logging read failed.
+    const outcome = await page.evaluate(async () => {
+      const stubBody = () =>
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("x"));
+            controller.error(new Error("connection reset"));
+          },
+        });
+      window.fetch = () =>
+        Promise.resolve(new Response(stubBody(), { status: 500 }));
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          1,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).not.toBe("UnconfirmedDeployError");
+    expect(outcome.message).toContain("HTTP 500");
+  });
+
+  test("a non-500 refusal is never sent back through the retry loop", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // A definitive 403 must not be retried — even when its body is unreadable.
+    const outcome = await page.evaluate(async () => {
+      let calls = 0;
+      const stubBody = () =>
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("connection reset"));
+          },
+        });
+      window.fetch = () => {
+        calls += 1;
+        return Promise.resolve(new Response(stubBody(), { status: 403 }));
+      };
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          3,
+        );
+        return { settled: "resolved", calls };
+      } catch (error) {
+        return { settled: "rejected", calls, name: error.name };
+      }
+    });
+
+    expect(outcome.settled).toBe("resolved");
+    expect(outcome.calls).toBe(1);
+  });
 });

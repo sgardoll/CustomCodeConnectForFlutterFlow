@@ -2178,6 +2178,11 @@ class FlutterFlowApiClient {
       for (let ei = startEndpoint; ei < endpointUrls.length; ei++) {
         const baseUrl = endpointUrls[ei];
 
+        // Only a fetch rejection is a transport error: once response headers
+        // arrive the status is a definitive answer, and a body that fails to
+        // read for logging must not reclassify a known refusal as a lost
+        // response (or send a non-500 refusal back through the retry loop).
+        let response;
         try {
           console.log(
             `Push attempt ${attempt + 1} to ${baseUrl}syncCustomCodeChanges`,
@@ -2191,7 +2196,7 @@ class FlutterFlowApiClient {
             file_map_length: pushCodeRequest.file_map?.length || 0,
             functions_map_length: pushCodeRequest.functions_map?.length || 0,
           });
-          const response = await fetch(`${baseUrl}syncCustomCodeChanges`, {
+          response = await fetch(`${baseUrl}syncCustomCodeChanges`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -2199,33 +2204,38 @@ class FlutterFlowApiClient {
             },
             body: JSON.stringify(pushCodeRequest),
           });
-
-          if (response.ok) {
-            console.log(`Push to ${baseUrl} succeeded!`);
-            return response;
-          }
-
-          lastHttpStatus = response.status;
-          const clonedForLog = response.clone();
-          const responseText = await clonedForLog.text();
-          console.log(
-            `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
-          );
-
-          if (response.status === 500) {
-            console.warn(`Endpoint ${baseUrl} returned 500, trying next...`);
-            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-            continue;
-          }
-
-          return response;
         } catch (error) {
           sawTransportError = true;
           console.warn(
             `Push to ${baseUrl} failed: ${error.message}, trying next...`,
           );
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
         }
+
+        if (response.ok) {
+          console.log(`Push to ${baseUrl} succeeded!`);
+          return response;
+        }
+
+        lastHttpStatus = response.status;
+        let responseText;
+        try {
+          responseText = await response.clone().text();
+        } catch (readError) {
+          responseText = "(unreadable response body)";
+        }
+        console.log(
+          `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
+        );
+
+        if (response.status === 500) {
+          console.warn(`Endpoint ${baseUrl} returned 500, trying next...`);
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+
+        return response;
       }
     }
 
@@ -2337,7 +2347,16 @@ async function parsePushCodeResponse(response) {
   try {
     jsonResult = await response.json();
   } catch (error) {
-    const text = await originalResponse.text();
+    // Both reads share the same connection: a body dropped mid-flight makes
+    // the clone reject too. The received status is still definitive — a non-ok
+    // response is a refusal, an ok one means the push may have been applied
+    // before the body was lost.
+    let text = "";
+    try {
+      text = await originalResponse.text();
+    } catch (readError) {
+      // The body never arrived; classify on the status alone.
+    }
 
     // Check if the response was an error with plain text body (common for 500s)
     if (!response.ok) {
@@ -2352,7 +2371,7 @@ async function parsePushCodeResponse(response) {
     // HTTP ok but the body never parsed: the push request reached FlutterFlow
     // and was accepted, so the remote state is unknown — not a failure.
     throw new UnconfirmedDeployError(
-      `FlutterFlow accepted the sync but returned an unreadable response: ${text.slice(0, 200)}`,
+      `FlutterFlow accepted the sync but returned an unreadable response${text ? `: ${text.slice(0, 200)}` : "."}`,
     );
   }
 
@@ -8465,6 +8484,11 @@ if (import.meta.env.DEV) {
       "main",
       FF_API_ENDPOINTS.production,
     ).pushCodeWithRetry(pushCodeRequest, maxRetries);
+  // Lets the browser suite feed a crafted Response into the real sync-response
+  // parser, so a body that drops mid-read can be proven to classify on the
+  // received status instead of leaking the raw read error.
+  window.__CCC_PARSE_PUSH_RESPONSE__ = (response) =>
+    parsePushCodeResponse(response);
 }
 
 function copyResultsCode() {
