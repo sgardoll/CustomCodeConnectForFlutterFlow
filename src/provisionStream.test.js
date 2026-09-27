@@ -187,6 +187,9 @@ test("a dropped stream on an OK response stays UNCONFIRMED (outcome truly unknow
 
 test("a mid-stream read failure is an unknown outcome, not a thrown error", async () => {
   const encoder = new TextEncoder();
+  // Error in pull(), not start(): error() discards queued-but-unread chunks,
+  // so erroring synchronously would only exercise a drop before the first
+  // chunk. Pull-based erroring delivers the phase event, then drops mid-stream.
   const body = new ReadableStream({
     start(controller) {
       controller.enqueue(
@@ -194,12 +197,20 @@ test("a mid-stream read failure is an unknown outcome, not a thrown error", asyn
           '{"event":"phase","phase":"deploying","message":"Deploying..."}\n',
         ),
       );
+    },
+    pull(controller) {
       controller.error(new Error("network reset"));
     },
   });
 
-  const result = await readProvisionResponse(new Response(body, { status: 200 }));
+  const phases = [];
+  const result = await readProvisionResponse(new Response(body, { status: 200 }), {
+    onPhase: (message) => phases.push(message),
+  });
 
+  // The phase event was delivered before the drop — this is the mid-stream
+  // case, not a connection that never produced data.
+  assert.deepEqual(phases, ["Deploying..."]);
   // The connection died mid-work: no result arrived, so the remote outcome is
   // unknown — UNCONFIRMED, never a fabricated failure.
   assert.equal(result.success, false);
