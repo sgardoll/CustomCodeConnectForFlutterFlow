@@ -6754,20 +6754,33 @@ function showCommitSuccessModal(result) {
   if (modal) openModal(modal);
 }
 
+// #step3-output lives inside permanently-hidden legacy containers, so writing
+// the failure only there shows the user nothing — the overlay closes and no
+// terminal appears. A definitive refusal therefore also populates the shared
+// terminal modal; the hidden render stays for the regenerate wiring and any
+// legacy surface still reading it.
 function showCommitFailureModal(result) {
   hideCommitProgress();
   showCommitError(result);
+  populateCommitTerminalModal(result, {
+    heading: "Deploy failed",
+    title:
+      "FlutterFlow refused this deploy — nothing was confirmed written.",
+    guidance:
+      "Review the error and any per-file outcomes above, fix them in your code or in FlutterFlow, then deploy again. " +
+      "A refusal is definitive: no part of this deploy was applied, so retrying is safe once the problem is fixed.",
+  });
 }
 
 /**
- * Populates the shared terminal modal for the two outcomes that are real but
- * are neither a clean success nor a clean failure: PARTIAL (some custom
- * classes were written, the remaining sync failed) and UNCONFIRMED (the remote
- * outcome is unknown because the client stopped waiting or the stream
- * dropped). It always shows the same target identity the user confirmed, the
- * per-file outcomes when the runner/push reported them, and reconciliation
- * guidance that never hides the manual FlutterFlow step of checking the
- * project.
+ * Populates the shared terminal modal for every outcome that is not a clean
+ * success: PARTIAL (some custom classes were written, the remaining sync
+ * failed), UNCONFIRMED (the remote outcome is unknown because the client
+ * stopped waiting or the stream dropped), and FAILED (a definitive refusal —
+ * nothing confirmed written). It always shows the same target identity the
+ * user confirmed, the per-file outcomes when the runner/push reported them,
+ * and reconciliation guidance that never hides the manual FlutterFlow step of
+ * checking the project.
  */
 function populateCommitTerminalModal(result, { heading, title, guidance }) {
   const identity = result.targetIdentity || {};

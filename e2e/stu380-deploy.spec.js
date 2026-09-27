@@ -83,6 +83,15 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     // A definitive rejection must not read as committed.
     await expect(output).not.toContainText("committed");
     await expect(output).not.toContainText("Committed");
+
+    // #step3-output sits in permanently-hidden legacy containers, so the
+    // refusal must also reach the shared terminal modal to be visible at all.
+    const terminal = page.locator("#commit-terminal-modal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal).toContainText("Deploy failed");
+    await expect(terminal).toContainText("403");
+    await expect(terminal).toContainText(identity.projectId);
+    await expect(terminal).not.toContainText("Committed");
   });
 
   test("a per-file rejection surfaces each file's error, not a blanket success", async ({ page }) => {
@@ -99,6 +108,13 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     await expect(output).toContainText("gauge_widget.dart");
     await expect(output).toContainText("Duplicate class GaugeWidget");
     await expect(output).not.toContainText("committed");
+
+    // The same per-file outcomes are visible in the shared terminal modal.
+    const terminal = page.locator("#commit-terminal-modal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal).toContainText("Deploy failed");
+    await expect(terminal).toContainText("gauge_widget.dart");
+    await expect(terminal).toContainText("Duplicate class GaugeWidget");
   });
 
   test("a compile gate failure shows the analyzer rejection, never committed", async ({ page }) => {
@@ -112,6 +128,12 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     const output = page.locator("#step3-output");
     await expect(output).toContainText("does not compile");
     await expect(output).not.toContainText("committed");
+
+    // The analyzer refusal reaches the visible terminal too.
+    const terminal = page.locator("#commit-terminal-modal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal).toContainText("Deploy failed");
+    await expect(terminal).toContainText("does not compile");
   });
 
   test("a partial outcome opens the terminal modal with per-file outcomes and does not claim committed", async ({ page }) => {
