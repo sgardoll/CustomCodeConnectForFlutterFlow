@@ -88,29 +88,25 @@ test("an unconfirmed marker beats every other signal", () => {
   );
 });
 
-test("push retries exhausted by a lost response are unconfirmed, never a fabricated failure", () => {
-  // At least one attempt rejected without an HTTP response: the write may have
-  // reached FlutterFlow, so the terminal outcome must be UNCONFIRMED — a plain
-  // failure would lie about a deploy that might have committed.
-  const error = exhaustedPushError({ sawTransportError: true });
+test("push retries exhausted without a definitive answer are unconfirmed, never a fabricated failure", () => {
+  // Exhaustion is only reachable through attempts that cannot prove refusal —
+  // dropped responses or 5xx server errors — so the terminal outcome must be
+  // UNCONFIRMED; a plain failure would lie about a deploy that might have
+  // committed.
+  const error = exhaustedPushError();
   assert.ok(error instanceof UnconfirmedDeployError);
   assert.equal(error.outcome, DeployOutcome.UNCONFIRMED);
   assert.equal(classifyDeployResult({ outcome: error.outcome }), DeployOutcome.UNCONFIRMED);
-
-  // Falsification: marking the same exhaustion as a definitive refusal must
-  // flip the outcome it produces.
-  assert.equal(
-    exhaustedPushError({ sawTransportError: false }) instanceof UnconfirmedDeployError,
-    false,
-  );
 });
 
-test("push retries refused on every endpoint are a definitive failure", () => {
-  const error = exhaustedPushError({ sawTransportError: false, httpStatus: 500 });
-  assert.equal(error instanceof UnconfirmedDeployError, false);
+test("exhaustion on server errors is unconfirmed too — a 5xx cannot prove refusal", () => {
+  // Every endpoint answered 500: no response was lost, but a server error can
+  // be raised after the write, so it still cannot prove the push was refused.
+  const error = exhaustedPushError({ httpStatus: 500 });
+  assert.ok(error instanceof UnconfirmedDeployError);
+  assert.equal(error.outcome, DeployOutcome.UNCONFIRMED);
   assert.match(error.message, /HTTP 500/);
-  // And the result shape it drives classifies as FAILED, not UNCONFIRMED.
-  assert.equal(classifyDeployResult({ success: false, error: error.message }), DeployOutcome.FAILED);
+  assert.equal(classifyDeployResult({ outcome: error.outcome }), DeployOutcome.UNCONFIRMED);
 });
 
 test("the UI waiting bound is finite and below the documented server deadline", () => {

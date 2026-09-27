@@ -6,9 +6,10 @@ import { applyDefaultRoutes, ENDPOINTS } from "./fixtures/apiFixtures.js";
  * STU-380 — truthful deployment terminal outcomes.
  *
  * A deploy ends in one of four states and the UI must never flatten them:
- * only a confirmed success may say "committed". 403 / file rejection / compile
- * gate are failures; a mixed outcome (classes written, rest rejected) is
- * partial; a client wait expiry or a dropped stream is unconfirmed. Every
+ * only a confirmed success may say "committed". A refusal issued before any
+ * write (403 / file rejection / compile gate) is a failure; a mixed outcome
+ * (classes written, rest rejected) is partial; a client wait expiry, a
+ * dropped stream, or a server error is unconfirmed. Every
  * terminal state must release the UI busy state and offer safe next actions
  * without concealing the manual FlutterFlow reconciliation step. These tests
  * drive the same presentation the real confirm flow uses
@@ -415,8 +416,11 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.outcome).toBe("unconfirmed");
   });
 
-  test("a push refused with HTTP errors on every endpoint is a definitive failure", async ({ page }) => {
+  test("a push hitting server errors on every endpoint is unconfirmed, not failed", async ({ page }) => {
     await loadDeployHooks(page);
+    // Every endpoint answers 500. No response was lost, but a server error can
+    // be raised after the write was applied, so it cannot prove a refusal —
+    // the outcome stays unknown rather than fabricating a failure.
     await page.route("**/syncCustomCodeChanges", async (route) => {
       await route.fulfill({ status: 500, body: "server error" });
     });
@@ -428,8 +432,111 @@ test.describe("STU-380 transport outcome regressions", () => {
     );
 
     expect(outcome.settled).toBe("rejected");
-    expect(outcome.name).not.toBe("UnconfirmedDeployError");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
     expect(outcome.message).toContain("HTTP 500");
+  });
+
+  test("a definitive refusal after a lost response is unconfirmed, not failed", async ({ page }) => {
+    await loadDeployHooks(page);
+    // Production drops the request entirely; staging then answers a clean 403.
+    // The refusal is definitive for staging but cannot prove production did
+    // not apply the push first — the outcome must stay unknown.
+    const outcome = await page.evaluate(async () => {
+      let calls = 0;
+      window.fetch = (url) => {
+        if (!String(url).includes("syncCustomCodeChanges")) {
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }
+        calls += 1;
+        if (calls === 1) return Promise.reject(new Error("connection reset"));
+        return Promise.resolve(new Response("forbidden", { status: 403 }));
+      };
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          1,
+        );
+        return { settled: "resolved", calls };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          calls,
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    expect(outcome.calls).toBe(2);
+  });
+
+  test("a refusal after a server error is unconfirmed — the 5xx may have applied the write", async ({ page }) => {
+    await loadDeployHooks(page);
+    // Production 500s (maybe post-write); staging then answers 403. The later
+    // refusal cannot undo the uncertain first attempt.
+    const outcome = await page.evaluate(async () => {
+      let calls = 0;
+      window.fetch = (url) => {
+        if (!String(url).includes("syncCustomCodeChanges")) {
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }
+        calls += 1;
+        const status = calls === 1 ? 500 : 403;
+        return Promise.resolve(new Response("err", { status }));
+      };
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          1,
+        );
+        return { settled: "resolved", calls };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          calls,
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    expect(outcome.calls).toBe(2);
+  });
+
+  test("a server error other than 500 is unconfirmed too — no retry needed to be unsure", async ({ page }) => {
+    await loadDeployHooks(page);
+    const outcome = await page.evaluate(async () => {
+      window.fetch = () =>
+        Promise.resolve(new Response("bad gateway", { status: 502 }));
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          1,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    expect(outcome.message).toContain("HTTP 502");
   });
 
   test("a sync response whose body drops mid-read is unconfirmed, not failed", async ({ page }) => {
@@ -468,6 +575,8 @@ test.describe("STU-380 transport outcome regressions", () => {
   test("a refusal whose body drops mid-read is still a definitive failure", async ({ page }) => {
     await loadDeployHooks(page);
 
+    // A 4xx refusal is definitive even when its body cannot be read — the
+    // status alone proves the server rejected the request before any write.
     const outcome = await page.evaluate(async () => {
       const body = new ReadableStream({
         start(controller) {
@@ -477,7 +586,7 @@ test.describe("STU-380 transport outcome regressions", () => {
       });
       try {
         const parsed = await window.__CCC_PARSE_PUSH_RESPONSE__(
-          new Response(body, { status: 500 }),
+          new Response(body, { status: 403 }),
         );
         return { settled: "resolved", parsed };
       } catch (error) {
@@ -487,15 +596,15 @@ test.describe("STU-380 transport outcome regressions", () => {
 
     expect(outcome.settled).toBe("resolved");
     expect(outcome.parsed.success).toBe(false);
-    expect(outcome.parsed.responseCode).toBe(500);
+    expect(outcome.parsed.responseCode).toBe(403);
   });
 
-  test("a refusal with an unreadable body is not mistaken for a lost response", async ({ page }) => {
+  test("a server error with an unreadable body still lands as unconfirmed", async ({ page }) => {
     await loadDeployHooks(page);
 
-    // Every endpoint replies 500 but closes its body early: the statuses are
-    // definitive answers, so exhaustion must report the refusal — not claim
-    // the push outcome is unknown because a logging read failed.
+    // Every endpoint replies 500 but closes its body early: the statuses were
+    // received, so the outcome is unconfirmed because a 5xx cannot prove a
+    // refusal — not because a logging read failed, and never a crash.
     const outcome = await page.evaluate(async () => {
       const stubBody = () =>
         new ReadableStream({
@@ -523,7 +632,8 @@ test.describe("STU-380 transport outcome regressions", () => {
     });
 
     expect(outcome.settled).toBe("rejected");
-    expect(outcome.name).not.toBe("UnconfirmedDeployError");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
     expect(outcome.message).toContain("HTTP 500");
   });
 

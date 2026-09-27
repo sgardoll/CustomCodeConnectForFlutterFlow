@@ -2168,19 +2168,20 @@ class FlutterFlowApiClient {
       FF_API_ENDPOINTS.staging,
     ];
     const startEndpoint = Math.max(0, endpointUrls.indexOf(this._endpoint));
-    // Retried only on a lost connection or a 500, a lost response means the
-    // push may have been applied — exhaustion after any transport error is an
-    // unknown outcome, never a fabricated refusal.
-    let sawTransportError = false;
+    // An attempt is uncertain when its outcome cannot prove the push was
+    // refused: a dropped response (the request may have landed) or a 5xx (the
+    // server's own failure report can follow a write). Once any attempt is
+    // uncertain, no later refusal can undo it — the outcome stays unknown.
+    let sawUncertainAttempt = false;
     let lastHttpStatus = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       for (let ei = startEndpoint; ei < endpointUrls.length; ei++) {
         const baseUrl = endpointUrls[ei];
 
-        // Only a fetch rejection is a transport error: once response headers
-        // arrive the status is a definitive answer, and a body that fails to
-        // read for logging must not reclassify a known refusal as a lost
+        // Only a fetch rejection is a lost response: once headers arrive, a
+        // refusal status is a definitive answer for this endpoint — and a body
+        // that fails to read for logging must not reclassify one as a lost
         // response (or send a non-500 refusal back through the retry loop).
         let response;
         try {
@@ -2205,7 +2206,7 @@ class FlutterFlowApiClient {
             body: JSON.stringify(pushCodeRequest),
           });
         } catch (error) {
-          sawTransportError = true;
+          sawUncertainAttempt = true;
           console.warn(
             `Push to ${baseUrl} failed: ${error.message}, trying next...`,
           );
@@ -2229,20 +2230,45 @@ class FlutterFlowApiClient {
           `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
         );
 
+        // A 5xx is the server's own failure report: it can be raised after
+        // the write was applied, so it can never prove a refusal.
+        if (response.status >= 500) {
+          sawUncertainAttempt = true;
+        }
         if (response.status === 500) {
           console.warn(`Endpoint ${baseUrl} returned 500, trying next...`);
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           continue;
         }
 
+        // Any other server error is already an unknown outcome for this
+        // endpoint — the write may have been applied before the failure.
+        if (response.status >= 500) {
+          throw new UnconfirmedDeployError(
+            `FlutterFlow reported a server error (HTTP ${response.status}), ` +
+              "which cannot prove the push was refused — the write may have " +
+              "been applied before the failure. Open your FlutterFlow project " +
+              "to reconcile before retrying.",
+          );
+        }
+
+        // A refusal is definitive for this endpoint, but it cannot prove that
+        // an earlier attempt whose outcome was lost did not apply the push.
+        if (sawUncertainAttempt) {
+          throw new UnconfirmedDeployError(
+            `The push was refused (HTTP ${response.status}), but an earlier ` +
+              "sync attempt may already have applied it — server errors and " +
+              "dropped responses cannot prove a refusal. Open your FlutterFlow " +
+              "project to reconcile before retrying.",
+          );
+        }
         return response;
       }
     }
 
-    throw exhaustedPushError({
-      sawTransportError,
-      httpStatus: lastHttpStatus,
-    });
+    // Every retry path left the outcome unknown: each attempt either lost its
+    // response or hit a server error, so the push may have been applied.
+    throw exhaustedPushError({ httpStatus: lastHttpStatus });
   }
 
   async pushCode(pushCodeRequest) {
