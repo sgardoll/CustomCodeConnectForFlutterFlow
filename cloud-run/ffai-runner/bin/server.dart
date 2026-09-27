@@ -52,23 +52,46 @@ Future<void> _handle(HttpRequest request) async {
       await channel.result(HttpStatus.notFound, {
         'success': false,
         'error': 'Not found.',
+        'preWrite': true,
       });
       return;
     }
 
-    final payload = await _readJson(request);
-    final apiKey = _stringField(payload, 'apiKey', maxLength: 10000);
-    final projectId = _stringField(payload, 'projectId', maxLength: 200);
-    final baseUrl = _stringField(payload, 'baseUrl', maxLength: 500, required: false);
-    final commitMessage = _stringField(
-      payload,
-      'commitMessage',
-      maxLength: 300,
-      required: false,
-    );
-    final dryRun = payload['dryRun'] == true;
-    final classes = _normalizeClasses(payload['customClasses']);
-    final verification = _normalizeVerification(payload['verification']);
+    // Only request parsing/validation throws FormatException here — those are
+    // provably pre-write. Decoding CLI output can raise the same exception
+    // AFTER the deploy began, so it must fall to the generic catch below,
+    // which does not claim preWrite.
+    Map<String, dynamic> payload;
+    String apiKey;
+    String projectId;
+    String baseUrl;
+    String commitMessage;
+    bool dryRun;
+    List<CustomClassEntry> classes;
+    _VerificationRequest? verification;
+    try {
+      payload = await _readJson(request);
+      apiKey = _stringField(payload, 'apiKey', maxLength: 10000);
+      projectId = _stringField(payload, 'projectId', maxLength: 200);
+      baseUrl = _stringField(payload, 'baseUrl', maxLength: 500, required: false);
+      commitMessage = _stringField(
+        payload,
+        'commitMessage',
+        maxLength: 300,
+        required: false,
+      );
+      dryRun = payload['dryRun'] == true;
+      classes = _normalizeClasses(payload['customClasses']);
+      verification = _normalizeVerification(payload['verification']);
+    } on FormatException catch (error) {
+      await channel.result(HttpStatus.badRequest, {
+        'success': false,
+        'error': error.message,
+        // Request validation precedes any work against the project.
+        'preWrite': true,
+      });
+      return;
+    }
 
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
@@ -89,6 +112,8 @@ Future<void> _handle(HttpRequest request) async {
             : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
+        // Workspace setup precedes any write to FlutterFlow.
+        'preWrite': true,
       });
       return;
     }
@@ -106,6 +131,8 @@ Future<void> _handle(HttpRequest request) async {
             'deployed to FlutterFlow.',
         'details': analysis.report,
         'analyzerErrors': analysis.errors,
+        // The compile gate runs before the deploy script starts.
+        'preWrite': true,
       });
       return;
     }
@@ -153,6 +180,8 @@ Future<void> _handle(HttpRequest request) async {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy timed out.',
         'details': _trimOutput(result.output),
+        // The CLI may already have uploaded classes before timing out.
+        'preWrite': false,
       });
       return;
     }
@@ -163,6 +192,7 @@ Future<void> _handle(HttpRequest request) async {
         'error': 'FlutterFlow AI DSL deploy failed.',
         'details': _trimOutput(result.output),
         'exitCode': result.exitCode,
+        'preWrite': false,
       });
       return;
     }
@@ -180,17 +210,16 @@ Future<void> _handle(HttpRequest request) async {
       'verified': analysis?.verifiedFiles ?? const <String>[],
       'verificationSkipped': analysis?.skippedReason,
     });
-  } on FormatException catch (error) {
-    await channel.result(HttpStatus.badRequest, {
-      'success': false,
-      'error': error.message,
-    });
   } catch (error, stackTrace) {
     stderr.writeln(error);
     stderr.writeln(stackTrace);
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
+      // The stage is unknown — a FormatException from decoding CLI output can
+      // land here after the upload began — so the write cannot be proven not
+      // to have run.
+      'preWrite': false,
     });
   }
 }

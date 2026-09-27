@@ -138,6 +138,23 @@ test("a 403 with no streamed result is surfaced as an explicit HTTP rejection", 
   assert.match(result.error, /HTTP 403/);
 });
 
+test("a refusal whose body is unreadable still reports its HTTP status", async () => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.error(new Error("connection reset"));
+    },
+  });
+  const result = await readProvisionResponse(
+    new Response(body, { status: 403 }),
+  );
+
+  // An unreadable body must not reclassify a received refusal as a dropped
+  // connection — the status was delivered and still names the reason.
+  assert.equal(result.httpRejected, true);
+  assert.equal(result.httpStatus, 403);
+  assert.match(result.error, /HTTP 403/);
+});
+
 test("an explicit HTTP rejection (403) is a failure, not unconfirmed", async () => {
   const result = await readProvisionResponse(
     provisionAtStatus(
@@ -185,6 +202,41 @@ test("a dropped stream on an OK response stays UNCONFIRMED (outcome truly unknow
   );
 });
 
+test("a mid-stream read failure is an unknown outcome, not a thrown error", async () => {
+  const encoder = new TextEncoder();
+  // Error in pull(), not start(): error() discards queued-but-unread chunks,
+  // so erroring synchronously would only exercise a drop before the first
+  // chunk. Pull-based erroring delivers the phase event, then drops mid-stream.
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          '{"event":"phase","phase":"deploying","message":"Deploying..."}\n',
+        ),
+      );
+    },
+    pull(controller) {
+      controller.error(new Error("network reset"));
+    },
+  });
+
+  const phases = [];
+  const result = await readProvisionResponse(new Response(body, { status: 200 }), {
+    onPhase: (message) => phases.push(message),
+  });
+
+  // The phase event was delivered before the drop — this is the mid-stream
+  // case, not a connection that never produced data.
+  assert.deepEqual(phases, ["Deploying..."]);
+  // The connection died mid-work: no result arrived, so the remote outcome is
+  // unknown — UNCONFIRMED, never a fabricated failure.
+  assert.equal(result.success, false);
+  assert.equal(result.finalResultReceived, false);
+  assert.equal(result.httpRejected, false);
+  assert.match(result.error, /dropped/);
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.UNCONFIRMED);
+});
+
 test("a delivered result is classified by the ordinary rule, not the rejection carve-out", async () => {
   const shipped = await readProvisionResponse(
     provisionAtStatus(
@@ -194,16 +246,94 @@ test("a delivered result is classified by the ordinary rule, not the rejection c
   );
   assert.equal(deployOutcomeOfStreamResult(shipped), DeployOutcome.COMMITTED);
 
-  const runnerFailed = await readProvisionResponse(
+  // A compile-gate rejection is a verified pre-write failure: analyzerErrors
+  // prove verification ran and the deploy script never started.
+  const compileGateFailed = await readProvisionResponse(
     provisionAtStatus(
       [
-        '{"event":"result","success":false,"error":"compile gate failed","exitCode":1}\n',
+        '{"event":"phase","phase":"verifying","message":"Compiling..."}\n',
+        '{"event":"result","success":false,"error":"The generated custom code does not compile, so nothing was deployed to FlutterFlow.","analyzerErrors":["bad arg"]}\n',
       ],
       200,
     ),
   );
   assert.equal(
-    deployOutcomeOfStreamResult(runnerFailed),
+    deployOutcomeOfStreamResult(compileGateFailed),
     DeployOutcome.FAILED,
   );
+});
+
+// --- STU-380: a runner failure after the deploy began is not a refusal -----
+// A streamed `{success:false}` proves the runner finished, not that nothing
+// was written: the deploy CLI can die after its upload phase already wrote
+// classes. Only provably pre-write failures stay FAILED.
+
+test("a failure after the deploy phase began is unconfirmed, not a clean refusal", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"deploy_start","message":"Deploying..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy failed.","exitCode":1}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "deploy_start");
+  assert.equal(
+    deployOutcomeOfStreamResult(result),
+    DeployOutcome.UNCONFIRMED,
+  );
+});
+
+test("a failure reported during upload is unconfirmed even though the runner answered", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"deploy_start","message":"Deploying..."}\n',
+        '{"event":"phase","phase":"uploading","message":"Saving the changes to FlutterFlow..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy timed out."}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "uploading");
+  assert.equal(
+    deployOutcomeOfStreamResult(result),
+    DeployOutcome.UNCONFIRMED,
+  );
+});
+
+test("a runner failure before the deploy phase is a definitive refusal", async () => {
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      [
+        '{"event":"phase","phase":"workspace_init","message":"Preparing..."}\n',
+        '{"event":"result","success":false,"error":"FlutterFlow AI workspace initialization failed.","exitCode":1}\n',
+      ],
+      200,
+    ),
+  );
+
+  assert.equal(result.runnerPhase, "workspace_init");
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.FAILED);
+});
+
+test("a non-streaming runner failure is refused on 4xx, unconfirmed on 5xx", async () => {
+  const refused = await readProvisionResponse(
+    new Response(
+      JSON.stringify({ success: false, error: "verification must be an object." }),
+      { status: 400 },
+    ),
+  );
+  assert.equal(deployOutcomeOfStreamResult(refused), DeployOutcome.FAILED);
+
+  const cliFailed = await readProvisionResponse(
+    new Response(
+      JSON.stringify({ success: false, error: "FlutterFlow AI DSL deploy failed." }),
+      { status: 502 },
+    ),
+  );
+  assert.equal(deployOutcomeOfStreamResult(cliFailed), DeployOutcome.UNCONFIRMED);
 });

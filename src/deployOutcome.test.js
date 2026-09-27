@@ -4,6 +4,8 @@ import {
   classifyDeployResult,
   DeployOutcome,
   DEPLOY_UI_TIMEOUT_MS,
+  exhaustedPushError,
+  UnconfirmedDeployError,
 } from "./deployOutcome.js";
 
 // --- Falsification harness -------------------------------------------------
@@ -84,6 +86,27 @@ test("an unconfirmed marker beats every other signal", () => {
     DeployOutcome.FAILED,
     (r) => { r.outcome = DeployOutcome.FAILED; return r; },
   );
+});
+
+test("push retries exhausted without a definitive answer are unconfirmed, never a fabricated failure", () => {
+  // Exhaustion is only reachable through attempts that cannot prove refusal —
+  // dropped responses or 5xx server errors — so the terminal outcome must be
+  // UNCONFIRMED; a plain failure would lie about a deploy that might have
+  // committed.
+  const error = exhaustedPushError();
+  assert.ok(error instanceof UnconfirmedDeployError);
+  assert.equal(error.outcome, DeployOutcome.UNCONFIRMED);
+  assert.equal(classifyDeployResult({ outcome: error.outcome }), DeployOutcome.UNCONFIRMED);
+});
+
+test("exhaustion on server errors is unconfirmed too — a 5xx cannot prove refusal", () => {
+  // Every endpoint answered 500: no response was lost, but a server error can
+  // be raised after the write, so it still cannot prove the push was refused.
+  const error = exhaustedPushError({ httpStatus: 500 });
+  assert.ok(error instanceof UnconfirmedDeployError);
+  assert.equal(error.outcome, DeployOutcome.UNCONFIRMED);
+  assert.match(error.message, /HTTP 500/);
+  assert.equal(classifyDeployResult({ outcome: error.outcome }), DeployOutcome.UNCONFIRMED);
 });
 
 test("the UI waiting bound is finite and below the documented server deadline", () => {

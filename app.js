@@ -59,12 +59,16 @@ import {
 import { planCustomCodeVerification } from "./src/customCodeVerification.js";
 import {
   deployOutcomeOfStreamResult,
+  isPreWriteRunnerFailure,
   readProvisionResponse,
 } from "./src/provisionStream.js";
 import {
   classifyDeployResult,
   DeployOutcome,
   DEPLOY_UI_TIMEOUT_MS,
+  exhaustedPushError,
+  PUSH_BODY_READ_TIMEOUT_MS,
+  UnconfirmedDeployError,
 } from "./src/deployOutcome.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
 import { initHeroMarkField } from "./src/heroMarkField.js";
@@ -2160,17 +2164,36 @@ class FlutterFlowApiClient {
    * @param {string} pushCodeRequest.functions_map - JSON string of function definitions
    * @returns {Promise<Response>} Fetch response object
    */
-  async pushCodeWithRetry(pushCodeRequest, maxRetries = 3) {
+  async pushCodeWithRetry(pushCodeRequest, maxRetries = 3, stopToken = null) {
     const endpointUrls = [
       FF_API_ENDPOINTS.production,
       FF_API_ENDPOINTS.staging,
     ];
     const startEndpoint = Math.max(0, endpointUrls.indexOf(this._endpoint));
+    // An attempt is uncertain when its outcome cannot prove the push was
+    // refused: a dropped response (the request may have landed) or a 5xx (the
+    // server's own failure report can follow a write). Once any attempt is
+    // uncertain, no later refusal can undo it — the outcome stays unknown.
+    let sawUncertainAttempt = false;
+    let lastHttpStatus = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       for (let ei = startEndpoint; ei < endpointUrls.length; ei++) {
         const baseUrl = endpointUrls[ei];
 
+        // Once the UI bound expired, the outcome was already reported
+        // unconfirmed and the user may have started a new deploy — issuing
+        // another write would overlap it. An in-flight request is never
+        // aborted; this only stops attempts not yet sent.
+        if (stopToken?.stop) {
+          throw exhaustedPushError({ httpStatus: lastHttpStatus });
+        }
+
+        // Only a fetch rejection is a lost response: once headers arrive, a
+        // refusal status is a definitive answer for this endpoint — and a body
+        // that fails to read for logging must not reclassify one as a lost
+        // response (or send a non-500 refusal back through the retry loop).
+        let response;
         try {
           console.log(
             `Push attempt ${attempt + 1} to ${baseUrl}syncCustomCodeChanges`,
@@ -2184,7 +2207,7 @@ class FlutterFlowApiClient {
             file_map_length: pushCodeRequest.file_map?.length || 0,
             functions_map_length: pushCodeRequest.functions_map?.length || 0,
           });
-          const response = await fetch(`${baseUrl}syncCustomCodeChanges`, {
+          response = await fetch(`${baseUrl}syncCustomCodeChanges`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -2192,39 +2215,88 @@ class FlutterFlowApiClient {
             },
             body: JSON.stringify(pushCodeRequest),
           });
-
-          if (response.ok) {
-            console.log(`Push to ${baseUrl} succeeded!`);
-            return response;
-          }
-
-          const clonedForLog = response.clone();
-          const responseText = await clonedForLog.text();
-          console.log(
-            `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
-          );
-
-          if (response.status === 500) {
-            console.warn(`Endpoint ${baseUrl} returned 500, trying next...`);
-            await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
-            continue;
-          }
-
-          return response;
         } catch (error) {
+          sawUncertainAttempt = true;
           console.warn(
             `Push to ${baseUrl} failed: ${error.message}, trying next...`,
           );
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
         }
+
+        if (response.ok) {
+          console.log(`Push to ${baseUrl} succeeded!`);
+          return response;
+        }
+
+        lastHttpStatus = response.status;
+        // The status alone classifies this response — the body read is
+        // diagnostic only: detached so it can't block the refusal path, and
+        // bounded+cancelled so a stalled body can't leave a reader (and its
+        // connection) open past the bound. A response this loop will not
+        // hand back to the caller is read directly — teeing it with clone()
+        // would leave the original branch (and its connection) feeding a
+        // reader that doesn't exist; only the definitive-refusal path keeps
+        // the original body for parsePushCodeResponse, so it logs a clone.
+        const returnedToCaller =
+          response.status < 500 && !sawUncertainAttempt;
+        readBodyBounded(
+          returnedToCaller ? response.clone() : response,
+          PUSH_BODY_READ_TIMEOUT_MS,
+        ).then(
+          (responseText) =>
+            console.log(
+              `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
+            ),
+          () =>
+            console.log(
+              `Push to ${baseUrl} returned ${response.status} (unreadable response body)`,
+            ),
+        );
+
+        // A 5xx is the server's own failure report: it can be raised after
+        // the write was applied, so it can never prove a refusal.
+        if (response.status >= 500) {
+          sawUncertainAttempt = true;
+        }
+        if (response.status === 500) {
+          console.warn(`Endpoint ${baseUrl} returned 500, trying next...`);
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+
+        // Any other server error is already an unknown outcome for this
+        // endpoint — the write may have been applied before the failure.
+        if (response.status >= 500) {
+          throw new UnconfirmedDeployError(
+            `FlutterFlow reported a server error (HTTP ${response.status}), ` +
+              "which cannot prove the push was refused — the write may have " +
+              "been applied before the failure. Open your FlutterFlow project " +
+              "to reconcile before retrying.",
+          );
+        }
+
+        // A refusal is definitive for this endpoint, but it cannot prove that
+        // an earlier attempt whose outcome was lost did not apply the push.
+        if (sawUncertainAttempt) {
+          throw new UnconfirmedDeployError(
+            `The push was refused (HTTP ${response.status}), but an earlier ` +
+              "sync attempt may already have applied it — server errors and " +
+              "dropped responses cannot prove a refusal. Open your FlutterFlow " +
+              "project to reconcile before retrying.",
+          );
+        }
+        return response;
       }
     }
 
-    throw new Error("All API endpoints failed after retries");
+    // Every retry path left the outcome unknown: each attempt either lost its
+    // response or hit a server error, so the push may have been applied.
+    throw exhaustedPushError({ httpStatus: lastHttpStatus });
   }
 
-  async pushCode(pushCodeRequest) {
-    return this.pushCodeWithRetry(pushCodeRequest);
+  async pushCode(pushCodeRequest, stopToken = null) {
+    return this.pushCodeWithRetry(pushCodeRequest, 3, stopToken);
   }
 
   /**
@@ -2314,18 +2386,66 @@ class FlutterFlowApiClient {
 }
 
 /**
+ * Reads a response body to text under a bound. Unlike `text()`, it keeps the
+ * reader so that on expiry the stream is cancelled for real — `body.cancel()`
+ * rejects while a `text()`/`json()` read holds the lock, but `reader.cancel()`
+ * is valid even mid-read, so a stalled body releases its connection instead
+ * of leaving a pending reader alive after the waiter settled.
+ * @param {Response} response - Response whose body to read
+ * @param {number} ms - How long to wait for the body
+ * @returns {Promise<string>} Rejects when the body stalls or the read fails
+ */
+function readBodyBounded(response, ms) {
+  const reader = response.body?.getReader?.();
+  const work = reader
+    ? (async () => {
+        const decoder = new TextDecoder();
+        let text = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          text += decoder.decode(value, { stream: true });
+        }
+        return text + decoder.decode();
+      })()
+    : Promise.resolve("");
+  return withUiTimeout(work, ms, (resolve, reject) => {
+    try {
+      reader?.cancel()?.catch?.(() => {});
+    } catch {}
+    reject(new Error("The response body stalled before it finished."));
+  });
+}
+
+/**
  * Parses the response from pushCode API call.
  * @param {Response} response - Fetch response object
  * @returns {Promise<Object>} Parsed result with file warnings
  */
-async function parsePushCodeResponse(response) {
+async function parsePushCodeResponse(
+  response,
+  bodyTimeoutMs = PUSH_BODY_READ_TIMEOUT_MS,
+) {
   const originalResponse = response.clone();
   let jsonResult;
 
   try {
-    jsonResult = await response.json();
+    // The status alone classifies the response — the body only carries the
+    // error detail, so this read is bounded and cancellable: a stalled body
+    // must not hide a definitive refusal (or an acceptance) behind the outer
+    // UI bound nor leave a pending reader behind.
+    jsonResult = JSON.parse(await readBodyBounded(response, bodyTimeoutMs));
   } catch (error) {
-    const text = await originalResponse.text();
+    // Both reads share the same connection: a body dropped mid-flight makes
+    // the clone reject too. The received status is still definitive — a non-ok
+    // response is a refusal, an ok one means the push may have been applied
+    // before the body was lost.
+    let text = "";
+    try {
+      text = await readBodyBounded(originalResponse, bodyTimeoutMs);
+    } catch (readError) {
+      // The body never arrived; classify on the status alone.
+    }
 
     // Check if the response was an error with plain text body (common for 500s)
     if (!response.ok) {
@@ -2337,7 +2457,11 @@ async function parsePushCodeResponse(response) {
       };
     }
 
-    throw new Error(`Invalid JSON response: ${text}`);
+    // HTTP ok but the body never parsed: the push request reached FlutterFlow
+    // and was accepted, so the remote state is unknown — not a failure.
+    throw new UnconfirmedDeployError(
+      `FlutterFlow accepted the sync but returned an unreadable response${text ? `: ${text.slice(0, 200)}` : "."}`,
+    );
   }
 
   if (!response.ok) {
@@ -2546,6 +2670,24 @@ function getFileNameFromPath(filePath) {
 // the session. Fetching them means one full project export.
 const projectSourceCache = new Map();
 
+// File writes whose provisioning outcome is unconfirmed, per cache key —
+// each dirty path maps content -> { uncertain, verified }: `uncertain` counts
+// provision attempts that may still write that content (a lost/dropped
+// request is not proof the runner stopped), and `verified` credits confirmed
+// writes an export sighting must consume first. An export showing content X
+// can retire an uncertain X-write only when no verified X-write explains the
+// observation — so a confirmed retry can never clear an earlier attempt whose
+// identical write may still land over a newer edit. While any entry is
+// outstanding, fresh exports are never cached.
+const projectSourceDirtyWrites = new Map();
+
+// Unconfirmed sync pushes whose underlying request is still in flight, per
+// cache key. Unlike provisioning, a push writes inside its own request
+// handling — once the request settles (response or dropped connection) no
+// write can land afterwards, so an export taken after settlement is
+// authoritative again.
+const projectSourcePendingPushes = new Map();
+
 function projectSourceCacheKey(apiClient) {
   return `${apiClient.baseUrl}|${apiClient.projectId}|${apiClient.branchName}`;
 }
@@ -2554,19 +2696,40 @@ function invalidateProjectSourceCache(apiClient) {
   projectSourceCache.delete(projectSourceCacheKey(apiClient));
 }
 
-/**
- * A carve-out from the ordinary failure path: the client stopped waiting for
- * (or lost the connection to) the deployment runner before it reported a
- * decision, so the remote outcome is unknown. This is deliberately *not* a
- * plain failure — nothing here may be reported as failed or committed when we
- * cannot know what the server did.
- */
-class UnconfirmedDeployError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "UnconfirmedDeployError";
-    this.outcome = DeployOutcome.UNCONFIRMED;
+function adjustProjectSourceDirty(apiClient, entries, delta) {
+  const key = projectSourceCacheKey(apiClient);
+  const dirty = projectSourceDirtyWrites.get(key) ?? new Map();
+  for (const { path, content } of entries) {
+    const contents = dirty.get(path) ?? new Map();
+    const record = contents.get(content) ?? { uncertain: 0, verified: 0 };
+    if (delta.uncertain) record.uncertain += delta.uncertain;
+    if (delta.verified) record.verified += delta.verified;
+    if (record.uncertain <= 0 && record.verified <= 0) {
+      contents.delete(content);
+    } else {
+      contents.set(content, record);
+    }
+    if (contents.size === 0) dirty.delete(path);
+    else dirty.set(path, contents);
   }
+  if (dirty.size === 0) projectSourceDirtyWrites.delete(key);
+  else projectSourceDirtyWrites.set(key, dirty);
+}
+
+function markProjectSourceDirty(apiClient, entries) {
+  adjustProjectSourceDirty(apiClient, entries, { uncertain: 1 });
+}
+
+function markProjectSourcePushPending(apiClient) {
+  const key = projectSourceCacheKey(apiClient);
+  projectSourcePendingPushes.set(key, (projectSourcePendingPushes.get(key) ?? 0) + 1);
+}
+
+function clearProjectSourcePushPending(apiClient) {
+  const key = projectSourceCacheKey(apiClient);
+  const pending = (projectSourcePendingPushes.get(key) ?? 0) - 1;
+  if (pending <= 0) projectSourcePendingPushes.delete(key);
+  else projectSourcePendingPushes.set(key, pending);
 }
 
 /**
@@ -2602,12 +2765,63 @@ function withUiTimeout(promise, ms, onExpire) {
   });
 }
 
+/**
+ * Runs the sync push and its response parsing under one UI bound. A stalled
+ * fetch (headers never flush) or a stalled body read would otherwise park the
+ * deploy forever; on expiry the outcome is unconfirmed — the request may have
+ * been applied — and the in-flight write is left running rather than aborted.
+ * @param {FlutterFlowApiClient} apiClient - Configured API client
+ * @param {Object} pushRequest - The syncCustomCodeChanges request body
+ * @param {number} uiTimeoutMs - How long the UI waits for a decision
+ * @returns {Promise<Object>} The parsed push result
+ */
+async function pushCodeWithUiTimeout(
+  apiClient,
+  pushRequest,
+  uiTimeoutMs = DEPLOY_UI_TIMEOUT_MS,
+) {
+  // Tells the retry loop to stop issuing writes once the bound expires: an
+  // in-flight request is left to settle on its own (its late result is
+  // ignored), but no further attempts may start — they could overlap a deploy
+  // the user just retried.
+  const stopToken = { stop: false };
+  const pushWork = (async () => {
+    const response = await apiClient.pushCode(pushRequest, stopToken);
+    return parsePushCodeResponse(response);
+  })();
+  return withUiTimeout(
+    pushWork,
+    uiTimeoutMs,
+    (resolve, reject) => {
+      stopToken.stop = true;
+      // The in-flight request is left running; its writes can still land
+      // until it settles (a push writes inside its own request handling —
+      // settlement is the boundary after which nothing can arrive). While
+      // pending, the project's exports must not be cached.
+      invalidateProjectSourceCache(apiClient);
+      markProjectSourcePushPending(apiClient);
+      pushWork.then(
+        () => clearProjectSourcePushPending(apiClient),
+        () => clearProjectSourcePushPending(apiClient),
+      );
+      reject(
+        new UnconfirmedDeployError(
+          "FlutterFlow did not answer the sync in time — the push may still " +
+            "have been applied. The outcome is not yet known: open your " +
+            "FlutterFlow project to reconcile before retrying the deploy.",
+        ),
+      );
+    },
+  );
+}
+
 async function provisionMissingCodeFiles(
   apiClient,
   fileMap,
   remoteFiles,
   commitMessage,
   pubspecYaml = "",
+  uiTimeoutMs = DEPLOY_UI_TIMEOUT_MS,
 ) {
   const missingCodeFiles = findMissingCodeFiles(fileMap, remoteFiles);
   if (missingCodeFiles.length === 0) {
@@ -2647,65 +2861,151 @@ async function provisionMissingCodeFiles(
     `Provisioning ${missingCodeFiles.length} new FlutterFlow custom code file(s) before sync.`,
   );
   commitProgress.set("provision");
-  const response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      apiKey: apiClient.apiKey,
-      projectId: apiClient.projectId,
-      baseUrl: apiClient.baseUrl,
-      commitMessage,
-      customClasses: missingCodeFiles,
-      verification,
-      stream: true,
-    }),
-  });
+  // Once the bound expires, progress updates from a late-arriving stream must
+  // not keep mutating a UI that already showed the terminal state.
+  let progressLive = true;
+  // The bounded wait covers the fetch itself, not just the stream body: a
+  // runner that accepts the connection but never flushes headers would
+  // otherwise hang the deploy past the UI bound. A fetch that rejects before
+  // any response is still an unknown outcome — the POST may have reached the
+  // server — so it maps to unconfirmed, not failed.
+  let result;
+  // Kept outside the try: a verified result that arrives after the bound
+  // resolves this attempt's dirty entries (success → verified credit,
+  // provable pre-write failure → retired).
+  let provisionWork;
+  try {
+    provisionWork = (async () => {
+      let response;
+      try {
+        response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: apiClient.apiKey,
+            projectId: apiClient.projectId,
+            baseUrl: apiClient.baseUrl,
+            commitMessage,
+            customClasses: missingCodeFiles,
+            verification,
+            stream: true,
+          }),
+        });
+      } catch (fetchError) {
+        throw new UnconfirmedDeployError(
+          "The provisioning request did not return a response. The deploy may have reached the " +
+            "FlutterFlow server — open your FlutterFlow project to reconcile before retrying.",
+        );
+      }
+      return readProvisionResponse(response, {
+        onPhase: (message) => {
+          if (progressLive) commitProgress.setSubstatus(message);
+        },
+        onLog: (message) => {
+          if (progressLive) console.log(`[custom class deploy] ${message}`);
+        },
+      });
+    })();
+    result = await withUiTimeout(
+      provisionWork,
+      uiTimeoutMs,
+      (resolve, reject) => {
+        progressLive = false;
+        reject(
+          new UnconfirmedDeployError(
+            "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
+              "Your custom classes may or may not have been written — the outcome is not yet known. " +
+              "Open your FlutterFlow project to reconcile before retrying the deploy.",
+          ),
+        );
+      },
+    );
 
-  const result = await withUiTimeout(
-    readProvisionResponse(response, {
-      onPhase: (message) => commitProgress.setSubstatus(message),
-      onLog: (message) => console.log(`[custom class deploy] ${message}`),
-    }),
-    DEPLOY_UI_TIMEOUT_MS,
-    (resolve, reject) =>
-      reject(
-        new UnconfirmedDeployError(
-          "The deploy is still working on the FlutterFlow server, but this browser tab has stopped waiting. " +
-            "Your custom classes may or may not have been written — the outcome is not yet known. " +
-            "Open your FlutterFlow project to reconcile before retrying the deploy.",
-        ),
-      ),
-  );
-
-  // A stream that ended (or a body that carried) no definitive result leaves
-  // the remote decision ambiguous. There are two distinct cases which must not
-  // be flattened: a server that explicitly refused the request (a 403/5xx
-  // `response.ok === false`) has made a definitive decision — the write did not
-  // happen — so that is a FAILURE, not an unknown outcome; only an ok response
-  // whose stream dropped before a result (or a client wait expiry) leaves the
-  // remote state genuinely unknown and must be reported UNCONFIRMED.
-  if (!result.finalResultReceived) {
-    if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
-      throw new Error(
-        result.error ||
-          `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
+    // A stream that ended (or a body that carried) no definitive result leaves
+    // the remote decision ambiguous. There are two distinct cases which must not
+    // be flattened: a server that explicitly refused the request (a 403/5xx
+    // `response.ok === false`) has made a definitive decision — the write did not
+    // happen — so that is a FAILURE, not an unknown outcome; only an ok response
+    // whose stream dropped before a result (or a client wait expiry) leaves the
+    // remote state genuinely unknown and must be reported UNCONFIRMED.
+    if (!result.finalResultReceived) {
+      if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
+        // Not marked remoteRefusal: the refusal comes from our deploy runner,
+        // not from FlutterFlow — its answer was never requested.
+        throw new Error(
+          result.error ||
+            `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
+        );
+      }
+      throw new UnconfirmedDeployError(
+        "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
+          "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+          "before retrying.",
       );
     }
-    throw new UnconfirmedDeployError(
-      "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
-        "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
-        "before retrying.",
-    );
-  }
 
-  if (!result.success) {
-    const details = result.details ? ` ${result.details}` : "";
-    throw new Error(
-      `${result.error || "FlutterFlow custom class provisioning failed."}${details}`,
-    );
+    if (!result.success) {
+      const details = result.details ? ` ${result.details}` : "";
+      const message = `${result.error || "FlutterFlow custom class provisioning failed."}${details}`;
+      // A runner-reported failure is only a definitive refusal when it provably
+      // precedes the write; a failure after the deploy began can follow classes
+      // already uploaded, so it must be reported unconfirmed (and the catch
+      // below drops the stale snapshot).
+      if (deployOutcomeOfStreamResult(result) === DeployOutcome.UNCONFIRMED) {
+        throw new UnconfirmedDeployError(
+          `${message} The failure arrived after the deploy began — custom classes ` +
+            "may already be written. Open your FlutterFlow project to reconcile " +
+            "before retrying.",
+        );
+      }
+      // A verified pre-write rejection (compile gate, workspace, request
+      // validation) is still the runner's answer — FlutterFlow was never
+      // asked — so it is a plain failure, not a remoteRefusal.
+      throw new Error(message);
+    }
+  } catch (error) {
+    // An unconfirmed provisioning may have written classes on the runner after
+    // the client stopped waiting, so the cached pre-write project snapshot is
+    // stale — a later deploy must re-read the project instead of provisioning
+    // the same classes a second time.
+    if (error instanceof UnconfirmedDeployError) {
+      invalidateProjectSourceCache(apiClient);
+      // Every file this request may have written stays dirty until a fresh
+      // export observes that exact content with no verified write to explain
+      // it — the runner can keep working after the request is lost or the
+      // bound expires. While dirty, exports are never cached.
+      markProjectSourceDirty(apiClient, missingCodeFiles);
+      // A result event that arrives after the bound still proves this
+      // attempt's outcome: success converts its writes to verified (the sighting
+      // they produce is then attributable), a provable pre-write failure
+      // retires them outright.
+      provisionWork?.then(
+        (late) => {
+          if (late?.finalResultReceived && late.success) {
+            adjustProjectSourceDirty(apiClient, missingCodeFiles, {
+              uncertain: -1,
+              verified: 1,
+            });
+          } else if (
+            late?.finalResultReceived &&
+            isPreWriteRunnerFailure(late)
+          ) {
+            adjustProjectSourceDirty(apiClient, missingCodeFiles, {
+              uncertain: -1,
+            });
+          }
+        },
+        () => {},
+      );
+    }
+    throw error;
   }
 
   invalidateProjectSourceCache(apiClient);
+  // A confirmed result credits this request's writes as verified: export
+  // sightings of that content are attributable to it, so earlier uncertain
+  // writes of the same path stay dirty until their own landing is observed.
+  adjustProjectSourceDirty(apiClient, missingCodeFiles, { verified: 1 });
 
   if (result.verificationSkipped) {
     console.warn(`[custom class deploy] ${result.verificationSkipped}`);
@@ -2773,7 +3073,36 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
       );
     }
 
-    projectSourceCache.set(cacheKey, projectSource);
+    const dirty = projectSourceDirtyWrites.get(cacheKey);
+    if (dirty) {
+      // This fresh export is the authoritative read: an observed content
+      // first consumes a verified write credit (the sighting is explained by
+      // a confirmed provision), and only retires an uncertain write when no
+      // verified write could have produced it.
+      for (const [path, contents] of [...dirty]) {
+        const observed = projectSource.files.get(path);
+        if (observed !== undefined) {
+          const record = contents.get(observed);
+          if (record) {
+            if (record.verified > 0) record.verified -= 1;
+            else record.uncertain -= 1;
+            if (record.uncertain <= 0 && record.verified <= 0) {
+              contents.delete(observed);
+            }
+          }
+        }
+        if (contents.size === 0) dirty.delete(path);
+      }
+      if (dirty.size === 0) projectSourceDirtyWrites.delete(cacheKey);
+    }
+    // Pending pushes keep exports uncached too: a request still in flight can
+    // still land its writes.
+    if (
+      !projectSourceDirtyWrites.has(cacheKey) &&
+      !projectSourcePendingPushes.has(cacheKey)
+    ) {
+      projectSourceCache.set(cacheKey, projectSource);
+    }
   }
 
   const plan = await planDependencyChanges(
@@ -3390,8 +3719,7 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     if (result.success) {
       commitState.setSuccess({
@@ -3405,7 +3733,9 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     } else {
       const errorMsg =
         result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
-      throw new Error(errorMsg);
+      const refusal = new Error(errorMsg);
+      refusal.remoteRefusal = true;
+      throw refusal;
     }
 
     return {
@@ -3420,9 +3750,21 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     console.error("Commit failed:", error);
     commitState.setError(error);
 
+    // A lost or timed-out response after the push means the remote outcome is
+    // unknown — surface it as unconfirmed, never as a fabricated failure.
+    if (error instanceof UnconfirmedDeployError) {
+      return {
+        success: false,
+        unconfirmed: true,
+        error: error.message,
+        state: commitState.currentState,
+      };
+    }
+
     return {
       success: false,
       error: error.message,
+      remoteRefusal: error.remoteRefusal === true,
       state: commitState.currentState,
     };
   }
@@ -3503,6 +3845,10 @@ async function executeCommit(code, options = {}) {
       throw new Error("Invalid FlutterFlow Project ID format.");
     }
 
+    // Identity is captured as soon as the project is validated so an early
+    // unconfirmed outcome still names the target it was deploying to.
+    targetIdentity.projectId = projectId;
+
     // Step 5: Prepare file map
     const fileMap = new Map();
     fileMap.set(codeInfo.fileName, {
@@ -3547,7 +3893,6 @@ async function executeCommit(code, options = {}) {
       `Provision ${artifactName} custom class`,
       serializedYaml,
     );
-    targetIdentity.projectId = projectId;
     provisionClassesWritten = provisioning.provisionSucceeded === true;
 
     const syncMetadata = await buildApiSyncMetadata(
@@ -3582,8 +3927,7 @@ async function executeCommit(code, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     // Step 10: Handle result
     if (result.success) {
@@ -3611,6 +3955,7 @@ async function executeCommit(code, options = {}) {
         result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
       const errorWithMap = new Error(errorMsg);
       errorWithMap.errorMap = result.errorMap;
+      errorWithMap.remoteRefusal = true;
       throw errorWithMap;
     }
   } catch (error) {
@@ -3666,6 +4011,7 @@ async function executeCommit(code, options = {}) {
       success: false,
       error: error.message,
       errorMap: errorMap,
+      remoteRefusal: error.remoteRefusal === true,
       targetIdentity,
       state: commitState.currentState,
       elapsedTime: commitState.getElapsedTime(),
@@ -3731,6 +4077,10 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       throw new Error("Invalid FlutterFlow Project ID format.");
     }
 
+    // Identity is captured as soon as the project is validated so an early
+    // unconfirmed outcome still names the target it was deploying to.
+    targetIdentity.projectId = projectId;
+
     commitState.setState(CommitState.PUSHING);
     const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
@@ -3752,7 +4102,6 @@ async function executeBundleCommit(bundlePlan, options = {}) {
       `Provision ${bundlePlan.title} custom classes`,
       serializedYaml,
     );
-    targetIdentity.projectId = projectId;
     provisionClassesWritten = provisioning.provisionSucceeded === true;
     const syncMetadata = await buildApiSyncMetadata(
       provisioning.syncFileMap,
@@ -3784,8 +4133,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     if (result.success) {
       const metadata = {
@@ -3819,6 +4167,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     const errorMsg = result.errorMessage || getFlutterFlowErrorMessage(result.responseCode);
     const errorWithMap = new Error(errorMsg);
     errorWithMap.errorMap = result.errorMap;
+    errorWithMap.remoteRefusal = true;
     throw errorWithMap;
   } catch (error) {
     console.error("Bundle commit execution failed:", error);
@@ -6681,20 +7030,40 @@ function showCommitSuccessModal(result) {
   if (modal) openModal(modal);
 }
 
+// #step3-output lives inside permanently-hidden legacy containers, so writing
+// the failure only there shows the user nothing — the overlay closes and no
+// terminal appears. A definitive refusal therefore also populates the shared
+// terminal modal; the hidden render stays for the regenerate wiring and any
+// legacy surface still reading it.
 function showCommitFailureModal(result) {
   hideCommitProgress();
   showCommitError(result);
+  // Only a remote refusal is FlutterFlow's answer — a local failure (missing
+  // credentials, validation) never reached the server, so it must not be
+  // labelled a refusal. Either way a FAILED outcome is provably pre-write:
+  // nothing was applied and retrying after a fix is safe.
+  const remote = result.remoteRefusal === true;
+  populateCommitTerminalModal(result, {
+    heading: "Deploy failed",
+    title: remote
+      ? "FlutterFlow refused this deploy — nothing was confirmed written."
+      : "The deploy failed before FlutterFlow confirmed anything.",
+    guidance: remote
+      ? "Review the error and any per-file outcomes above, fix them in your code or in FlutterFlow, then deploy again. " +
+        "A refusal is definitive: no part of this deploy was applied, so retrying is safe once the problem is fixed."
+      : "Review the error above, fix it, then deploy again. The deploy stopped before a write was confirmed, so nothing was applied.",
+  });
 }
 
 /**
- * Populates the shared terminal modal for the two outcomes that are real but
- * are neither a clean success nor a clean failure: PARTIAL (some custom
- * classes were written, the remaining sync failed) and UNCONFIRMED (the remote
- * outcome is unknown because the client stopped waiting or the stream
- * dropped). It always shows the same target identity the user confirmed, the
- * per-file outcomes when the runner/push reported them, and reconciliation
- * guidance that never hides the manual FlutterFlow step of checking the
- * project.
+ * Populates the shared terminal modal for every outcome that is not a clean
+ * success: PARTIAL (some custom classes were written, the remaining sync
+ * failed), UNCONFIRMED (the remote outcome is unknown because the client
+ * stopped waiting or the stream dropped), and FAILED (a definitive refusal —
+ * nothing confirmed written). It always shows the same target identity the
+ * user confirmed, the per-file outcomes when the runner/push reported them,
+ * and reconciliation guidance that never hides the manual FlutterFlow step of
+ * checking the project.
  */
 function populateCommitTerminalModal(result, { heading, title, guidance }) {
   const identity = result.targetIdentity || {};
@@ -8389,6 +8758,77 @@ if (import.meta.env.DEV) {
       { warnings: [], ...checks },
       deps || {},
     );
+  // Lets the browser suite drive the real provisioning transport — fetch,
+  // stream read and UI bound — against routed fixtures, so a stalled or
+  // dropped connection can be proven to resolve as unconfirmed rather than
+  // hanging or fabricating a failure.
+  window.__CCC_PROVISION_CUSTOM_CLASSES__ = ({
+    fileMap,
+    remoteFiles,
+    commitMessage,
+    pubspecYaml,
+    uiTimeoutMs,
+  } = {}) =>
+    provisionMissingCodeFiles(
+      new FlutterFlowApiClient(
+        "test-key",
+        "ff-proj-0007",
+        "main",
+        FF_API_ENDPOINTS.production,
+      ),
+      new Map(Object.entries(fileMap || {})),
+      new Map(Object.entries(remoteFiles || {})),
+      commitMessage || "Provision test class",
+      pubspecYaml || "",
+      uiTimeoutMs,
+    );
+  // Lets the browser suite drive the real retry loop against routed endpoints,
+  // so transport-error exhaustion vs a definitive HTTP refusal can each be
+  // proven to produce their truthful outcome.
+  window.__CCC_PUSH_CODE_WITH_RETRY__ = (pushCodeRequest, maxRetries) =>
+    new FlutterFlowApiClient(
+      "test-key",
+      "ff-proj-0007",
+      "main",
+      FF_API_ENDPOINTS.production,
+    ).pushCodeWithRetry(pushCodeRequest, maxRetries);
+  // Lets the browser suite feed a crafted Response into the real sync-response
+  // parser, so a body that drops mid-read can be proven to classify on the
+  // received status instead of leaking the raw read error.
+  window.__CCC_PARSE_PUSH_RESPONSE__ = (response, bodyTimeoutMs) =>
+    parsePushCodeResponse(response, bodyTimeoutMs);
+  // Lets the browser suite drive the bounded push (fetch + parse under the UI
+  // timeout) with a short bound, so a stalled request provably settles as
+  // unconfirmed instead of hanging the deploy.
+  window.__CCC_PUSH_CODE_WITH_TIMEOUT__ = (pushCodeRequest, uiTimeoutMs) =>
+    pushCodeWithUiTimeout(
+      new FlutterFlowApiClient(
+        "test-key",
+        "ff-proj-0007",
+        "main",
+        FF_API_ENDPOINTS.production,
+      ),
+      pushCodeRequest,
+      uiTimeoutMs,
+    );
+  // Lets the browser suite seed/observe the project-source cache: a deploy
+  // that lost its provisioning result must leave the cache empty so the next
+  // one re-reads the project instead of re-provisioning written classes.
+  window.__CCC_RESOLVE_PROJECT_PUBSPEC__ = async (deps) => {
+    const result = await resolveProjectPubspec(
+      new FlutterFlowApiClient(
+        "test-key",
+        "ff-proj-0007",
+        "main",
+        FF_API_ENDPOINTS.production,
+      ),
+      deps || {},
+    );
+    return {
+      remoteFilePaths: [...result.remoteFiles.keys()],
+      added: result.added,
+    };
+  };
 }
 
 function copyResultsCode() {

@@ -15,7 +15,9 @@ export const DeployOutcome = Object.freeze({
   COMMITTED: "committed",
   /** Custom classes were written to FlutterFlow, but the remaining sync failed. */
   PARTIAL: "partial",
-  /** A definitive rejection: nothing was confirmed written. */
+  /** A definitive rejection before any write: nothing was confirmed written.
+   * Server errors (5xx) and lost responses are UNCONFIRMED instead — they
+   * cannot prove the write was refused. */
   FAILED: "failed",
   /** The remote outcome is unknown (UI wait expired or the stream dropped). */
   UNCONFIRMED: "unconfirmed",
@@ -36,6 +38,11 @@ export const DeployOutcome = Object.freeze({
  * but it never aborts or retries the in-flight remote write.
  */
 export const DEPLOY_UI_TIMEOUT_MS = 120_000;
+
+// A response's status alone classifies it; the body only carries detail.
+// A stalled error body must therefore never hold up a definitive refusal —
+// diagnostic/detail reads give up after this bound and classify on status.
+export const PUSH_BODY_READ_TIMEOUT_MS = 10_000;
 
 /**
  * Maps a deploy result to its single truthful terminal outcome.
@@ -62,4 +69,44 @@ export function classifyDeployResult(result) {
     return DeployOutcome.COMMITTED;
   }
   return DeployOutcome.FAILED;
+}
+
+/**
+ * A carve-out from the ordinary failure path: the client stopped waiting for
+ * (or lost the connection to) a remote write before a decision arrived, so the
+ * remote outcome is unknown. This is deliberately *not* a plain failure —
+ * nothing may be reported as failed or committed when we cannot know what the
+ * server did. Callers recognise it with `instanceof` or the `outcome` field,
+ * both of which `classifyDeployResult` maps to UNCONFIRMED.
+ */
+export class UnconfirmedDeployError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UnconfirmedDeployError";
+    this.outcome = DeployOutcome.UNCONFIRMED;
+  }
+}
+
+/**
+ * Builds the error thrown when a push to FlutterFlow has retried every
+ * endpoint without a definitive answer.
+ *
+ * Exhaustion is only reachable through attempts whose outcome is unknown — a
+ * dropped response (the request may have landed) or a 5xx (the server's own
+ * failure report, which can follow a write and never proves a refusal). A
+ * definitive refusal returns out of the retry loop before exhaustion, so an
+ * exhausted push is always UNCONFIRMED — never a fabricated failure.
+ *
+ * @param {Object} [attempts]
+ * @param {number} [attempts.httpStatus] - Last HTTP status the server
+ *   returned, when it returned one
+ * @returns {Error} Always an UnconfirmedDeployError
+ */
+export function exhaustedPushError({ httpStatus } = {}) {
+  return new UnconfirmedDeployError(
+    "Every FlutterFlow sync endpoint lost its response or ended in a server " +
+      `error${httpStatus ? ` (last: HTTP ${httpStatus})` : ""} — neither can ` +
+      "prove the push was refused, so it may already have been applied. Open " +
+      "the FlutterFlow project to reconcile before retrying.",
+  );
 }
