@@ -2648,6 +2648,38 @@ function withUiTimeout(promise, ms, onExpire) {
   });
 }
 
+/**
+ * Runs the sync push and its response parsing under one UI bound. A stalled
+ * fetch (headers never flush) or a stalled body read would otherwise park the
+ * deploy forever; on expiry the outcome is unconfirmed — the request may have
+ * been applied — and the in-flight write is left running rather than aborted.
+ * @param {FlutterFlowApiClient} apiClient - Configured API client
+ * @param {Object} pushRequest - The syncCustomCodeChanges request body
+ * @param {number} uiTimeoutMs - How long the UI waits for a decision
+ * @returns {Promise<Object>} The parsed push result
+ */
+async function pushCodeWithUiTimeout(
+  apiClient,
+  pushRequest,
+  uiTimeoutMs = DEPLOY_UI_TIMEOUT_MS,
+) {
+  return withUiTimeout(
+    (async () => {
+      const response = await apiClient.pushCode(pushRequest);
+      return parsePushCodeResponse(response);
+    })(),
+    uiTimeoutMs,
+    (resolve, reject) =>
+      reject(
+        new UnconfirmedDeployError(
+          "FlutterFlow did not answer the sync in time — the push may still " +
+            "have been applied. The outcome is not yet known: open your " +
+            "FlutterFlow project to reconcile before retrying the deploy.",
+        ),
+      ),
+  );
+}
+
 async function provisionMissingCodeFiles(
   apiClient,
   fileMap,
@@ -3472,8 +3504,7 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     if (result.success) {
       commitState.setSuccess({
@@ -3678,8 +3709,7 @@ async function executeCommit(code, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     // Step 10: Handle result
     if (result.success) {
@@ -3883,8 +3913,7 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     invalidateProjectSourceCache(apiClient);
 
     commitProgress.set("push");
-    const response = await apiClient.pushCode(pushRequest);
-    const result = await parsePushCodeResponse(response);
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
 
     if (result.success) {
       const metadata = {
@@ -8540,6 +8569,20 @@ if (import.meta.env.DEV) {
   // received status instead of leaking the raw read error.
   window.__CCC_PARSE_PUSH_RESPONSE__ = (response) =>
     parsePushCodeResponse(response);
+  // Lets the browser suite drive the bounded push (fetch + parse under the UI
+  // timeout) with a short bound, so a stalled request provably settles as
+  // unconfirmed instead of hanging the deploy.
+  window.__CCC_PUSH_CODE_WITH_TIMEOUT__ = (pushCodeRequest, uiTimeoutMs) =>
+    pushCodeWithUiTimeout(
+      new FlutterFlowApiClient(
+        "test-key",
+        "ff-proj-0007",
+        "main",
+        FF_API_ENDPOINTS.production,
+      ),
+      pushCodeRequest,
+      uiTimeoutMs,
+    );
   // Lets the browser suite seed/observe the project-source cache: a deploy
   // that lost its provisioning result must leave the cache empty so the next
   // one re-reads the project instead of re-provisioning written classes.

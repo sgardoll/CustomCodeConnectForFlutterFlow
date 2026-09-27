@@ -329,7 +329,8 @@ async function loadDeployHooks(page) {
   await page.waitForFunction(
     () =>
       typeof window.__CCC_PROVISION_CUSTOM_CLASSES__ === "function" &&
-      typeof window.__CCC_PUSH_CODE_WITH_RETRY__ === "function",
+      typeof window.__CCC_PUSH_CODE_WITH_RETRY__ === "function" &&
+      typeof window.__CCC_PUSH_CODE_WITH_TIMEOUT__ === "function",
   );
 }
 
@@ -537,6 +538,67 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.name).toBe("UnconfirmedDeployError");
     expect(outcome.outcome).toBe("unconfirmed");
     expect(outcome.message).toContain("HTTP 502");
+  });
+
+  test("a push that never answers settles unconfirmed instead of hanging", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // The request may have landed even though no response ever arrives, so the
+    // bounded wait must produce unconfirmed rather than parking the deploy.
+    const outcome = await page.evaluate(async () => {
+      window.fetch = () => new Promise(() => {});
+      try {
+        await window.__CCC_PUSH_CODE_WITH_TIMEOUT__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          75,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a sync body that stalls mid-read is unconfirmed under the same bound", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // Headers arrive and the first bytes flush, then nothing: json() neither
+    // resolves nor rejects, so without the bound the deploy would hang even
+    // though the accepted write may already be applied.
+    const outcome = await page.evaluate(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"succ'));
+        },
+      });
+      window.fetch = () =>
+        Promise.resolve(new Response(body, { status: 200 }));
+      try {
+        await window.__CCC_PUSH_CODE_WITH_TIMEOUT__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          75,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
   });
 
   test("a sync response whose body drops mid-read is unconfirmed, not failed", async ({ page }) => {
