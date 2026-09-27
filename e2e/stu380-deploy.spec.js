@@ -593,6 +593,46 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.message).toContain("HTTP 502");
   });
 
+  test("a discarded 500 response's diagnostic read consumes its own stream", async ({ page }) => {
+    await loadDeployHooks(page);
+    // Teeing a stalled body with clone() would leave the ORIGINAL branch
+    // feeding a reader that doesn't exist — a locked original proves the
+    // diagnostic read (and its bound-cancel) releases the real connection.
+    const outcome = await page.evaluate(async () => {
+      const pushed = [];
+      window.fetch = (url) => {
+        if (!String(url).includes("syncCustomCodeChanges")) {
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }
+        const response = new Response(
+          new ReadableStream({ start() {} }), // never emits, never closes
+          { status: 500 },
+        );
+        pushed.push(response);
+        return Promise.resolve(response);
+      };
+      try {
+        await window.__CCC_PUSH_CODE_WITH_RETRY__(
+          { project_id: "ff-proj-0007", zipped_custom_code: "eA==" },
+          1,
+        );
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          locked: pushed.map((r) => r.body.locked),
+          count: pushed.length,
+        };
+      }
+    });
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.count).toBe(2); // production + staging
+    expect(outcome.locked).toEqual([true, true]);
+  });
+
   test("a push that never answers settles unconfirmed instead of hanging", async ({ page }) => {
     await loadDeployHooks(page);
 
@@ -952,5 +992,76 @@ test.describe("STU-380 transport outcome regressions", () => {
 
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(2);
+  });
+
+  test("a late-settling provision invalidates a snapshot cached mid-write", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const projectZip = await zip.generateAsync({ type: "base64" });
+
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip: projectZip } }),
+      });
+    });
+    // The runner's stream opens but stays open past the UI bound — the
+    // underlying request keeps running (it may still write server-side).
+    // The test closes the stream afterwards to simulate late settlement.
+    await page.evaluate(() => {
+      const realFetch = window.fetch;
+      window.fetch = (url, ...args) => {
+        if (String(url).includes("deployCustomClasses")) {
+          const body = new ReadableStream({
+            start(controller) {
+              window.__CCC_PROVISION_STREAM__ = controller;
+            },
+          });
+          return Promise.resolve(
+            new Response(body, {
+              status: 200,
+              headers: { "Content-Type": "application/x-ndjson" },
+            }),
+          );
+        }
+        return realFetch(url, ...args);
+      };
+    });
+
+    const seeded = await page.evaluate(() =>
+      window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}),
+    );
+    expect(exportCalls).toBe(1);
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap, uiTimeoutMs: 60 }],
+    );
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+
+    // A deploy that starts while the runner is still working re-exports and
+    // caches a snapshot that can predate the write.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+
+    // When the provision request finally settles (runner finished, stream
+    // closed), that mid-write snapshot is dropped — the next deploy re-reads
+    // the project instead of provisioning the same class twice.
+    await page.evaluate(() => window.__CCC_PROVISION_STREAM__.close());
+    await expect
+      .poll(async () => {
+        await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+        return exportCalls;
+      })
+      .toBe(3);
   });
 });

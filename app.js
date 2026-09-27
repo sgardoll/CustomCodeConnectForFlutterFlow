@@ -2232,8 +2232,17 @@ class FlutterFlowApiClient {
         // The status alone classifies this response — the body read is
         // diagnostic only: detached so it can't block the refusal path, and
         // bounded+cancelled so a stalled body can't leave a reader (and its
-        // connection) open past the bound.
-        readBodyBounded(response.clone(), PUSH_BODY_READ_TIMEOUT_MS).then(
+        // connection) open past the bound. A response this loop will not
+        // hand back to the caller is read directly — teeing it with clone()
+        // would leave the original branch (and its connection) feeding a
+        // reader that doesn't exist; only the definitive-refusal path keeps
+        // the original body for parsePushCodeResponse, so it logs a clone.
+        const returnedToCaller =
+          response.status < 500 && !sawUncertainAttempt;
+        readBodyBounded(
+          returnedToCaller ? response.clone() : response,
+          PUSH_BODY_READ_TIMEOUT_MS,
+        ).then(
           (responseText) =>
             console.log(
               `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
@@ -2795,39 +2804,44 @@ async function provisionMissingCodeFiles(
   // any response is still an unknown outcome — the POST may have reached the
   // server — so it maps to unconfirmed, not failed.
   let result;
+  // Kept outside the try: when the UI bound expires the work keeps running on
+  // the runner, and its eventual settlement needs to invalidate the cache a
+  // second time (a snapshot exported mid-write is still stale).
+  let provisionWork;
   try {
-    result = await withUiTimeout(
-      (async () => {
-        let response;
-        try {
-          response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              apiKey: apiClient.apiKey,
-              projectId: apiClient.projectId,
-              baseUrl: apiClient.baseUrl,
-              commitMessage,
-              customClasses: missingCodeFiles,
-              verification,
-              stream: true,
-            }),
-          });
-        } catch (fetchError) {
-          throw new UnconfirmedDeployError(
-            "The provisioning request did not return a response. The deploy may have reached the " +
-              "FlutterFlow server — open your FlutterFlow project to reconcile before retrying.",
-          );
-        }
-        return readProvisionResponse(response, {
-          onPhase: (message) => {
-            if (progressLive) commitProgress.setSubstatus(message);
-          },
-          onLog: (message) => {
-            if (progressLive) console.log(`[custom class deploy] ${message}`);
-          },
+    provisionWork = (async () => {
+      let response;
+      try {
+        response = await fetch(FLUTTERFLOW_CLASS_PROVISION_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            apiKey: apiClient.apiKey,
+            projectId: apiClient.projectId,
+            baseUrl: apiClient.baseUrl,
+            commitMessage,
+            customClasses: missingCodeFiles,
+            verification,
+            stream: true,
+          }),
         });
-      })(),
+      } catch (fetchError) {
+        throw new UnconfirmedDeployError(
+          "The provisioning request did not return a response. The deploy may have reached the " +
+            "FlutterFlow server — open your FlutterFlow project to reconcile before retrying.",
+        );
+      }
+      return readProvisionResponse(response, {
+        onPhase: (message) => {
+          if (progressLive) commitProgress.setSubstatus(message);
+        },
+        onLog: (message) => {
+          if (progressLive) console.log(`[custom class deploy] ${message}`);
+        },
+      });
+    })();
+    result = await withUiTimeout(
+      provisionWork,
       uiTimeoutMs,
       (resolve, reject) => {
         progressLive = false;
@@ -2890,6 +2904,16 @@ async function provisionMissingCodeFiles(
     // the same classes a second time.
     if (error instanceof UnconfirmedDeployError) {
       invalidateProjectSourceCache(apiClient);
+      // The runner can still be writing after this browser stopped waiting.
+      // A deploy that starts in the meantime exports and caches a snapshot
+      // taken mid-write — stale the moment the runner's write lands. Drop the
+      // cache again when this request actually settles; snapshots cached
+      // after settlement postdate the write and are left alone. At worst a
+      // correct snapshot is dropped and the next deploy re-exports once.
+      provisionWork?.then(
+        () => invalidateProjectSourceCache(apiClient),
+        () => invalidateProjectSourceCache(apiClient),
+      );
     }
     throw error;
   }
