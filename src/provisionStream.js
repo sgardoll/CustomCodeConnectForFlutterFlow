@@ -40,26 +40,37 @@ export async function readProvisionResponse(response, handlers = {}) {
     finalResult = event;
   };
 
-  if (response.body?.getReader) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+  // A mid-stream read failure is a dropped connection, not a decision from
+  // the runner: it falls through to the no-final-result return below so the
+  // caller reports the outcome as unknown rather than throwing a fabricated
+  // failure.
+  let readError = null;
+  try {
+    if (response.body?.getReader) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const parsed = readNdjsonChunk(
-        buffer,
-        decoder.decode(value, { stream: true }),
-      );
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const parsed = readNdjsonChunk(
+          buffer,
+          decoder.decode(value, { stream: true }),
+        );
+        buffer = parsed.buffer;
+        parsed.events.forEach(handleEvent);
+      }
+    } else {
+      const parsed = readNdjsonChunk("", await response.text());
       buffer = parsed.buffer;
       parsed.events.forEach(handleEvent);
     }
-  } else {
-    const parsed = readNdjsonChunk("", await response.text());
-    buffer = parsed.buffer;
-    parsed.events.forEach(handleEvent);
+  } catch (error) {
+    readError = error;
   }
 
+  // Whatever arrived before the drop may still hold a complete trailing line —
+  // the result event itself — so the remainder is flushed before giving up.
   flushNdjsonBuffer(buffer).forEach(handleEvent);
 
   if (finalResult) {
@@ -78,12 +89,17 @@ export async function readProvisionResponse(response, handlers = {}) {
     // An explicit non-2xx HTTP response is a definitive server refusal, not an
     // unknown outcome. The caller must render it as FAILED; only an ok response
     // whose stream dropped before a result leaves the remote state genuinely
-    // unknown (UNCONFIRMED).
+    // unknown (UNCONFIRMED). This holds for the deploy runner: once streaming
+    // begins it emits every post-work failure as a `result` event under the
+    // already-sent 200 status, so a non-2xx can only arrive before the first
+    // remote write.
     httpRejected: !response.ok,
     httpStatus: response.status,
-    error: response.ok
-      ? "The FlutterFlow deploy runner closed the connection before it finished."
-      : `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`,
+    error: readError
+      ? "The connection to the FlutterFlow deploy runner dropped before it reported a result."
+      : response.ok
+        ? "The FlutterFlow deploy runner closed the connection before it finished."
+        : `FlutterFlow custom class provisioning failed (HTTP ${response.status}).`,
   };
 }
 

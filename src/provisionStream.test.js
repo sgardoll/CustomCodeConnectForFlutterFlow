@@ -185,6 +185,30 @@ test("a dropped stream on an OK response stays UNCONFIRMED (outcome truly unknow
   );
 });
 
+test("a mid-stream read failure is an unknown outcome, not a thrown error", async () => {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          '{"event":"phase","phase":"deploying","message":"Deploying..."}\n',
+        ),
+      );
+      controller.error(new Error("network reset"));
+    },
+  });
+
+  const result = await readProvisionResponse(new Response(body, { status: 200 }));
+
+  // The connection died mid-work: no result arrived, so the remote outcome is
+  // unknown — UNCONFIRMED, never a fabricated failure.
+  assert.equal(result.success, false);
+  assert.equal(result.finalResultReceived, false);
+  assert.equal(result.httpRejected, false);
+  assert.match(result.error, /dropped/);
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.UNCONFIRMED);
+});
+
 test("a delivered result is classified by the ordinary rule, not the rejection carve-out", async () => {
   const shipped = await readProvisionResponse(
     provisionAtStatus(

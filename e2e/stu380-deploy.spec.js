@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { applyDefaultRoutes } from "./fixtures/apiFixtures.js";
+import { applyDefaultRoutes, ENDPOINTS } from "./fixtures/apiFixtures.js";
 
 /**
  * STU-380 — truthful deployment terminal outcomes.
@@ -287,5 +287,125 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     await expect(
       page.locator("#commit-confirm-modal button[data-deploy-confirm]"),
     ).toBeEnabled();
+  });
+});
+
+// --- Transport-level regressions (Devin Review on PR #91) -------------------
+// These drive the real provisioning exchange and push retry loop through the
+// __CCC_* transport hooks against intercepted routes, so the classification of
+// lost/stalled responses is exercised in the code that ships — not a mock of
+// the classify step.
+
+async function loadDeployHooks(page) {
+  await page.addInitScript(() => {
+    localStorage.setItem("hasSeenWalkthrough", "true");
+  });
+  await applyDefaultRoutes(page);
+  await page.goto("/");
+  await page.waitForFunction(
+    () =>
+      typeof window.__CCC_PROVISION_CUSTOM_CLASSES__ === "function" &&
+      typeof window.__CCC_PUSH_CODE_WITH_RETRY__ === "function",
+  );
+}
+
+const newClassFileMap = {
+  "gauge_model.dart": {
+    artifactName: "GaugeModel",
+    content: "class GaugeModel { final int value; GaugeModel(this.value); }",
+    type: "C",
+    path: "lib/custom_code/gauge_model.dart",
+  },
+};
+
+async function settleAsOutcome(page, hook, args) {
+  return page.evaluate(
+    async ({ hook, args }) => {
+      try {
+        await window[hook](...args);
+        return { settled: "resolved" };
+      } catch (error) {
+        return {
+          settled: "rejected",
+          name: error.name,
+          outcome: error.outcome,
+          message: error.message,
+        };
+      }
+    },
+    { hook, args },
+  );
+}
+
+test.describe("STU-380 transport outcome regressions", () => {
+  test("a provisioning request that never gets headers hits the UI bound and reports unconfirmed", async ({ page }) => {
+    await loadDeployHooks(page);
+    // The runner accepts the connection but never flushes response headers —
+    // this must still resolve inside the UI bound, not hang the deploy.
+    await page.route(ENDPOINTS.deployCustomClasses, () => new Promise(() => {}));
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap, uiTimeoutMs: 60 }],
+    );
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a provisioning stream that ends without a result is unconfirmed, not failed", async ({ page }) => {
+    await loadDeployHooks(page);
+    await page.route(ENDPOINTS.deployCustomClasses, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body: '{"event":"phase","phase":"deploying","message":"Deploying..."}\n',
+      });
+    });
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap }],
+    );
+
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a push that loses every response is unconfirmed, not a fabricated partial/failure", async ({ page }) => {
+    await loadDeployHooks(page);
+    // Both sync endpoints drop the request without a response — the push may
+    // have reached FlutterFlow, so the outcome is unknown.
+    await page.route("**/syncCustomCodeChanges", (route) => route.abort());
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PUSH_CODE_WITH_RETRY__",
+      [{ project_id: "ff-proj-0007", zipped_custom_code: "eA==" }, 1],
+    );
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+  });
+
+  test("a push refused with HTTP errors on every endpoint is a definitive failure", async ({ page }) => {
+    await loadDeployHooks(page);
+    await page.route("**/syncCustomCodeChanges", async (route) => {
+      await route.fulfill({ status: 500, body: "server error" });
+    });
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PUSH_CODE_WITH_RETRY__",
+      [{ project_id: "ff-proj-0007", zipped_custom_code: "eA==" }, 1],
+    );
+
+    expect(outcome.settled).toBe("rejected");
+    expect(outcome.name).not.toBe("UnconfirmedDeployError");
+    expect(outcome.message).toContain("HTTP 500");
   });
 });

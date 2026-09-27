@@ -4,6 +4,8 @@ import {
   classifyDeployResult,
   DeployOutcome,
   DEPLOY_UI_TIMEOUT_MS,
+  exhaustedPushError,
+  UnconfirmedDeployError,
 } from "./deployOutcome.js";
 
 // --- Falsification harness -------------------------------------------------
@@ -84,6 +86,31 @@ test("an unconfirmed marker beats every other signal", () => {
     DeployOutcome.FAILED,
     (r) => { r.outcome = DeployOutcome.FAILED; return r; },
   );
+});
+
+test("push retries exhausted by a lost response are unconfirmed, never a fabricated failure", () => {
+  // At least one attempt rejected without an HTTP response: the write may have
+  // reached FlutterFlow, so the terminal outcome must be UNCONFIRMED — a plain
+  // failure would lie about a deploy that might have committed.
+  const error = exhaustedPushError({ sawTransportError: true });
+  assert.ok(error instanceof UnconfirmedDeployError);
+  assert.equal(error.outcome, DeployOutcome.UNCONFIRMED);
+  assert.equal(classifyDeployResult({ outcome: error.outcome }), DeployOutcome.UNCONFIRMED);
+
+  // Falsification: marking the same exhaustion as a definitive refusal must
+  // flip the outcome it produces.
+  assert.equal(
+    exhaustedPushError({ sawTransportError: false }) instanceof UnconfirmedDeployError,
+    false,
+  );
+});
+
+test("push retries refused on every endpoint are a definitive failure", () => {
+  const error = exhaustedPushError({ sawTransportError: false, httpStatus: 500 });
+  assert.equal(error instanceof UnconfirmedDeployError, false);
+  assert.match(error.message, /HTTP 500/);
+  // And the result shape it drives classifies as FAILED, not UNCONFIRMED.
+  assert.equal(classifyDeployResult({ success: false, error: error.message }), DeployOutcome.FAILED);
 });
 
 test("the UI waiting bound is finite and below the documented server deadline", () => {
