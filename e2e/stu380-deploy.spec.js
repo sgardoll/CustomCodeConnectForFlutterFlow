@@ -755,6 +755,35 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.parsed.responseCode).toBe(403);
   });
 
+  test("a refusal whose body stalls still reports its status inside the bound", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    // A 4xx that sends a byte then keeps the body open is still a definitive
+    // refusal — the status alone decides, so the parse must not wait on the
+    // body past the diagnostic bound.
+    const outcome = await page.evaluate(async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          // Never closes — the stalled body must not block classification.
+        },
+      });
+      try {
+        const parsed = await window.__CCC_PARSE_PUSH_RESPONSE__(
+          new Response(body, { status: 403 }),
+          50,
+        );
+        return { settled: "resolved", parsed };
+      } catch (error) {
+        return { settled: "rejected", name: error.name, message: error.message };
+      }
+    });
+
+    expect(outcome.settled).toBe("resolved");
+    expect(outcome.parsed.success).toBe(false);
+    expect(outcome.parsed.responseCode).toBe(403);
+  });
+
   test("a server error with an unreadable body still lands as unconfirmed", async ({ page }) => {
     await loadDeployHooks(page);
 
@@ -863,6 +892,53 @@ test.describe("STU-380 transport outcome regressions", () => {
 
     // The next deploy must re-export the project — a stale snapshot would lack
     // gauge_model.dart and provision it a second time.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+  });
+
+  test("a runner failure after deploy began also drops the cached snapshot", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const projectZip = await zip.generateAsync({ type: "base64" });
+
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip: projectZip } }),
+      });
+    });
+    // The runner answers definitively, but only after the deploy phase began —
+    // classes may have been written, so the snapshot is stale too.
+    await page.route(ENDPOINTS.deployCustomClasses, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/x-ndjson",
+        body:
+          '{"event":"phase","phase":"deploy_start","message":"Deploying 1 custom class to FlutterFlow..."}\n' +
+          '{"event":"result","success":false,"error":"FlutterFlow AI DSL deploy failed.","exitCode":1}\n',
+      });
+    });
+
+    const seeded = await page.evaluate(() =>
+      window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}),
+    );
+    expect(exportCalls).toBe(1);
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap }],
+    );
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(2);
   });

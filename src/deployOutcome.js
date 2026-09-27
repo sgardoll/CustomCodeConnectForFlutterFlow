@@ -39,6 +39,11 @@ export const DeployOutcome = Object.freeze({
  */
 export const DEPLOY_UI_TIMEOUT_MS = 120_000;
 
+// A response's status alone classifies it; the body only carries detail.
+// A stalled error body must therefore never hold up a definitive refusal —
+// diagnostic/detail reads give up after this bound and classify on status.
+export const PUSH_BODY_READ_TIMEOUT_MS = 10_000;
+
 /**
  * Maps a deploy result to its single truthful terminal outcome.
  *

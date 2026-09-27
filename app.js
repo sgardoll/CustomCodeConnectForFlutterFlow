@@ -66,6 +66,7 @@ import {
   DeployOutcome,
   DEPLOY_UI_TIMEOUT_MS,
   exhaustedPushError,
+  PUSH_BODY_READ_TIMEOUT_MS,
   UnconfirmedDeployError,
 } from "./src/deployOutcome.js";
 import { buildFlutterFlowSyncMetadata } from "./src/flutterFlowSyncMetadata.js";
@@ -2228,15 +2229,22 @@ class FlutterFlowApiClient {
         }
 
         lastHttpStatus = response.status;
-        let responseText;
-        try {
-          responseText = await response.clone().text();
-        } catch (readError) {
-          responseText = "(unreadable response body)";
-        }
-        console.log(
-          `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
-        );
+        // The status alone classifies this response — the body read is
+        // diagnostic only, so it runs detached: a stalled error body must
+        // not hide a definitive refusal behind the UI bound.
+        response
+          .clone()
+          .text()
+          .then(
+            (responseText) =>
+              console.log(
+                `Push to ${baseUrl} returned ${response.status}: ${responseText}`,
+              ),
+            () =>
+              console.log(
+                `Push to ${baseUrl} returned ${response.status} (unreadable response body)`,
+              ),
+          );
 
         // A 5xx is the server's own failure report: it can be raised after
         // the write was applied, so it can never prove a refusal.
@@ -2374,12 +2382,23 @@ class FlutterFlowApiClient {
  * @param {Response} response - Fetch response object
  * @returns {Promise<Object>} Parsed result with file warnings
  */
-async function parsePushCodeResponse(response) {
+async function parsePushCodeResponse(
+  response,
+  bodyTimeoutMs = PUSH_BODY_READ_TIMEOUT_MS,
+) {
   const originalResponse = response.clone();
   let jsonResult;
 
   try {
-    jsonResult = await response.json();
+    // The status alone classifies the response — the body only carries the
+    // error detail, so this read is bounded: a stalled body must not hide a
+    // definitive refusal (or an acceptance) behind the outer UI bound.
+    jsonResult = await withUiTimeout(
+      response.json(),
+      bodyTimeoutMs,
+      (resolve, reject) =>
+        reject(new Error("The push response body stalled before it finished.")),
+    );
   } catch (error) {
     // Both reads share the same connection: a body dropped mid-flight makes
     // the clone reject too. The received status is still definitive — a non-ok
@@ -2387,7 +2406,11 @@ async function parsePushCodeResponse(response) {
     // before the body was lost.
     let text = "";
     try {
-      text = await originalResponse.text();
+      text = await withUiTimeout(
+        originalResponse.text(),
+        bodyTimeoutMs,
+        (resolve, reject) => reject(new Error("stalled")),
+      );
     } catch (readError) {
       // The body never arrived; classify on the status alone.
     }
@@ -2805,18 +2828,38 @@ async function provisionMissingCodeFiles(
     // remote state genuinely unknown and must be reported UNCONFIRMED.
     if (!result.finalResultReceived) {
       if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
-        const refusal = new Error(
+        // Not marked remoteRefusal: the refusal comes from our deploy runner,
+        // not from FlutterFlow — its answer was never requested.
+        throw new Error(
           result.error ||
             `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
         );
-        refusal.remoteRefusal = true;
-        throw refusal;
       }
       throw new UnconfirmedDeployError(
         "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
           "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
           "before retrying.",
       );
+    }
+
+    if (!result.success) {
+      const details = result.details ? ` ${result.details}` : "";
+      const message = `${result.error || "FlutterFlow custom class provisioning failed."}${details}`;
+      // A runner-reported failure is only a definitive refusal when it provably
+      // precedes the write; a failure after the deploy began can follow classes
+      // already uploaded, so it must be reported unconfirmed (and the catch
+      // below drops the stale snapshot).
+      if (deployOutcomeOfStreamResult(result) === DeployOutcome.UNCONFIRMED) {
+        throw new UnconfirmedDeployError(
+          `${message} The failure arrived after the deploy began — custom classes ` +
+            "may already be written. Open your FlutterFlow project to reconcile " +
+            "before retrying.",
+        );
+      }
+      // A verified pre-write rejection (compile gate, workspace, request
+      // validation) is still the runner's answer — FlutterFlow was never
+      // asked — so it is a plain failure, not a remoteRefusal.
+      throw new Error(message);
     }
   } catch (error) {
     // An unconfirmed provisioning may have written classes on the runner after
@@ -2827,24 +2870,6 @@ async function provisionMissingCodeFiles(
       invalidateProjectSourceCache(apiClient);
     }
     throw error;
-  }
-
-  if (!result.success) {
-    const details = result.details ? ` ${result.details}` : "";
-    const message = `${result.error || "FlutterFlow custom class provisioning failed."}${details}`;
-    // A runner-reported failure is only a definitive refusal when it provably
-    // precedes the write; a failure after the deploy began can follow classes
-    // already uploaded, so it must be reported unconfirmed.
-    if (deployOutcomeOfStreamResult(result) === DeployOutcome.UNCONFIRMED) {
-      throw new UnconfirmedDeployError(
-        `${message} The failure arrived after the deploy began — custom classes ` +
-          "may already be written. Open your FlutterFlow project to reconcile " +
-          "before retrying.",
-      );
-    }
-    const refusal = new Error(message);
-    refusal.remoteRefusal = true;
-    throw refusal;
   }
 
   invalidateProjectSourceCache(apiClient);
@@ -8608,8 +8633,8 @@ if (import.meta.env.DEV) {
   // Lets the browser suite feed a crafted Response into the real sync-response
   // parser, so a body that drops mid-read can be proven to classify on the
   // received status instead of leaking the raw read error.
-  window.__CCC_PARSE_PUSH_RESPONSE__ = (response) =>
-    parsePushCodeResponse(response);
+  window.__CCC_PARSE_PUSH_RESPONSE__ = (response, bodyTimeoutMs) =>
+    parsePushCodeResponse(response, bodyTimeoutMs);
   // Lets the browser suite drive the bounded push (fetch + parse under the UI
   // timeout) with a short bound, so a stalled request provably settles as
   // unconfirmed instead of hanging the deploy.
