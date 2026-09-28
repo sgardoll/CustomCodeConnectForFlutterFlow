@@ -103,16 +103,43 @@ async function clickInsideWalkthrough(page, selector) {
   await target.click();
 }
 
+// The identity response drives the startup usage decision: resolveIdentity
+// persists the metered count and, in the same synchronous block, runs
+// updateUsageDisplay — which surfaces the exhausted-paywall state and, for an
+// out-of-runs free user, closes any open walkthrough (showPaywallExhausted).
+// Opening the tour while that decision is still in flight lets the async close
+// land after the click and take the just-opened tour with it, so the open never
+// settles. Wait for the persisted count (written in the same synchronous block
+// as the decision) before clicking; this is app-readiness, not a fixed sleep,
+// and it holds for guests and signed-in users alike.
+async function waitForUsageDecision(page) {
+  await page.waitForFunction(
+    () => {
+      try {
+        const raw = localStorage.getItem("ccc_usage");
+        return !!raw && Number.isFinite(JSON.parse(raw).count);
+      } catch {
+        return false;
+      }
+    },
+    null,
+    { timeout: 8000 },
+  );
+}
+
 // Reopen the tutorial from the nav. On a cold start the deferred app.js module
 // may not have wired openWalkthroughModal yet, so a click can land while the
 // handler is undefined and silently navigate to #tutorial instead of opening
 // the modal — wait for the wire-up (state) before clicking, then wait for the
-// open animation to finish.
+// open animation to finish. The startup usage decision is awaited too: the
+// paywall it may surface closes an open walkthrough, so a click that races it
+// would be undone asynchronously.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
     { timeout: 8000 },
   );
+  await waitForUsageDecision(page);
   await page.click("#wt-reopen");
   await waitForWalkthroughOpen(page);
 }
