@@ -854,7 +854,13 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     // The recap is the left column on desktop, so it leads the DOM and the
     // tab order: Edit prompt is reached before the active stage button, and
     // focus never travels from the right column back to the left.
-    await page.evaluate(() => document.activeElement?.blur());
+    // Anchor the walk on a known element rather than blurring: blur() does not
+    // move Chromium's sequential-focus-navigation starting point, so the sweep
+    // would resume wherever focus last was and wrap around before reaching the
+    // recap. The avatar is the last tabbable ahead of the panel, so the walk
+    // enters at the recap -- mirroring the stacked test's #progress-stage-count
+    // anchor, which is likewise the tabbable just before the first one it wants.
+    await page.locator("#topbar-avatar").focus();
     const focusOrder = await tabFocusOrder(page, ["pipeline-edit-prompt", "pdot-1"]);
     expect(focusOrder).toContain("pipeline-edit-prompt");
     expect(focusOrder).toContain("pdot-1");
@@ -904,6 +910,10 @@ test.describe("Holding window matches the canonical pipeline view", () => {
 
     // Desktop -> stacked: the recap moves behind the view and reparenting must
     // not drop the focus its Edit prompt was holding.
+    // Wait for the composer -> pipeline morph: until .pipeline-view is visible
+    // the Edit prompt is still 0x0, so focus() lands on nothing and the send
+    // button simply blurs to BODY.
+    await expect(page.locator(".pipeline-view")).toBeVisible();
     await page.locator("#pipeline-edit-prompt").focus();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect
