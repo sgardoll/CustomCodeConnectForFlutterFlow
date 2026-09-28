@@ -172,7 +172,12 @@ test.describe("the dialog stays wired to the generation request", () => {
 
     await page.locator("#hero-send").click();
     await expect(page.locator("#generation-stage")).toBeVisible({ timeout: 30000 });
-    expect(generatorModels).toEqual(["anthropic/claude-opus-5"]);
+    // The stage is shown the moment the run starts — before the architect
+    // round trip, let alone the generator POST — so the capture has to be
+    // polled until the generator request actually lands.
+    await expect
+      .poll(() => generatorModels, { timeout: 30000 })
+      .toEqual(["anthropic/claude-opus-5"]);
   });
 
   test("switching models updates the image-capability generation option", async ({

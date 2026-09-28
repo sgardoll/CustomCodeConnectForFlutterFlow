@@ -21,13 +21,7 @@ function focusableElements(modal) {
 function setBackgroundInert(modal) {
   for (const child of document.body.children) {
     if (child === modal || child.tagName === "SCRIPT") continue;
-    // Record each child's pre-modal state once. A repeated open of the already
-    // active modal runs this again while the background is already inert, and
-    // re-recording would overwrite the original state with the inert one — so
-    // the eventual close would never restore the background.
-    if (!inertState.has(child)) {
-      inertState.set(child, { inert: child.inert, ariaHidden: child.getAttribute("aria-hidden") });
-    }
+    inertState.set(child, { inert: child.inert, ariaHidden: child.getAttribute("aria-hidden") });
     child.inert = true;
     child.setAttribute("aria-hidden", "true");
   }
@@ -50,32 +44,28 @@ export function openModal(modalOrId, options = {}) {
   const modal = typeof modalOrId === "string" ? document.getElementById(modalOrId) : modalOrId;
   if (!modal) return false;
 
-  // A repeated open of the already active modal (the walkthrough's blur and
-  // delayed Tab handlers both do this) must be idempotent: it keeps the return
-  // target and the saved overflow from the first open.
-  const isReopen = activeModal === modal;
-  const replacing = activeModal && !isReopen ? activeModal : null;
-  const candidate = options.trigger || document.activeElement;
+  const replacedModal = activeModal && activeModal !== modal ? activeModal : null;
+  const inheritedTarget = returnTarget;
+  if (replacedModal) closeModal(replacedModal, { restoreFocus: false, force: true });
 
-  if (replacing) {
-    // Capture the replaced dialog's return target before closeModal clears it.
-    // Focus must never be restored into the dialog a replacement hides, so an
-    // active element that lives in the replaced dialog falls back to whatever
-    // opened that dialog.
-    const fallback = returnTarget;
-    closeModal(replacing, { restoreFocus: false, force: true });
-    returnTarget = candidate && replacing.contains(candidate) ? fallback : candidate;
-  } else if (!isReopen) {
-    returnTarget = candidate;
+  if (activeModal !== modal) {
+    // First open: record where focus and page scrolling return to on close.
+    // A trigger inside a dialog being closed (or inside this modal on a
+    // programmatic reopen) would strand focus in hidden content, so chain
+    // back to the previous dialog's own return target instead.
+    let target = options.trigger || document.activeElement;
+    if (target && (replacedModal?.contains(target) || modal.contains(target))) {
+      target = inheritedTarget;
+    }
+    returnTarget = target;
+    savedOverflow = document.body.style.overflow;
+    setBackgroundInert(modal);
+    document.body.style.overflow = "hidden";
   }
+  // Reopening the active dialog keeps the original captured state: a second
+  // capture would save the inertness and "hidden" overflow it just applied.
 
   activeModal = modal;
-  // Only the first open saves the page's previous overflow. Saving again while
-  // this modal holds the page locked would save "hidden" and restore it on
-  // close, leaving the page unable to scroll.
-  if (!isReopen) savedOverflow = document.body.style.overflow;
-  setBackgroundInert(modal);
-  document.body.style.overflow = "hidden";
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
   const content = modal.querySelector(".modal-content");
@@ -99,6 +89,11 @@ export function closeModal(modalOrId, options = {}) {
   if (!modal || (!options.force && !isDismissible(modal))) return false;
   modal.classList.remove("open");
   modal.setAttribute("aria-hidden", "true");
+  if (modal !== activeModal) {
+    // A background dialog closing must not release the active dialog's
+    // focus trap, inert background, or saved page scroll.
+    return true;
+  }
   restoreBackground();
   document.body.style.overflow = savedOverflow;
   activeModal = null;
@@ -106,6 +101,10 @@ export function closeModal(modalOrId, options = {}) {
   returnTarget = null;
   if (options.restoreFocus !== false && target?.isConnected) target.focus({ preventScroll: true });
   return true;
+}
+
+export function hasActiveModal() {
+  return Boolean(activeModal);
 }
 
 export function setModalPending(modalOrId, pending, message = "Operation in progress") {

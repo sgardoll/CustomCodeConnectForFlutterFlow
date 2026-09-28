@@ -1,6 +1,7 @@
 import posthog from "posthog-js";
 import {
   closeModal,
+  hasActiveModal,
   initializeModalShells,
   openModal,
   setModalPending,
@@ -1435,13 +1436,20 @@ async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
   const enteredKey = flutterflowInput.value.trim();
+  const selectedProjectId = projectSelect?.value.trim() || "";
 
   // Only save if user entered a new value
   if (enteredKey) {
+    // A different key serves a different project set, so without a fresh
+    // selection the stored project id belongs to the old key and is not a
+    // trustworthy deploy target.
+    const previousKey = await getApiKey("flutterflow").catch(() => "");
     await saveApiKey("flutterflow", enteredKey);
+    if (enteredKey !== previousKey && !selectedProjectId) {
+      clearStoredProjectSelection();
+    }
   }
 
-  const selectedProjectId = projectSelect?.value.trim() || "";
   if (selectedProjectId) {
     if (!validateFlutterFlowProjectId(selectedProjectId)) {
       showToast("The selected FlutterFlow project has an unexpected ID format.", "error");
@@ -5899,12 +5907,9 @@ function hidePaywallExhausted() {
 function showPaywallExhausted(count, limit, options = {}) {
   setGenerationStageVisible(true);
 
-  // The exhausted surface also renders passively whenever usage is re-read —
-  // startup identity resolution and post-run reconciliation both land here via
-  // updateUsageDisplay. Only a run attempt may take an open tour away: when the
-  // async startup decision resolves to exhausted after the user has opened the
-  // tour, the tour must survive it. canRunPipeline passes dismissWalkthrough
-  // because an out-of-runs run must surface the paywall in place of the tour.
+  // Only a run attempt may take an open tour away. canRunPipeline passes
+  // dismissWalkthrough because an out-of-runs run must surface the paywall in
+  // place of the tour.
   if (options.dismissWalkthrough) {
     const walkthroughModal = document.getElementById('walkthrough-modal')
     if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
@@ -6215,7 +6220,10 @@ function updateUsageDisplay() {
 
   const { count } = getUsage()
   const limit = getRunLimit()
-  if (count >= limit && !pipelineState.isRunning) {
+  // Auto-surfacing the paywall swaps the stage and closes the walkthrough, so
+  // defer it while a dialog is open; the next usage update or run attempt
+  // still gates on the limit.
+  if (count >= limit && !pipelineState.isRunning && !hasActiveModal()) {
     showPaywallExhausted(count, limit)
   } else {
     hidePaywallExhausted()
@@ -6237,6 +6245,7 @@ async function fetchSubscription(options = {}) {
   }
 
   subscriptionState = { ...subscriptionState, isLoading: true, error: null }
+  const requestSessionToken = authState.sessionToken
 
   const cached = localStorage.getItem(SUBSCRIPTION_CACHE_KEY)
   if (!force && cached) {
@@ -6261,6 +6270,13 @@ async function fetchSubscription(options = {}) {
 
     const data = await res.json()
 
+    // The session ended or rotated while the request was in flight: this
+    // response belongs to the old account and must not overwrite the plan
+    // state sign-out already reset.
+    if (!authState.isVerified || authState.sessionToken !== requestSessionToken) {
+      return
+    }
+
     if (data.error) {
       const isAuthError = ['unauthorized', 'invalid session', 'expired session'].some(message => String(data.error).toLowerCase().includes(message))
       if (isAuthError) {
@@ -6280,6 +6296,9 @@ async function fetchSubscription(options = {}) {
       ts: Date.now()
     }))
   } catch (err) {
+    if (!authState.isVerified || authState.sessionToken !== requestSessionToken) {
+      return
+    }
     console.error('fetchSubscription failed:', err)
     subscriptionState = { ...subscriptionState, isLoading: false, isResolved: false, error: err.message }
   }
@@ -6746,13 +6765,19 @@ document.addEventListener("DOMContentLoaded", async () => {
       state === CommitState.VALIDATING ||
       state === CommitState.PUSHING
     ) {
+      // A hide still pending from the previous commit's terminal state must
+      // not close the overlay this commit just opened.
+      cancelCommitProgressHide();
       // Only open the overlay for flows that didn't open it themselves;
       // re-opening mid-commit would reset the progress back to step one.
       if (!commitProgress.phaseId) showCommitProgress();
       updateProgressFromState(state);
     } else if (state === CommitState.SUCCESS || state === CommitState.ERROR) {
       updateProgressFromState(state);
-      setTimeout(hideCommitProgress, 1000);
+      commitProgressHideTimer = setTimeout(() => {
+        commitProgressHideTimer = null;
+        hideCommitProgress();
+      }, 1000);
     }
   });
 
@@ -7113,8 +7138,9 @@ function populateCommitTerminalModal(result, { heading, title, guidance }) {
   if (errorMap && !(errorMap instanceof Map)) {
     errorMap = new Map(Object.entries(errorMap));
   }
-  if (fileList && errorMap && errorMap.size > 0) {
-    fileList.innerHTML = [...errorMap.entries()]
+  const fileOutcomeItems = fileList?.querySelector("ul");
+  if (fileList && fileOutcomeItems && errorMap && errorMap.size > 0) {
+    fileOutcomeItems.innerHTML = [...errorMap.entries()]
       .map(
         ([file, info]) =>
           `<li class="py-1.5 border-b border-gray-100 last:border-0 text-xs text-gray-700"><span class="font-semibold">${escapeHtml(
@@ -7124,6 +7150,7 @@ function populateCommitTerminalModal(result, { heading, title, guidance }) {
       .join("");
     fileList.classList.remove("hidden");
   } else if (fileList) {
+    if (fileOutcomeItems) fileOutcomeItems.innerHTML = "";
     fileList.classList.add("hidden");
   }
 
@@ -7238,6 +7265,15 @@ const PROVISION_SUBSTATUS = [
   { after: 100, text: "Still working — this can take a couple of minutes..." },
 ];
 
+// The delayed hide a terminal commit state schedules. A commit that starts
+// before it fires still needs the overlay, so opening cancels it.
+let commitProgressHideTimer = null;
+
+function cancelCommitProgressHide() {
+  if (commitProgressHideTimer) clearTimeout(commitProgressHideTimer);
+  commitProgressHideTimer = null;
+}
+
 const commitProgress = {
   sequence: [],
   phaseId: null,
@@ -7253,6 +7289,7 @@ const commitProgress = {
    *   provisioning step, which is only run for CodeFile artifacts.
    */
   start({ withProvisioning = false } = {}) {
+    cancelCommitProgressHide();
     this.sequence = ["prepare", "validate", "project"];
     if (withProvisioning) this.sequence.push("provision");
     this.sequence.push("package", "push", "done");
