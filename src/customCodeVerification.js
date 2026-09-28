@@ -110,8 +110,9 @@ function collect(declared, into, sdkPackages) {
  * @returns {{
  *   sdkConstraint: string,
  *   dependencies: Object<string, string>,
- *   overrides: Object<string, string>,
+ *   dependencyOverrides: Object<string, string>,
  *   sdkPackages: string[],
+ *   sdkOverrides: string[],
  *   availablePackages: Set<string>,
  *   unrepresentable: string[],
  *   unrepresentableOverrides: string[],
@@ -119,13 +120,18 @@ function collect(declared, into, sdkPackages) {
  */
 export function buildAnalysisManifest(projectPubspecYaml) {
   const sdkPackages = new Set();
+  const sdkOverrides = new Set();
   const dependencies = {};
-  const overrides = {};
+  const dependencyOverrides = {};
 
   // The two blocks are kept apart: a direct dependency only reaches a class
   // that names it, but a dependency_overrides entry rewrites resolution for
   // every package in the graph that depends on the overridden name, so the
-  // consequences of dropping one are much wider than dropping the other.
+  // consequences of dropping one are much wider than dropping the other. SDK
+  // entries are kept apart too: the runner emits sdkPackages under
+  // `dependencies:` and sdkOverrides under `dependency_overrides:`, and an
+  // `sdk:` override sharing a name with a scalar dependency must land in the
+  // second list or the generated pubspec declares the name twice.
   const unrepresentableDependencies = collect(
     parseExistingDependencies(projectPubspecYaml),
     dependencies,
@@ -133,8 +139,8 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   );
   const unrepresentableOverrides = collect(
     parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
-    overrides,
-    sdkPackages,
+    dependencyOverrides,
+    sdkOverrides,
   );
   const unrepresentable = [
     ...unrepresentableDependencies,
@@ -151,8 +157,9 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   return {
     sdkConstraint: unquoteConstraint(sdk) || FALLBACK_SDK_CONSTRAINT,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages: [...sdkPackages].sort(),
+    sdkOverrides: [...sdkOverrides].sort(),
     availablePackages,
     unrepresentable,
     unrepresentableOverrides,
@@ -207,14 +214,21 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
     sdkConstraint,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages,
+    sdkOverrides,
     availablePackages,
     unrepresentable,
     unrepresentableOverrides,
   } = buildAnalysisManifest(projectPubspecYaml);
 
-  const manifest = { sdkConstraint, dependencies, overrides, sdkPackages };
+  const manifest = {
+    sdkConstraint,
+    dependencies,
+    dependencyOverrides,
+    sdkPackages,
+    sdkOverrides,
+  };
   const sources = [];
   const skipped = [];
 

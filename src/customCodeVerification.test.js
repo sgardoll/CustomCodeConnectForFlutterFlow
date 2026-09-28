@@ -91,7 +91,7 @@ test("the manifest carries the project's own constraints and SDK range", () => {
 test("the manifest carries dependency_overrides, which change resolved APIs", () => {
   const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
 
-  assert.deepEqual(manifest.overrides, { intl: "0.20.1" });
+  assert.deepEqual(manifest.dependencyOverrides, { intl: "0.20.1" });
 });
 
 test("the manifest is structured data, never pubspec.yaml text", () => {
@@ -294,6 +294,48 @@ test("a version-constraint override is carried and does not skip anything", () =
   assert.deepEqual(plan.skipped, []);
 });
 
+test("an sdk: override keeps its own channel instead of duplicating a scalar dependency", () => {
+  // A project that declares `flutter_web_plugins: any` and then overrides it
+  // to `{sdk: flutter}` must not emit the name under `dependencies:` twice -
+  // the generated pubspec would carry a duplicate key and `pub get` would
+  // fail, skipping the check over a manifest bug, not the project's code.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: any
+
+dependency_overrides:
+  flutter_web_plugins:
+    sdk: flutter
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  assert.equal(manifest.dependencies.flutter_web_plugins, "any");
+  assert.deepEqual(manifest.sdkPackages, ["flutter"]);
+  assert.deepEqual(manifest.sdkOverrides, ["flutter_web_plugins"]);
+  assert.deepEqual(manifest.dependencyOverrides, {});
+  assert.deepEqual(manifest.unrepresentable, []);
+
+  // The name is still importable: the override only changes where it resolves
+  // from, not whether a class may name it.
+  const usesWebPlugins = `import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+
+class RegistersPlugin {}
+`;
+  const plan = planCustomCodeVerification(
+    [{ className: "RegistersPlugin", content: usesWebPlugins }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test("a conditional import of the unreproducible dependency is skipped, not refused", () => {
   // `if (...)` names a second URI the code needs when the condition holds; a
   // scan that reads only the first URI would send the class to the runner
@@ -433,7 +475,7 @@ test("plans a real compile for a class whose imports all resolve", () => {
     },
   ]);
   assert.deepEqual(plan.skipped, []);
-  assert.deepEqual(plan.manifest.overrides, {});
+  assert.deepEqual(plan.manifest.dependencyOverrides, {});
 });
 
 test("names the file the way FlutterFlow would, an underscore before every capital", () => {

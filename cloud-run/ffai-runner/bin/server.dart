@@ -497,7 +497,8 @@ _VerificationRequest? _normalizeVerification(Object? value) {
       value['dependencyOverrides'],
       'dependencyOverrides',
     ),
-    sdkPackages: _normalizeSdkPackages(value['sdkPackages']),
+    sdkPackages: _normalizeSdkPackages(value['sdkPackages'], 'sdkPackages'),
+    sdkOverrides: _normalizeSdkPackages(value['sdkOverrides'], 'sdkOverrides'),
     sources: sources,
   );
 }
@@ -545,16 +546,16 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
 /// `pub get` with an honest error, whereas a list refuses correct deploys the
 /// moment it falls behind the SDK. The pattern is the load-bearing check - each
 /// name becomes a key in the generated pubspec.
-List<String> _normalizeSdkPackages(Object? value) {
+List<String> _normalizeSdkPackages(Object? value, String field) {
   if (value == null) return const <String>[];
   if (value is! List) {
-    throw const FormatException('verification.sdkPackages must be an array.');
+    throw FormatException('verification.$field must be an array.');
   }
   // Bounded like the dependency maps: each entry expands into the generated
   // pubspec, so an unbounded array is caller-controlled work before pub get
   // ever sees it.
   if (value.length > maxDependenciesPerRequest) {
-    throw const FormatException('Too many entries in verification.sdkPackages.');
+    throw FormatException('Too many entries in verification.$field.');
   }
 
   final result = <String>{};
@@ -962,6 +963,7 @@ final class _VerificationRequest {
     required this.dependencies,
     required this.overrides,
     required this.sdkPackages,
+    required this.sdkOverrides,
     required this.sources,
   }) : unavailableReason = null;
 
@@ -971,6 +973,7 @@ final class _VerificationRequest {
         dependencies = const <String, String>{},
         overrides = const <String, String>{},
         sdkPackages = const <String>[],
+        sdkOverrides = const <String>[],
         sources = const <_VerificationSource>[];
 
   /// Why this request cannot be compiled, or null when it can.
@@ -980,6 +983,7 @@ final class _VerificationRequest {
   final Map<String, String> dependencies;
   final Map<String, String> overrides;
   final List<String> sdkPackages;
+  final List<String> sdkOverrides;
   final List<_VerificationSource> sources;
 
   /// Builds the pubspec the scratch package is compiled from.
@@ -1016,12 +1020,20 @@ final class _VerificationRequest {
       lines.add('  $name: ${_yamlScalar(dependencies[name]!)}');
     }
 
-    if (overrides.isNotEmpty) {
+    // SDK-sourced overrides belong in dependency_overrides, not in
+    // `dependencies` with sdkPackages: an override can share its name with a
+    // direct dependency, and emitting both under one map writes the key twice.
+    if (overrides.isNotEmpty || sdkOverrides.isNotEmpty) {
       lines
         ..add('')
         ..add('dependency_overrides:');
       for (final name in overrides.keys.toList()..sort()) {
         lines.add('  $name: ${_yamlScalar(overrides[name]!)}');
+      }
+      for (final name in sdkOverrides.toList()..sort()) {
+        lines
+          ..add('  $name:')
+          ..add('    sdk: flutter');
       }
     }
 
