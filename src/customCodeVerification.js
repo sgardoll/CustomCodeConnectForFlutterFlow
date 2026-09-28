@@ -114,6 +114,7 @@ function collect(declared, into, sdkPackages) {
  *   sdkPackages: string[],
  *   availablePackages: Set<string>,
  *   unrepresentable: string[],
+ *   unrepresentableOverrides: string[],
  * }}
  */
 export function buildAnalysisManifest(projectPubspecYaml) {
@@ -121,18 +122,24 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   const dependencies = {};
   const overrides = {};
 
-  const unrepresentable = collect(
+  // The two blocks are kept apart: a direct dependency only reaches a class
+  // that names it, but a dependency_overrides entry rewrites resolution for
+  // every package in the graph that depends on the overridden name, so the
+  // consequences of dropping one are much wider than dropping the other.
+  const unrepresentableDependencies = collect(
     parseExistingDependencies(projectPubspecYaml),
     dependencies,
     sdkPackages,
   );
-  unrepresentable.push(
-    ...collect(
-      parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
-      overrides,
-      sdkPackages,
-    ),
+  const unrepresentableOverrides = collect(
+    parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
+    overrides,
+    sdkPackages,
   );
+  const unrepresentable = [
+    ...unrepresentableDependencies,
+    ...unrepresentableOverrides,
+  ];
 
   const availablePackages = new Set([
     ...Object.keys(dependencies),
@@ -148,6 +155,7 @@ export function buildAnalysisManifest(projectPubspecYaml) {
     sdkPackages: [...sdkPackages].sort(),
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   };
 }
 
@@ -180,6 +188,17 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * had not heard of - left every class in the deploy uncompiled, including the
  * ones that never touched it.
  *
+ * The exception is `dependency_overrides`. An override does not wait for a
+ * class to import it: it rewrites what every package in the graph that
+ * depends on the overridden name resolves to, so a class that imports a
+ * perfectly ordinary pub.dev package can still compile against different code
+ * than the project uses when the import reaches the overridden package
+ * transitively. Which packages those are is only recorded in the project's
+ * pubspec.lock, which a deploy never sees, so no per-class rule can separate
+ * the reachable from the unreachable. An unreproducible override therefore
+ * skips every class that imports a `package:` URI at all; a class using only
+ * `dart:` resolves nothing through pub and is still verified.
+ *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
  * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
@@ -192,6 +211,7 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     sdkPackages,
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   } = buildAnalysisManifest(projectPubspecYaml);
 
   const manifest = { sdkConstraint, dependencies, overrides, sdkPackages };
@@ -214,6 +234,24 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
       skipped.push({
         className,
         reason: `${className} was not compiled before deploying: it imports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`,
+      });
+      continue;
+    }
+
+    // A git/path/hosted override poisons resolution for every package that
+    // transitively depends on the overridden name, and only pubspec.lock -
+    // which is never pushed - records which packages those are. Verified
+    // against the wrong transitive code, an analyzer pass would not describe
+    // what ships, so any class that resolves packages at all is reported
+    // instead of compiled. `dart:`-only classes need no package resolution
+    // and are unaffected.
+    if (
+      unrepresentableOverrides.length > 0 &&
+      extractImportUris(content).some((uri) => uri.startsWith("package:"))
+    ) {
+      skipped.push({
+        className,
+        reason: `${className} was not compiled before deploying: your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it, and an override changes what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`,
       });
       continue;
     }

@@ -184,6 +184,116 @@ class ReExportsPrivateThing {}
   assert.match(plan.skipped[0].reason, /it imports private_thing/);
 });
 
+test("an unreproducible dependency_overrides entry skips every package-importing class", () => {
+  // core_types is overridden from git, so it resolves differently in the
+  // project than in the scratch manifest for every package that depends on it.
+  // Whether this class reaches it transitively through widget_api is only
+  // recorded in pubspec.lock, which a deploy never sees - so the class cannot
+  // be verified against the code the project ships.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  widget_api: ^1.0.0
+
+dependency_overrides:
+  core_types:
+    git: https://example.invalid/core.git
+`;
+  const importsWidgetApi = `import 'package:widget_api/widget_api.dart';
+
+class UsesWidgetApi {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "UsesWidgetApi", content: importsWidgetApi }],
+    pubspec,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /dependency_overrides/);
+  assert.match(plan.skipped[0].reason, /core_types/);
+});
+
+test("an unreproducible override skips even a class importing only SDK packages", () => {
+  // flutter's own transitive dependencies (collection, meta, ...) resolve
+  // through pub and can be redirected by an override, so an SDK-only import is
+  // still not guaranteed to compile against the project's code.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dependency_overrides:
+  collection:
+    git: https://example.invalid/collection.git
+`;
+  const flutterOnly = `import 'package:flutter/material.dart';
+
+class UsesMaterial {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "UsesMaterial", content: flutterOnly }],
+    pubspec,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+});
+
+test("a dart:-only class still verifies under an unreproducible override", () => {
+  // dart: URIs come from the SDK itself, which no dependency_overrides entry
+  // can re-source, so nothing the class resolves can be redirected.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dependency_overrides:
+  core_types:
+    git: https://example.invalid/core.git
+`;
+  const dartOnly = `import 'dart:async';
+
+class SchedulesWork {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "SchedulesWork", content: dartOnly }],
+    pubspec,
+  );
+
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a version-constraint override is carried and does not skip anything", () => {
+  // PROJECT_PUBSPEC overrides intl to 0.20.1 - a constraint the manifest can
+  // express - so resolution already matches the project's and every
+  // self-contained class verifies.
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test("an SDK package no list has heard of is reproduced from its pubspec source", () => {
   // The regression: flutter_web_plugins is a genuine Flutter SDK package that
   // the hand-kept list omitted, so every project declaring it - which is every
