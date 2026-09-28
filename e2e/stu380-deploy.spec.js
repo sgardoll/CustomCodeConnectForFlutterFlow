@@ -235,6 +235,49 @@ test.describe("STU-380 deployment terminal outcomes", () => {
     await expect(page.locator("#commit-progress-overlay")).toBeHidden();
   });
 
+  test("a new deploy within the terminal hide delay keeps its progress overlay", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("hasSeenWalkthrough", "true");
+    });
+    await applyDefaultRoutes(page);
+    await page.goto("/");
+    // The commitStateChange listener is attached at the end of the app's async
+    // startup, so wait for the real listener to answer: dispatching PREPARING
+    // opens the overlay. This is also deploy 1 starting.
+    await page.waitForFunction(() => {
+      window.dispatchEvent(
+        new CustomEvent("commitStateChange", { detail: { state: "PREPARING" } }),
+      );
+      return document
+        .getElementById("commit-progress-overlay")
+        ?.classList.contains("open");
+    });
+    await expect(page.locator("#commit-progress-overlay")).toBeVisible();
+
+    // Deploy 1 ends: the terminal state schedules the overlay hide one second
+    // later, but the overlay is still up while that delay runs.
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent("commitStateChange", { detail: { state: "SUCCESS" } }),
+      );
+    });
+
+    // Deploy 2 starts inside that second, exactly as a real confirm does by
+    // emitting PREPARING. The previous deploy's timer must not close the
+    // overlay that now belongs to the running deploy.
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent("commitStateChange", { detail: { state: "PREPARING" } }),
+      );
+    });
+    // Past the 1s hide delay and the overlay's 0.25s visibility transition:
+    // a stale timer has removed `.open` by now, so the class is the settled
+    // evidence — not a computed style that is mid-transition.
+    await page.waitForTimeout(1500);
+    await expect(page.locator("#commit-progress-overlay")).toHaveClass(/\bopen\b/);
+    await expect(page.locator("#commit-progress-overlay")).toBeVisible();
+  });
+
   test("a partial/unconfirmed terminal keeps the deploy controls enabled (busy released)", async ({ page }) => {
     await render(page, {
       success: false,
@@ -947,6 +990,57 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(exportCalls).toBe(2);
   });
 
+  test("a gateway 502 keeps the project snapshot dirty instead of reporting a refusal", async ({ page }) => {
+    await loadDeployHooks(page);
+
+    const zip = new JSZip();
+    zip.file(
+      "pubspec.yaml",
+      "name: my_app\n\ndependencies:\n  flutter:\n    sdk: flutter\n",
+    );
+    const projectZip = await zip.generateAsync({ type: "base64" });
+
+    let exportCalls = 0;
+    await page.route("**/exportCode", async (route) => {
+      exportCalls += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ value: { project_zip: projectZip } }),
+      });
+    });
+    // A gateway 502 can arrive after the provisioning request was forwarded —
+    // the runner may still be deploying classes, so this is not a refusal.
+    await page.route(ENDPOINTS.deployCustomClasses, async (route) => {
+      await route.fulfill({ status: 502, body: "bad gateway" });
+    });
+
+    // Seed the project-source cache exactly like a deploy's pubspec merge does.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(1);
+
+    const outcome = await settleAsOutcome(
+      page,
+      "__CCC_PROVISION_CUSTOM_CLASSES__",
+      [{ fileMap: newClassFileMap }],
+    );
+    // The UI must not report a definitive "nothing was written".
+    expect(outcome.name).toBe("UnconfirmedDeployError");
+    expect(outcome.outcome).toBe("unconfirmed");
+    // The cause must be truthful: an HTTP 502 was actually received, so the
+    // message names the status and may not claim the connection dropped. The
+    // reconcile-before-retry advice stays in both cases.
+    expect(outcome.message).toContain("HTTP 502");
+    expect(outcome.message).not.toContain("dropped");
+    expect(outcome.message).toContain("reconcile");
+
+    // The possibly-written class keeps the snapshot dirty: the next deploy
+    // must re-export instead of planning against the cached pre-write snapshot
+    // and silently provisioning the class a second time.
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(2);
+  });
+
   test("a runner failure after deploy began also drops the cached snapshot", async ({ page }) => {
     await loadDeployHooks(page);
 
@@ -1214,12 +1308,18 @@ test.describe("STU-380 transport outcome regressions", () => {
     await page.evaluate(() => {
       const realFetch = window.fetch;
       let provisionCalls = 0;
+      window.__CCC_PROVISION_STREAM__ = null;
       window.fetch = (url, ...args) => {
         if (String(url).includes("deployCustomClasses")) {
           provisionCalls += 1;
           if (provisionCalls === 1) {
+            const body = new ReadableStream({
+              start(controller) {
+                window.__CCC_PROVISION_STREAM__ = controller;
+              },
+            });
             return Promise.resolve(
-              new Response(new ReadableStream({ start() {} }), {
+              new Response(body, {
                 status: 200,
                 headers: { "Content-Type": "application/x-ndjson" },
               }),
@@ -1261,11 +1361,28 @@ test.describe("STU-380 transport outcome regressions", () => {
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(2);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    // Second sighting has no verified credit left — it retires A's write and
-    // this export becomes the cached snapshot.
+    // The second sighting shows the same unchanged X: it is the same fact as
+    // the first, so it cannot retire A's uncertain write. While A can still
+    // land, no export may be cached.
     expect(exportCalls).toBe(3);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(3);
+    expect(exportCalls).toBe(4);
+
+    // A's own late result is what resolves its write: the uncertain credit
+    // converts to a verified one, and the next sighting consumes it — only
+    // then does caching resume.
+    await page.evaluate(() => {
+      const encoder = new TextEncoder();
+      window.__CCC_PROVISION_STREAM__.enqueue(
+        encoder.encode('{"event":"result","success":true}\n'),
+      );
+      window.__CCC_PROVISION_STREAM__.close();
+    });
+    await page.waitForTimeout(50);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(5);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(5);
   });
 
   test("a push still in flight keeps exports uncached until it settles", async ({ page }) => {

@@ -51,6 +51,145 @@ test("rule 3: adds a missing package at the newest SDK-compatible release", asyn
   assert.deepEqual(plan.warnings, []);
 });
 
+test("rule 2: a {version: x} pin below the required floor is raised in place", async () => {
+  // A version written as a flow member is still a hosted pin - it must not be
+  // exempted from the compat check just because the entry is not scalar.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {version: 0.19.0}
+  block_pinned:
+    version: 0.18.0
+`;
+  const plan = await planDependencyChanges(pubspec, {
+    intl: "0.20.0",
+    block_pinned: "0.20.0",
+  });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0", block_pinned: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  // The member is rewritten where it stands - the flow map keeps its braces
+  // and the block entry keeps its `version:` child line.
+  assert.match(merged.yaml, /intl: \{version: \^0\.20\.0\}/);
+  assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0/);
+});
+
+test("rule 2: a quoted range in a version member is replaced whole, comment kept", async () => {
+  // A quoted range holds spaces - replacing only up to the first space would
+  // leave the old upper bound glued onto the new constraint.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {version: '>=0.19.0 <0.20.0'}
+  block_pinned:
+    version: '>=0.18.0 <0.20.0'  # deliberate cap
+`;
+  const plan = await planDependencyChanges(pubspec, {
+    intl: "0.20.0",
+    block_pinned: "0.20.0",
+  });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0", block_pinned: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /intl: \{version: \^0\.20\.0\}/);
+  assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0  # deliberate cap/);
+});
+
+test("rule 2: a package named 'version' rewrites its member, not its key", async () => {
+  // `version` is a real pub.dev package; `version: {version: x}` must raise
+  // the member inside the map, not the entry's own key value.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  version: {version: 0.19.0}
+`;
+  const plan = await planDependencyChanges(pubspec, { version: "0.20.0" });
+
+  assert.deepEqual(plan.overrides, { version: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /version: \{version: \^0\.20\.0\}/);
+});
+
+test("rule 2: a quoted 'version' key rewrites like a bare one", async () => {
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {'version': '0.19.0'}
+`;
+  const plan = await planDependencyChanges(pubspec, { intl: "0.20.0" });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /intl: \{'version': \^0\.20\.0\}/);
+});
+
+test("rule 2: a multiline {version:} mapping is raised in place", async () => {
+  // The name line must anchor the entry: recording the flow map's closing
+  // line as lineIndex would leave rewriteVersionMember scanning from `}` and
+  // never finding the member.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {
+    version: '>=0.19.0 <0.20.0'
+  }
+`;
+  const plan = await planDependencyChanges(pubspec, { intl: "0.20.0" });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /intl: \{\n    version: \^0\.20\.0\n  \}/);
+});
+
+test("rule 2: a {version: x} pin satisfying the floor is kept", async () => {
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {version: ^0.19.0}
+`;
+  const plan = await planDependencyChanges(pubspec, { intl: "0.19.0" });
+
+  assert.deepEqual(plan.overrides, {});
+  assert.deepEqual(plan.kept, [{ name: "intl", constraint: "^0.19.0" }]);
+});
+
+test("rule 3: an SDK package missing from the pubspec is added as sdk: flutter", async () => {
+  // flutter_web_plugins is not on pub.dev, so a hosted constraint names a
+  // source pub cannot resolve. The SDK supplies it, so the merged pubspec
+  // gets the same `sdk: flutter` entry the project would have declared.
+  let queried = null;
+  const plan = await planDependencyChanges(
+    PROJECT_PUBSPEC,
+    { flutter_web_plugins: "", record: "" },
+    {
+      resolveVersions: async (names) => {
+        queried = names;
+        return stubResolver({ record: "^6.2.1" })(names);
+      },
+    },
+  );
+
+  assert.deepEqual(plan.additions.flutter_web_plugins, { sdk: "flutter" });
+  assert.deepEqual(plan.additions.record, "^6.2.1");
+  assert.deepEqual(queried, ["record"]);
+  assert.deepEqual(plan.warnings, []);
+
+  const merged = mergeDependenciesIntoYaml(PROJECT_PUBSPEC, plan.additions);
+  assert.match(merged.yaml, /  flutter_web_plugins:\n    sdk: flutter/);
+  assert.deepEqual(merged.added.sort(), ["flutter_web_plugins", "record"]);
+});
+
 test("rule 3: passes the project's SDK floors to the registry lookup", async () => {
   let seen = null;
   await planDependencyChanges(
