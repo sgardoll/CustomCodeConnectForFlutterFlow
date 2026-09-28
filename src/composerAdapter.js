@@ -41,6 +41,11 @@ export const SUGGESTION_MIN_CHARS = 6;
 const HERO_DEMO_HOLD_MS = 5200;
 const HERO_DEMO_TYPE_MS = 73;
 
+// The hero demo's media-query listener is tracked per composer element so a
+// repeat initComposer on the same DOM replaces the previous instance's
+// registration instead of stacking a second listener on it.
+const demoMotionRegistrations = new WeakMap();
+
 /** A prompt can only submit when it has non-whitespace text and the pipeline is idle. */
 export function canSubmit(value, isBusy) {
   return Boolean(value && value.trim()) && !isBusy;
@@ -131,6 +136,16 @@ export function initComposer({ onSubmit }) {
   let submitting = false; // duplicate-submission guard
   let chipTyping = false; // a chip still typing its prompt owns the field
   let heroDemoTyping = false; // the opening demo still typing the shipped prompt
+  // The demo stopped on a frozen prefix a pending edit will replace. Until a
+  // real input event lands, that prefix is demo-owned, not user text: it must
+  // gate the send control and Enter exactly like a still-running demo.
+  let heroDemoFrozen = false;
+  // Text the demo supplied while it was interrupted: a frozen prefix, or the
+  // complete example a non-editing takeover restored. The first real
+  // beforeinput clears it, so a new prompt never silently joins the shipped
+  // example. A demo that finishes untouched hands the shipped text back as
+  // the field's own content, and ordinary editing resumes.
+  let heroDemoOwned = false;
   let attachmentsPending = false; // image uploads in flight own the run's attachments
   let debounceTimer = null;
   let chipTimer = null;
@@ -140,7 +155,7 @@ export function initComposer({ onSubmit }) {
   const shippedPrompt = field.value;
 
   function isBusy() {
-    return submitting || chipTyping || heroDemoTyping || attachmentsPending;
+    return submitting || chipTyping || heroDemoTyping || heroDemoFrozen || attachmentsPending;
   }
 
   // Prototype sync(): the send control follows the prompt and the pipeline.
@@ -273,6 +288,7 @@ export function initComposer({ onSubmit }) {
     const hash = window.location.hash.replace(/^#/, "");
     if (hash && hash !== "home") return;
     heroDemoTyping = true;
+    heroDemoOwned = true;
     field.placeholder = "";
     field.value = "";
     mirrorTyped();
@@ -285,12 +301,14 @@ export function initComposer({ onSubmit }) {
       field.value = shippedPrompt.slice(0, index);
       mirrorTyped();
       if (index >= shippedPrompt.length) {
-        // The prompt is fully written: retire the caret and hand the field
-        // back exactly as the markup shipped it.
+        // The prompt is fully written: retire the typing caret and let the
+        // demo stream its follow-on suggestion, then hand the field back
+        // exactly as the markup shipped it — as the field's own content,
+        // editable in place like the shipped default.
         composer.classList.remove("is-demo-typing");
         heroDemoTimer = setTimeout(() => {
           const suffix = session.resolve(field.value);
-          if (!suffix) { cancelHeroDemo(); return; }
+          if (!suffix) { heroDemoOwned = false; cancelHeroDemo(); return; }
           showSuggestionUi(suffix);
           composer.classList.add("is-demo-streaming");
           suggest.textContent = "";
@@ -303,7 +321,7 @@ export function initComposer({ onSubmit }) {
             suggest.appendChild(span);
             span.animate?.([{ opacity:0 }, { opacity:1 }], { duration:240, easing:"cubic-bezier(0.4,0,0.2,1)" });
             if (word < words.length) heroDemoTimer = setTimeout(stream, 130);
-            else cancelHeroDemo();
+            else { heroDemoOwned = false; cancelHeroDemo(); }
           };
           stream();
         }, 1000);
@@ -315,15 +333,52 @@ export function initComposer({ onSubmit }) {
     heroDemoTimer = setTimeout(typeNext, HERO_DEMO_HOLD_MS);
   }
 
+  // End a running demo early by landing its end state — the complete shipped
+  // prompt, the caret retired, the send control synced — rather than freezing
+  // on whatever prefix the timer reached. A submit after a non-editing
+  // takeover can therefore never carry a half-typed prompt, and text the user
+  // already owns (heroDemoTyping false) is never overwritten.
+  //
+  // Two takeover shapes skip the restore: an interaction arriving with text
+  // already selected (a select-all fill, an assistive insert) is an edit in
+  // flight — overwriting the field would destroy the selection the incoming
+  // replacement needs — and a takeover during the hold period, before the
+  // first typed character lands, has nothing to complete. Both stop the demo
+  // on the frozen prefix and mark it demo-owned: send stays disabled and
+  // Enter stays inert until a real input event hands the text to the user.
+  // A pointer takeover means "edit what I clicked": after the restore the
+  // complete prompt is plain field content, so ownership is released and the
+  // first edit trims it character by character. Keyboard-only takeovers
+  // (focus, a keypress before any click) keep the text demo-owned instead —
+  // typing mid-demo means "write a new prompt", so the first beforeinput
+  // still clears the example rather than joining it.
+  function finishHeroDemo(releaseOwned = false) {
+    if (!heroDemoTyping) return;
+    // The demo's streamed suggestion is demo-owned too: a takeover drops the
+    // ghost along with the writer, whatever branch below it takes.
+    clearSuggestion();
+    if (!field.value.length || field.selectionStart !== field.selectionEnd) {
+      heroDemoFrozen = true;
+      cancelHeroDemo();
+      return;
+    }
+    field.value = shippedPrompt;
+    mirrorTyped();
+    heroDemoFrozen = false;
+    if (releaseOwned) heroDemoOwned = false;
+    cancelHeroDemo();
+  }
+
   // A live flip to reduced motion must end the demo, not just keep it from
   // starting: cancel the timer and land the field on the complete shipped
   // prompt with the caret retired — the same end state as a finished demo.
-  // Text the user has taken over (heroDemoTyping already false) is untouched.
+  // Not a user takeover, so an in-flight selection doesn't veto the restore.
   function onReducedMotionChange() {
     if (!reduceMotion.matches) return;
     if (heroDemoTyping) {
       field.value = shippedPrompt;
       clearSuggestion();
+      heroDemoOwned = false;
       cancelHeroDemo();
     }
     if (chipTyping) {
@@ -364,6 +419,8 @@ export function initComposer({ onSubmit }) {
   }
 
   function fillChip(chip) {
+    heroDemoFrozen = false;
+    heroDemoOwned = false;
     const text = chip.dataset.prompt || "";
     cancelHeroDemo();
     cancelChipTyping();
@@ -415,10 +472,11 @@ export function initComposer({ onSubmit }) {
   // Tab accepts only an active suggestion and otherwise moves focus; Escape
   // dismisses; Enter submits unless Shift is held or an IME is composing.
   field.addEventListener("keydown", (event) => {
-    // Enter while the hero demo or a chip is still typing is not a submission
-    // and not a cancellation: the writer finishes the full prompt first.
+    // Enter while the hero demo or a chip is still typing — or while a frozen
+    // demo prefix still waits on the edit that was promised — is not a
+    // submission and not a cancellation: the writer finishes first.
     if (
-      (heroDemoTyping || chipTyping) &&
+      (heroDemoTyping || chipTyping || heroDemoFrozen) &&
       event.key === "Enter" &&
       !event.shiftKey &&
       !event.isComposing &&
@@ -427,7 +485,7 @@ export function initComposer({ onSubmit }) {
       event.preventDefault();
       return;
     }
-    cancelHeroDemo();
+    finishHeroDemo();
     cancelChipTyping();
     if (event.key === "Tab" && !event.shiftKey && session.active) {
       event.preventDefault();
@@ -447,8 +505,24 @@ export function initComposer({ onSubmit }) {
     }
   });
 
+  // Demo-owned text is never a draft: any real edit — typed characters,
+  // Backspace, a paste, a drag-dropped snippet, an IME commit — clears it
+  // first, so the user's input lands on an empty field instead of joining
+  // the shipped example. beforeinput sees every vector the browser will
+  // mutate for; the demo's own programmatic writes never reach it.
+  field.addEventListener("beforeinput", () => {
+    if (!heroDemoOwned) return;
+    heroDemoOwned = false;
+    heroDemoFrozen = false;
+    field.value = "";
+    mirrorTyped();
+    cancelHeroDemo();
+  });
+
   // --- Input (prototype input handler, line 1800) ---
   field.addEventListener("input", () => {
+    heroDemoOwned = false;
+    heroDemoFrozen = false;
     cancelHeroDemo();
     cancelChipTyping();
     clearChipSelection();
@@ -484,40 +558,67 @@ export function initComposer({ onSubmit }) {
 
   send.addEventListener("click", doSubmit);
 
-  // The user taking the field back ends the chip's settled state and stops a
-  // running hero demo, leaving whatever it had typed for the user to own.
+  // The user taking the field back ends the chip's settled state. A running
+  // hero demo completes instead of freezing mid-type, so Generate after a
+  // bare click, focus or keypress submits the whole example — the same end
+  // state as a demo that finished on its own. A pointerdown also releases
+  // demo ownership: the user clicked to edit, so the restored prompt is
+  // theirs to trim.
   field.addEventListener("pointerdown", () => {
-    cancelHeroDemo();
+    finishHeroDemo(true);
     cancelChipTyping();
     clearChipSelection();
   });
 
-  field.addEventListener("focus", () => {
-    cancelHeroDemo();
-  });
+  field.addEventListener("focus", () => finishHeroDemo());
 
   // The reduced-motion preference can change while the page is open; the
-  // listener is registered exactly once here (never per demo start) and is
-  // removed by dispose, so a torn-down composer stops reacting to it.
+  // listener lives for the document's lifetime — including a trip through the
+  // back-forward cache, where no real teardown happens — so a resumed demo
+  // still sees a later flip. dispose() removes it for a genuine composer
+  // teardown only. A repeat initComposer on the same DOM replaces the dead
+  // instance's registration instead of stacking a second listener.
+  const previousMotionRegistration = demoMotionRegistrations.get(composer);
+  if (previousMotionRegistration) {
+    previousMotionRegistration.mql.removeEventListener(
+      "change",
+      previousMotionRegistration.handler,
+    );
+  }
   reduceMotion.addEventListener("change", onReducedMotionChange);
+  demoMotionRegistrations.set(composer, {
+    mql: reduceMotion,
+    handler: onReducedMotionChange,
+  });
 
   function dispose() {
     cancelTyping();
     reduceMotion.removeEventListener("change", onReducedMotionChange);
+    demoMotionRegistrations.delete(composer);
     document.removeEventListener("visibilitychange", onVisibilityChange);
-    window.removeEventListener("pagehide", dispose);
   }
 
   function cancelTyping() {
-    cancelHeroDemo();
-    cancelChipTyping();
+    // A system cancellation — switching surfaces or the tab hiding — is not a
+    // user takeover: land each demo's end state so a half-typed prefix can
+    // never sit submittable in the field when the user returns.
+    if (heroDemoTyping) {
+      field.value = shippedPrompt;
+      mirrorTyped();
+      clearSuggestion();
+      heroDemoOwned = false;
+      cancelHeroDemo();
+    }
+    if (chipTyping) {
+      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
+      mirrorTyped();
+      cancelChipTyping();
+    }
     clearTimeout(debounceTimer);
   }
 
   function onVisibilityChange() { if (document.hidden) cancelTyping(); }
   document.addEventListener("visibilitychange", onVisibilityChange);
-
-  window.addEventListener("pagehide", dispose);
 
   // Initial state mirrors the shipped example prompt; the send control
   // reflects it. The shipped default value stays exactly as authored.
@@ -535,7 +636,7 @@ export function initComposer({ onSubmit }) {
       attachmentsPending = Boolean(pending);
       syncSend();
     },
-    // Removes the reduced-motion listener; also runs on pagehide.
+    // Removes the reduced-motion listener; for a genuine composer teardown.
     dispose,
     cancelTyping,
   };
