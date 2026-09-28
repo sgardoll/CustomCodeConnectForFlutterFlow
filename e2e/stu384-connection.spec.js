@@ -567,6 +567,105 @@ test.describe("STU-384 account connection", () => {
     );
   });
 
+  test("a project chosen from the old key's list cannot become the replaced key's target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: the dropdown shows the OLD key's list.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await expect(
+      page.locator('#flutterflow-projects-select option[value="proj-def-456"]'),
+    ).toHaveCount(1);
+
+    // Choose a project from the old key's list before replacing the key. The
+    // choice was produced by the old key's completed fetch, so it must not be
+    // persisted as the new key's deploy target.
+    await page.locator("#flutterflow-projects-select").selectOption("proj-def-456");
+
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // No target survives the key replacement: the old-key choice is not the
+    // new key's target, and no later read can point at it.
+    const storedAfter = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow_project_id"),
+    );
+    expect(storedAfter).toBeNull();
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // The editor requires a fresh selection: the list loaded for the new key,
+    // but nothing is selected from it.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#flutterflow-projects-select")).toHaveValue("");
+    await page.evaluate(() => window.closeApiKeysModal());
+
+    // The deploy dialog likewise preselects nothing: a target may only come
+    // from the list its own completed fetch produced for the current key.
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(page.locator("#confirm-project-select")).toHaveValue("");
+  });
+
+  test("a stored target the current key's completed list omits is not deployable", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    // Establish a stored, confirmed target.
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+
+    // The key's project list changes: a later completed response for the same
+    // key no longer lists the stored target.
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-def-456", project: { name: "Test Project Beta" } },
+          ],
+        }),
+      }),
+    });
+
+    // The real deploy dialog's completed fetch does not list the stored
+    // target, so it must not be preselected...
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(
+      page.locator('#confirm-project-select option[value="proj-def-456"]'),
+    ).toHaveCount(1);
+    await expect(page.locator("#confirm-project-select")).toHaveValue("");
+
+    // ...and confirming must fail before any push: the stored target lost its
+    // confirmation with the completed list, so no deploy may target it.
+    await page.evaluate(() => window.confirmCommitToFlutterFlow());
+    const terminal = page.locator("#commit-terminal-modal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal).toContainText("not confirmed");
+    await expect(terminal).not.toContainText(PROJ);
+  });
+
   test("removing the key flips the connection card back to not-configured", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, signedInContext());
