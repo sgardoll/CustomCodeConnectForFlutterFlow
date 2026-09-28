@@ -3934,7 +3934,7 @@ async function getConfirmedStoredProjectId() {
   // and a superseded or failed verification still returns "".
   const generation = ffEndpointGeneration;
   const order = ++ffRequestOrderSeq;
-  let projects;
+  let verified = false;
   try {
     const client = new FlutterFlowApiClient(
       apiKey,
@@ -3942,18 +3942,29 @@ async function getConfirmedStoredProjectId() {
       "main",
       getFlutterFlowEndpoint(),
     );
-    projects = await client.listProjects();
-  } catch {
-    return "";
+    const projects = await client.listProjects();
+    verified = (projects || []).some(
+      (project) => (project.id || project.projectId) === projectId,
+    );
+  } catch (error) {
+    // A project-scoped key can sync its project without list permission: its
+    // listProjects denial is a 403, not proof the stored project is absent.
+    // Nothing can disprove the stored target for such a key, so it stands
+    // (still guarded by the endpoint generation + key checks below) and the
+    // push itself decides reachability; any other failure refuses.
+    const msg = String((error && error.message) || "");
+    if (!/denied \(403\)|without list permission/i.test(msg)) return "";
+    verified = true;
   }
   // A response that describes a superseded identity — the endpoint moved on,
-  // or a newer request already applied its outcome — confirms nothing.
+  // the configured key changed, or a newer request already applied its
+  // outcome (including one that stripped this target's confirmation) —
+  // verifies nothing.
   if (generation !== ffEndpointGeneration) return "";
-  if (order > ffAppliedOutcomeOrder) ffAppliedOutcomeOrder = order;
-  const listed = (projects || []).some(
-    (project) => (project.id || project.projectId) === projectId,
-  );
-  if (!listed) return "";
+  if (apiKey !== flutterflowApiKey) return "";
+  if (order <= ffAppliedOutcomeOrder) return "";
+  ffAppliedOutcomeOrder = order;
+  if (!verified) return "";
   // Never overwrite an in-flight explicit choice for a different project.
   if (
     !projectSelectionIdentity ||
@@ -7240,6 +7251,13 @@ async function populateConfirmProjectSelect() {
     );
     const projects = await client.listProjects();
     if (!isCurrent()) return;
+    // The response describes the endpoint + key it was issued under. If either
+    // moved while the request was in flight, its options belong to a different
+    // identity than the deploy would use — repopulate for the current one
+    // rather than filling the modal with stale, undeployable projects.
+    if (generation !== ffEndpointGeneration || apiKey !== flutterflowApiKey) {
+      return populateConfirmProjectSelect();
+    }
 
     // A completed response for the current key is authoritative: it re-confirms
     // the stored selection when it lists it and strips its confirmation when it
@@ -7272,6 +7290,9 @@ async function populateConfirmProjectSelect() {
     if (storedId) select.value = storedId;
   } catch (error) {
     if (!isCurrent()) return;
+    if (generation !== ffEndpointGeneration || apiKey !== flutterflowApiKey) {
+      return populateConfirmProjectSelect();
+    }
     console.error("Failed to load projects for deploy:", error);
     select.innerHTML =
       '<option value="">Failed to load projects — check your API Key</option>';

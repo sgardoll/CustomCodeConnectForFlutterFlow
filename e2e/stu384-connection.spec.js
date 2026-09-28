@@ -869,8 +869,140 @@ test.describe("STU-384 account connection", () => {
       ),
     );
     await exported;
-    expect(result.error || "").not.toMatch(/not confirmed/i);
+    expect(result.error || "").not.toMatch(/no confirmed|not confirmed/i);
     gate.release();
+  });
+
+  test("a stale deploy verification cannot revive a target a newer response removed", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // A list that omits the stored project: the startup check and the later
+    // superseding check both answer with it, while the held deploy
+    // verification answers with the full list.
+    const omittingList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-def-456", project: { name: "Beta Only" } },
+          ],
+        }),
+      });
+    let releaseVerify;
+    let markVerify;
+    const verifyHeld = new Promise((resolve) => {
+      markVerify = resolve;
+    });
+    let seen = 0;
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      seen += 1;
+      if (seen === 2) {
+        markVerify();
+        await new Promise((resolve) => {
+          releaseVerify = resolve;
+        });
+        await route.fulfill(sampleProjectList());
+        return;
+      }
+      await route.fulfill(omittingList());
+    });
+
+    // Reload: the process-local binding starts empty, and the startup check
+    // (request 1) does not re-confirm the omitted stored target.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+
+    // A direct commit issues its own verification (request 2) and waits.
+    const commitPromise = page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    await verifyHeld;
+
+    // A newer check (request 3) settles first with a list that omits the
+    // stored target — the newest applied outcome.
+    await page.evaluate(() => window.validateFlutterFlowConnection());
+
+    // The older verification now lands with a list that still contains the
+    // project. It must not revive the target the newer outcome refused.
+    releaseVerify();
+    const result = await commitPromise;
+    expect(result.error || "").toMatch(/no confirmed|not confirmed/i);
+  });
+
+  test("a project-scoped key without list permission keeps its stored deploy target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    // Establish a stored target while the key can list projects.
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // The key becomes scoped to its single project: every listProjects call
+    // now answers 403, but the key can still reach the project itself.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      await route.fulfill(err(403, { error: "forbidden" }));
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    // A direct commit must not refuse the saved target for lack of a list:
+    // the scoped denial cannot disprove it, so the deploy proceeds and the
+    // push itself decides reachability.
+    const exported = page.waitForRequest(ENDPOINTS.flutterFlowExportCode);
+    const result = await page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    await exported;
+    expect(result.error || "").not.toMatch(/no confirmed|not confirmed/i);
+  });
+
+  test("an old endpoint's response cannot fill the deploy dialog", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Hold the deploy dialog's production fetch so the endpoint can change
+    // while it is in flight.
+    const gate = await gateProductionListProjects(page);
+    gate.holdNext();
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await gate.waitForHeld();
+
+    // Switch to staging while the production response is pending.
+    await page.evaluate(() =>
+      window.setFlutterFlowEndpoint("https://api.flutterflow.io/v2-staging/"),
+    );
+
+    // Release the stale production response: its options belong to the old
+    // endpoint, so the dialog must repopulate from the new endpoint instead
+    // of offering undeployable production projects.
+    const fetchSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await fetchSettled;
+
+    await expect(
+      page.locator('#confirm-project-select option[value="proj-stg-789"]'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#confirm-project-select option[value="${PROJ}"]`),
+    ).toHaveCount(0);
   });
 
   test("signed-out entry can still save the key without a connection card", async ({ page }) => {
