@@ -7653,6 +7653,19 @@ function pipelineStageButton(step) {
 }
 
 /**
+ * The supporting line under the stage title, taken verbatim from the canonical
+ * pipeline view's stage copy (custom-code-connect-hero.html stageCopy).
+ */
+function pipelineStageDescription(step) {
+  const descriptions = {
+    1: "Turning your idea into a clear FlutterFlow specification.",
+    2: "Building the Dart source, widget parameters and animation.",
+    3: "Checking the generated code and preparing the file review.",
+  };
+  return descriptions[step] || "";
+}
+
+/**
  * Busy feedback on the control that started the run, and - just as important -
  * a usable control again when the run terminates, however it terminated.
  * The redesigned shell submits from the composer's send button; the legacy id
@@ -7722,6 +7735,7 @@ function renderPipelineTrack() {
  */
 function renderPipelineStatus(step, { done = false } = {}) {
   const titleEl = document.getElementById("progress-title-text");
+  const descriptionEl = document.getElementById("progress-description-text");
   const substepEl = document.getElementById("progress-substep-text");
   const state = pipelineStageStates[step];
   const finished = done || state === "done";
@@ -7730,6 +7744,9 @@ function renderPipelineStatus(step, { done = false } = {}) {
       ? PIPELINE_STAGE_DONE_TITLES[step]
       : PIPELINE_STAGE_TITLES[step];
   }
+  // The visible supporting line follows the mock; the step/stage/state line
+  // stays in the live region for assistive technology.
+  if (descriptionEl) descriptionEl.textContent = pipelineStageDescription(step);
   if (substepEl) {
     const suffix = finished ? " \u2014 complete" : state === "failed" ? " \u2014 stopped" : "";
     substepEl.textContent = `Step ${step} of 3 \u2014 ${PIPELINE_STAGE_LABELS[step]}${suffix}`;

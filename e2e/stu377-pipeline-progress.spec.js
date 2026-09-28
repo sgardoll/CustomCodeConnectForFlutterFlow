@@ -628,3 +628,154 @@ test.describe("Motion is decorative and settles safely", () => {
     await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
   });
 });
+
+test.describe("Holding window matches the canonical pipeline view", () => {
+  test("desktop: the mock's layout, type, bar and meta replace the legacy spinner", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["architect", "generator"] });
+
+    await page
+      .locator("#pipeline-input")
+      .fill("A circular progress gauge with an animated percentage label");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+    // The stage flips to display:flex one animation frame after the run
+    // starts; wait for real layout before measuring.
+    await expect(page.locator(".pipeline-view")).toBeVisible();
+
+    // The legacy </> spinner is gone; the authored mark is the only glyph.
+    await expect(page.locator(".pipeline-progress-icon")).toHaveCount(0);
+    await expect(page.locator(".pipeline-glyph.logo-loop")).toHaveCount(1);
+
+    const probe = await page.evaluate(() => {
+      const style = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? getComputedStyle(el) : null;
+      };
+      const box = (sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x), y: Math.round(r.y) };
+      };
+      // Counts top-level tracks without splitting inside minmax()/var().
+      const trackCount = (value) => {
+        let depth = 0;
+        let count = 1;
+        for (const ch of value) {
+          if (ch === "(") depth += 1;
+          else if (ch === ")") depth -= 1;
+          else if (ch === " " && depth === 0) count += 1;
+        }
+        return count;
+      };
+      const tokenProbe = document.createElement("span");
+      tokenProbe.style.color = "var(--fg)";
+      document.body.appendChild(tokenProbe);
+      const fg = getComputedStyle(tokenProbe).color;
+      tokenProbe.remove();
+      const description = document.querySelector("#progress-description-text");
+      const columns = style("#pipeline-progress")?.gridTemplateColumns ?? "";
+      return {
+        columns,
+        columnCount: trackCount(columns),
+        firstColumn: columns.split(" ")[0] ?? null,
+        titleSize: style("#progress-title-text")?.fontSize ?? null,
+        titleWeight: style("#progress-title-text")?.fontWeight ?? null,
+        description: description ? description.textContent.trim() : null,
+        descriptionSize: style("#progress-description-text")?.fontSize ?? null,
+        trackHeight: style(".progress-track")?.height ?? null,
+        trackRadius: style(".progress-track")?.borderRadius ?? null,
+        fillColor: style("#pipeline-progress-fill")?.backgroundColor ?? null,
+        metaFont: style("#progress-stage-count")?.fontFamily ?? null,
+        metaSize: style("#progress-stage-count")?.fontSize ?? null,
+        recapBorder: style(".pipeline-prompt-recap")?.borderRightWidth ?? null,
+        activeDot: style("#pdot-1 .progress-dot")?.backgroundColor ?? null,
+        fg,
+        title: box("#progress-title-text"),
+        mark: box(".pipeline-glyph.logo-loop"),
+        recap: box(".pipeline-prompt-recap"),
+        view: box(".pipeline-view"),
+      };
+    });
+
+    // Two-column panel: prompt sidebar on the left, stage view in the main
+    // column, separated by the mock's hairline.
+    expect(probe.columnCount).toBe(2);
+    expect(probe.firstColumn).toBe("310px");
+    expect(probe.recap).not.toBeNull();
+    expect(probe.view).not.toBeNull();
+    expect(probe.recap.x).toBeLessThan(probe.view.x);
+    expect(probe.recapBorder).toBe("1px");
+
+    // The mark rests on the copy's left edge, as in the mock.
+    expect(probe.mark.x).toBe(probe.title.x);
+
+    // The mock's typography and the supporting line from its stage copy.
+    expect(probe.titleSize).toBe("34px");
+    expect(probe.titleWeight).toBe("500");
+    expect(probe.description).toBe("Turning your idea into a clear FlutterFlow specification.");
+    expect(probe.descriptionSize).toBe("16px");
+
+    // One 4px pill, fg on the track token - never the indigo gradient.
+    expect(probe.trackHeight).toBe("4px");
+    expect(probe.trackRadius).toBe("999px");
+    expect(probe.fillColor).toBe(probe.fg);
+
+    // The meta line is the mock's mono line, not an 11px sans subtitle.
+    expect(probe.metaFont).toContain("DM Mono");
+    expect(probe.metaSize).toBe("12px");
+
+    // The stage nav keeps its semantics but paints in the system's ink.
+    expect(probe.activeDot).toBe(probe.fg);
+
+    // The visible supporting line follows the mock's stage copy as the run
+    // advances, and a completed stage is ink rather than legacy green.
+    pipeline.release("architect");
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+    await expect(page.locator("#progress-description-text")).toHaveText(
+      "Building the Dart source, widget parameters and animation.",
+    );
+    const doneDot = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--fg)";
+      document.body.appendChild(probe);
+      const fg = getComputedStyle(probe).color;
+      probe.remove();
+      return { dot: getComputedStyle(document.querySelector("#pdot-1 .progress-dot")).backgroundColor, fg };
+    });
+    expect(doneDot.dot).toBe(doneDot.fg);
+  });
+
+  test("stacked: the workflow leads and the prompt follows beneath it", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["architect"] });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+    await expect(page.locator(".pipeline-view")).toBeVisible();
+
+    const stacked = await page.evaluate(() => {
+      const box = (sel) => document.querySelector(sel)?.getBoundingClientRect() ?? null;
+      const view = box(".pipeline-view");
+      const recap = box(".pipeline-prompt-recap");
+      const round = (r) =>
+        r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) } : null;
+      return { view: round(view), recap: round(recap) };
+    });
+    expect(stacked.view).not.toBeNull();
+    expect(stacked.recap).not.toBeNull();
+    // One column: both blocks share the panel's full width.
+    expect(stacked.view.x).toBe(stacked.recap.x);
+    expect(stacked.view.w).toBe(stacked.recap.w);
+    // The workflow leads; the prompt follows beneath it (the mock's order).
+    expect(stacked.view.y).toBeLessThan(stacked.recap.y);
+    await expect(page.locator("#pipeline-edit-prompt")).toBeVisible();
+
+    pipeline.release("architect");
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
+  });
+});
