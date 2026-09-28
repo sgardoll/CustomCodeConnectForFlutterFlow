@@ -232,15 +232,12 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   for (const entry of classes) {
     const { className, content } = entry;
 
-    // includeSdkPackages: the SDK-name filter exists for dependency
-    // discovery, not verification - a project can declare `flutter` or
-    // `flutter_localizations` from git or hosted, and a name that was
-    // filtered out here would slip past the unrepresentable check and reach
-    // the analyzer as a missing-URI error, refusing the deploy instead of
-    // reporting the class unverified.
-    const importedPackages = extractPackageImports(content, {
-      includeSdkPackages: true,
-    });
+    // SDK names must reach the unrepresentable check: a project can declare
+    // `flutter` or `flutter_localizations` from git or hosted, and a name
+    // filtered out here would slip past that check and reach the analyzer as
+    // a missing-URI error, refusing the deploy instead of reporting the class
+    // unverified.
+    const importedPackages = extractPackageImports(content);
 
     // Scoped to this class's own imports. A dependency the project declares
     // from a source the manifest cannot express is only a problem for a class

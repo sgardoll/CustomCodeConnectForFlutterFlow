@@ -2247,7 +2247,11 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
   if (merged.added.length > 0) {
     console.log(
       "Adding dependencies:",
-      merged.added.map((name) => `${name}: ${plan.additions[name] || "any"}`).join(", "),
+      merged.added.map((name) => {
+        const addition = plan.additions[name];
+        const display = addition?.sdk ? `sdk: ${addition.sdk}` : (addition || "any");
+        return `${name}: ${display}`;
+      }).join(", "),
       plan.sdk.dartSdkFloor ? `(resolved for Dart ${plan.sdk.dartSdkFloor})` : "",
     );
   }

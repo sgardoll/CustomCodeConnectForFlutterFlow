@@ -51,6 +51,32 @@ test("rule 3: adds a missing package at the newest SDK-compatible release", asyn
   assert.deepEqual(plan.warnings, []);
 });
 
+test("rule 3: an SDK package missing from the pubspec is added as sdk: flutter", async () => {
+  // flutter_web_plugins is not on pub.dev, so a hosted constraint names a
+  // source pub cannot resolve. The SDK supplies it, so the merged pubspec
+  // gets the same `sdk: flutter` entry the project would have declared.
+  let queried = null;
+  const plan = await planDependencyChanges(
+    PROJECT_PUBSPEC,
+    { flutter_web_plugins: "", record: "" },
+    {
+      resolveVersions: async (names) => {
+        queried = names;
+        return stubResolver({ record: "^6.2.1" })(names);
+      },
+    },
+  );
+
+  assert.deepEqual(plan.additions.flutter_web_plugins, { sdk: "flutter" });
+  assert.deepEqual(plan.additions.record, "^6.2.1");
+  assert.deepEqual(queried, ["record"]);
+  assert.deepEqual(plan.warnings, []);
+
+  const merged = mergeDependenciesIntoYaml(PROJECT_PUBSPEC, plan.additions);
+  assert.match(merged.yaml, /  flutter_web_plugins:\n    sdk: flutter/);
+  assert.deepEqual(merged.added.sort(), ["flutter_web_plugins", "record"]);
+});
+
 test("rule 3: passes the project's SDK floors to the registry lookup", async () => {
   let seen = null;
   await planDependencyChanges(

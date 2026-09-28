@@ -451,9 +451,14 @@ export function formatConstraint(constraint) {
   return `'${constraint.replace(/'/g, "''")}'`;
 }
 
-function formatDependencyLine(indent, name, version) {
+function formatDependencyLines(indent, name, version) {
+  // An SDK-supplied package takes a block entry - `name:` then its own
+  // `sdk:` key - not a version constraint.
+  if (version && typeof version === "object" && version.sdk) {
+    return [`${indent}${name}:`, `${indent}  sdk: ${version.sdk}`];
+  }
   const constraint = String(version || "").trim();
-  return `${indent}${name}: ${constraint ? formatConstraint(constraint) : ">=0.0.0"}`;
+  return [`${indent}${name}: ${constraint ? formatConstraint(constraint) : ">=0.0.0"}`];
 }
 
 /**
@@ -465,7 +470,8 @@ function formatDependencyLine(indent, name, version) {
  * (or FlutterFlow) may have pinned it deliberately.
  *
  * @param {string} yamlContent - The project's current pubspec.yaml
- * @param {Object<string, string>} newDependencies - name -> version constraint
+ * @param {Object<string, string|{sdk: string}>} newDependencies - name ->
+ *   version constraint, or `{sdk}` for a package the Flutter SDK supplies
  * @returns {{yaml: string, added: string[], alreadyPresent: string[]}}
  */
 export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
@@ -499,8 +505,8 @@ export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
 
   const block = findDependenciesBlock(lines);
   if (block) {
-    const insertions = added.map(([name, version]) =>
-      formatDependencyLine(block.childIndent, name, version),
+    const insertions = added.flatMap(([name, version]) =>
+      formatDependencyLines(block.childIndent, name, version),
     );
     lines.splice(block.endIndex, 0, ...insertions);
   } else {
@@ -508,7 +514,7 @@ export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
     if (lines.length > 0 && lines[lines.length - 1].trim() !== "") lines.push("");
     lines.push("dependencies:");
     added.forEach(([name, version]) => {
-      lines.push(formatDependencyLine("  ", name, version));
+      lines.push(...formatDependencyLines("  ", name, version));
     });
   }
 

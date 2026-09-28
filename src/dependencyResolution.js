@@ -23,10 +23,12 @@ import {
 } from "./pubspecSync.js";
 import { constraintCanReach, constraintLowerBound } from "./pubVersions.js";
 import { resolveLatestCompatibleVersions } from "./pubRegistry.js";
+import { FLUTTER_SDK_PACKAGES } from "./dartPackageImports.js";
 
 /**
  * @typedef {Object} DependencyPlan
- * @property {Object<string, string>} additions - name -> constraint to add
+ * @property {Object<string, string|{sdk: string}>} additions - name ->
+ *   constraint to add, or `{sdk}` for a package the Flutter SDK supplies
  * @property {Object<string, string>} overrides - name -> constraint to rewrite
  * @property {Array<{name: string, constraint: string}>} kept - left as declared
  * @property {string[]} warnings - what the deploying user needs to know
@@ -73,11 +75,16 @@ export async function planDependencyChanges(
 
   const declared = parseExistingDependencies(yamlContent);
   const missing = [];
+  const missingSdk = [];
 
   for (const [name, requiredMinimum] of requested) {
     const existing = declared.get(name);
     if (!existing) {
-      missing.push(name);
+      // An SDK-supplied name absent from the project's pubspec is still
+      // SDK-sourced - pub.dev does not carry it, so a hosted constraint would
+      // name a source pub cannot resolve. The merged pubspec gets the same
+      // `sdk: flutter` entry the project would have declared itself.
+      (FLUTTER_SDK_PACKAGES.has(name) ? missingSdk : missing).push(name);
       continue;
     }
 
@@ -113,6 +120,10 @@ export async function planDependencyChanges(
       `"${name}" was pinned to ${existing.constraint} in your project, which cannot resolve the ${minimum} the generated code needs. ` +
         `Raising it to ^${minimum} — this changes a dependency the rest of your app also uses.`,
     );
+  }
+
+  for (const name of missingSdk) {
+    plan.additions[name] = { sdk: "flutter" };
   }
 
   // Rule 3: everything the project does not have yet.

@@ -42,13 +42,16 @@ test("ignores dart: sdk and FlutterFlow-managed local imports", () => {
   assert.deepEqual(extractPackageImports(code), []);
 });
 
-test("ignores Flutter SDK packages that need no pubspec entry", () => {
+test("returns SDK names too - their source is decided downstream", () => {
+  // Whether `flutter` needs a pubspec entry is not the extractor's call: a
+  // project can declare the name from git, and an undeclared SDK import must
+  // reach the dependency plan so the merged pubspec can gain `sdk: flutter`.
   const code = [
     "import 'package:flutter/material.dart';",
     "import 'package:flutter_test/flutter_test.dart';",
   ].join("\n");
 
-  assert.deepEqual(extractPackageImports(code), []);
+  assert.deepEqual(extractPackageImports(code), ["flutter", "flutter_test"]);
 });
 
 test("returns an empty list for code with no package imports", () => {
@@ -124,6 +127,20 @@ test("an escaped quote inside a URI does not end the literal", () => {
     'src/c\\"d.dart',
   ]);
   assert.deepEqual(extractPackageImports(code), ["private_thing"]);
+});
+
+test("a comparison literal inside `if (...)` is not a URI", () => {
+  // `== 'true'` compares a config variable with a string; the literal is not
+  // a file, and reading it as one would skip an otherwise verifiable class.
+  const code =
+    "import 'package:foo/foo.dart' if (dart.library.io == 'true') 'package:bar/bar.dart';\n" +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "package:foo/foo.dart",
+    "package:bar/bar.dart",
+  ]);
+  assert.deepEqual(extractPackageImports(code), ["foo", "bar"]);
 });
 
 test("the opposite quote inside a URI is a filename char, not a delimiter", () => {
