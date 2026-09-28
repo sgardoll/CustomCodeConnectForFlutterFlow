@@ -61,10 +61,12 @@ function stripComments(code) {
 // an import/export directive is code the class needs. The directive regex
 // runs to the closing `;`, stepping over quoted literals whole because a
 // string is the one place a `;` is legal - `import 'src/a;b.dart';` names a
-// file, and stopping at its `;` would lose the URI.
+// file, and stopping at its `;` would lose the URI. String alternatives
+// consume `\x` escape pairs so an escaped quote does not end the literal
+// early - `'a\'b.dart'` is one URI, not `a\` followed by a stranded quote.
 const DIRECTIVE_PATTERN =
-  /\b(?:import|export)\s+(?=['"])(?:'[^'\n]*'|"[^"\n]*"|[^;'"])*;/g;
-const URI_PATTERN = /(['"])([^'"\n]+)\1/g;
+  /\b(?:import|export)\s+(?=['"])(?:'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
+const URI_PATTERN = /(['"])((?:\\.|[^'"\\\n])+)\1/g;
 
 /**
  * Returns every URI the source imports or exports, in first-seen order.

@@ -111,6 +111,21 @@ test("a semicolon inside a quoted URI does not end the directive", () => {
   assert.deepEqual(extractPackageImports(code), ["io_impl"]);
 });
 
+test("an escaped quote inside a URI does not end the literal", () => {
+  // `'a\'b.dart'` is one URI: the escaped `'` is part of the path, not the
+  // terminator. Ending the literal early loses the rest of the directive.
+  const code =
+    "import 'package:private_thing/a\\'b.dart' show A;\n" +
+    'import "src/c\\"d.dart";\n' +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "package:private_thing/a\\'b.dart",
+    'src/c\\"d.dart',
+  ]);
+  assert.deepEqual(extractPackageImports(code), ["private_thing"]);
+});
+
 test("a conditional URI in a comment is not a dependency", () => {
   const code = [
     "// import 'package:a/a.dart' if (dart.library.io) 'package:b/b.dart';",
