@@ -113,8 +113,9 @@ async function saveKeyThroughModal(page, { key, project } = {}) {
 
 // Gate the production projects endpoint: the next request can be held pending
 // and released on demand, so a test can let a stale response land only after
-// the endpoint changed. Every other production request answers immediately.
-async function gateProductionListProjects(page) {
+// the endpoint changed. Every other production request answers immediately;
+// the held request answers with `heldResponse` on release.
+async function gateProductionListProjects(page, heldResponse = sampleProjectList) {
   let holdNext = false;
   let releaseHeld = null;
   let markHeld = null;
@@ -132,7 +133,7 @@ async function gateProductionListProjects(page) {
     await new Promise((resolve) => {
       releaseHeld = resolve;
     });
-    await route.fulfill(sampleProjectList());
+    await route.fulfill(heldResponse());
   });
 
   return {
@@ -366,7 +367,9 @@ test.describe("STU-384 account connection", () => {
       [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
       [STAGING_LIST]: stagingProjectList(),
     });
-    const gate = await gateProductionListProjects(page);
+    // The held check resolves with an empty list: a stale "no-projects"
+    // outcome is visibly different from staging's "connected".
+    const gate = await gateProductionListProjects(page, emptyProjectList);
 
     await page.goto("/");
     await saveKeyThroughModal(page, { key: KEY, project: PROJ });
