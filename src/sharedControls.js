@@ -89,6 +89,11 @@ export function closeModal(modalOrId, options = {}) {
   if (!modal || (!options.force && !isDismissible(modal))) return false;
   modal.classList.remove("open");
   modal.setAttribute("aria-hidden", "true");
+  if (modal !== activeModal) {
+    // A background dialog closing must not release the active dialog's
+    // focus trap, inert background, or saved page scroll.
+    return true;
+  }
   restoreBackground();
   document.body.style.overflow = savedOverflow;
   activeModal = null;

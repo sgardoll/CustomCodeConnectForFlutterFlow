@@ -7132,8 +7132,9 @@ function populateCommitTerminalModal(result, { heading, title, guidance }) {
   if (errorMap && !(errorMap instanceof Map)) {
     errorMap = new Map(Object.entries(errorMap));
   }
-  if (fileList && errorMap && errorMap.size > 0) {
-    fileList.innerHTML = [...errorMap.entries()]
+  const fileOutcomeItems = fileList?.querySelector("ul");
+  if (fileList && fileOutcomeItems && errorMap && errorMap.size > 0) {
+    fileOutcomeItems.innerHTML = [...errorMap.entries()]
       .map(
         ([file, info]) =>
           `<li class="py-1.5 border-b border-gray-100 last:border-0 text-xs text-gray-700"><span class="font-semibold">${escapeHtml(
@@ -7143,6 +7144,7 @@ function populateCommitTerminalModal(result, { heading, title, guidance }) {
       .join("");
     fileList.classList.remove("hidden");
   } else if (fileList) {
+    if (fileOutcomeItems) fileOutcomeItems.innerHTML = "";
     fileList.classList.add("hidden");
   }
 
