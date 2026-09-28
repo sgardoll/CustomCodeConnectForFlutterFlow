@@ -4969,6 +4969,7 @@ function snapshotGenerationResult() {
     artifactBundle: pipelineState.artifactBundle,
     bundleReview: pipelineState.bundleReview,
     selectedArtifactId: pipelineState.selectedArtifactId,
+    resultsViewMode: pipelineState.resultsViewMode,
   };
 }
 
@@ -5053,6 +5054,9 @@ function restoreAndShowReplacementFailure(error, { previous, stage, runId, retry
   hidePipelineProgress();
   setGenerationStageVisible(true);
   showResultsView();
+  // showResultsView lands every result on Summary; a restored result goes
+  // back to whichever surface the user was inspecting before the run failed.
+  pipelineState.resultsViewMode = previous.resultsViewMode || "summary";
   updateSelectedArtifactPanels();
   cancelPipelineMorph();
   showReplacementFailure(error, { stage, runId, retry });
@@ -9688,7 +9692,17 @@ function switchView(view, pushState = true, moveFocus = true) {
       invalidatePipelineRun(); abortPipelineRequests();
       pipelineState.isRunning = false;
       setRunPipelineButtonBusy(false);
-      stopProgressTimer(); cancelPipelineHideTimer();
+      // The abandoned run has nothing left to resume: dismiss its progress
+      // panel and return the stage to settled content — the previous result
+      // when one exists, otherwise the ready state — so coming back home
+      // can't resurrect a panel for a run that no longer exists.
+      hidePipelineProgress();
+      if (pipelineState.artifactBundle) {
+        updateSelectedArtifactPanels();
+      } else {
+        document.getElementById("results-view")?.classList.remove("visible");
+        document.getElementById("ready-state")?.classList.remove("hidden");
+      }
     }
   }
   const views = document.querySelectorAll(".view[data-view]");
