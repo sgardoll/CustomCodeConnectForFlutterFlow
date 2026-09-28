@@ -154,7 +154,9 @@ export function buildBundleDeployPlan(bundle, options = {}) {
   // the guess this replaced (`^1.0.0`) pinned every package to its first major.
   const detectedDependencies = {};
   selected.forEach((artifact) => {
-    extractPackageImports(artifact.code || "").forEach((name) => {
+    // The same expression that fills the file entry above - an import added by
+    // a review fix must be discovered like any other.
+    extractPackageImports(artifact.fixedCode || artifact.code || "").forEach((name) => {
       if (!(name in declaredDependencies)) {
         detectedDependencies[name] = "";
       }
