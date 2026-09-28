@@ -458,17 +458,21 @@ export function formatConstraint(constraint) {
 // keeps its declared shape. The value is read as a complete YAML scalar -
 // a quoted range like `'>=0.19.0 <0.20.0'` must go whole, or its suffix would
 // be left behind - and a trailing `,`, `}`, or comment stays untouched.
+// Returns false when no member was found, so the caller never reports an
+// override it did not write.
 function rewriteVersionMember(lines, entry, constraint) {
   const parentIndent = indentOf(lines[entry.lineIndex]);
   for (let j = entry.lineIndex; j < lines.length; j += 1) {
     const line = lines[j];
     if (j !== entry.lineIndex && indentOf(line) <= parentIndent) break;
+    // YAML permits quoted keys - `{'version': 0.19.0}` declares the same
+    // member as `{version: 0.19.0}`.
     const isMember =
       j === entry.lineIndex
-        ? /\{[^}]*\bversion\s*:/.test(line)
-        : /^\s*version\s*:/.test(line);
+        ? /\{[^}]*(?:'version'|"version"|\bversion)\s*:/.test(line)
+        : /^\s*(?:'version'|"version"|version)\s*:/.test(line);
     if (!isMember) continue;
-    const keyMatch = /\bversion\s*:\s*/.exec(line);
+    const keyMatch = /(?:'version'|"version"|\bversion)\s*:\s*/.exec(line);
     if (!keyMatch) continue;
     const valueStart = keyMatch.index + keyMatch[0].length;
     let valueEnd = valueStart;
@@ -501,8 +505,9 @@ function rewriteVersionMember(lines, entry, constraint) {
     }
     lines[j] =
       line.slice(0, valueStart) + formatConstraint(constraint) + line.slice(valueEnd);
-    return;
+    return true;
   }
+  return false;
 }
 
 function formatDependencyLines(indent, name, version) {
@@ -620,8 +625,13 @@ export function applyDependencyOverrides(yamlContent, overrides = {}) {
       continue;
     }
     if (versionPinned) {
-      rewriteVersionMember(lines, existing, String(constraint).trim());
-      overridden.push({ name, from: existing.sourceValue, to: constraint });
+      if (rewriteVersionMember(lines, existing, String(constraint).trim())) {
+        overridden.push({ name, from: existing.sourceValue, to: constraint });
+      } else {
+        // No member rewrite means the old pin stays - reporting it applied
+        // would let the deploy claim a raise the YAML never got.
+        skipped.push(name);
+      }
       continue;
     }
     const indent = " ".repeat(indentOf(lines[existing.lineIndex]));
