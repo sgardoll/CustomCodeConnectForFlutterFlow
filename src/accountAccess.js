@@ -12,6 +12,8 @@
 // the identity/metering cookie, and stored credentials are never cleared by
 // any control in this section.
 
+import { isMagicLinkSuccess } from "./authMagicLink.js";
+
 // ---------------------------------------------------------------------------
 // Key contract
 // ---------------------------------------------------------------------------
@@ -85,10 +87,25 @@ export function performSignOut({ storage, onIdentityChanged, onPlanChanged }) {
 // ---------------------------------------------------------------------------
 
 /**
+ * The most useful user-facing message an unsuccessful send response carries:
+ * its `message`, else its `error` string, else a generic failure. Never empty,
+ * so the row's error line always says something.
+ */
+function sendFailureMessage(data) {
+  const message = data?.message || data?.error;
+  if (typeof message === "string" && message.trim()) return message.trim();
+  return "The server could not send the link.";
+}
+
+/**
  * Controller for the "Send new link" control. It reflects the ACTUAL backing
  * response or failure via onState(), moves through pending -> sent|error, and
  * hard-blocks a duplicate request while one is still in flight (settle first,
- * then allow the next send).
+ * then allow the next send). A resolved request is not automatically a sent
+ * link: the response is classified with the shared magic-link contract first,
+ * so an HTTP-success body that reports a failure (an error code,
+ * success:false, or an error field) becomes the error state carrying the
+ * server's message instead of a false "sent" confirmation.
  */
 export function createSendLinkController({ sendLink, getEmail, onState }) {
   let inFlight = false;
@@ -99,6 +116,9 @@ export function createSendLinkController({ sendLink, getEmail, onState }) {
     try {
       onState({ status: "pending", error: null });
       const data = await sendLink(getEmail());
+      if (!isMagicLinkSuccess(data)) {
+        throw new Error(sendFailureMessage(data));
+      }
       result = { status: "sent", data };
       onState({ status: "sent", data });
       return result;

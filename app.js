@@ -1076,24 +1076,34 @@ let ffConnectionState = "not-configured";
 // endpoint can never overwrite the current endpoint's status or project list.
 let ffEndpointGeneration = 0;
 
-// Monotonic sequence of started projects requests (fetches and connection
-// checks). Only the newest request may apply its outcome, so a late response
-// for a key that has since been replaced — or one superseded by a newer key's
-// fetch — can never overwrite the new key's project list or status, even when
-// the endpoint did not change.
-let ffProjectRequestSeq = 0;
+// Monotonic sequences of started projects requests. The dropdown fetch and the
+// connection check are independent consumers of the same endpoint, so each kind
+// keeps its own sequence: a check starting while a fetch is pending must not
+// discard the fetch's response (which would strand the dropdown on
+// "Loading projects..." forever), and a newer fetch must not discard a pending
+// check. Within one kind only the newest request may apply its outcome, so a
+// late response for a key that has since been replaced — or one superseded by a
+// newer same-kind request — can never overwrite the new key's project list or
+// status, even when the endpoint did not change.
+let ffProjectFetchSeq = 0;
+let ffConnectionCheckSeq = 0;
 
-function beginProjectRequest() {
-  ffProjectRequestSeq += 1;
-  return ffProjectRequestSeq;
+function beginProjectFetch() {
+  ffProjectFetchSeq += 1;
+  return ffProjectFetchSeq;
+}
+
+function beginConnectionCheck() {
+  ffConnectionCheckSeq += 1;
+  return ffConnectionCheckSeq;
 }
 
 /**
  * Whether a projects request's outcome still describes the current connection
  * identity and may be applied. Three things can move under an in-flight
  * request: the endpoint (ffEndpointGeneration), the configured key (a
- * replacement or a clear), and the newest request (a newer request, in
- * particular one made with a different key, supersedes every older one). A
+ * replacement or a clear), and the newest request of the same kind (a newer
+ * fetch supersedes every older fetch; a newer check every older check). A
  * response that lost any of them must not populate the current key's project
  * list or connection status. A request made with the currently configured key
  * stays valid even when it was issued before that key was saved — that is the
@@ -1101,11 +1111,12 @@ function beginProjectRequest() {
  */
 function isCurrentProjectRequest({
   seq,
+  currentSeq,
   generation,
   storedKeyAtStart,
   requestKey,
 }) {
-  if (seq !== ffProjectRequestSeq) return false;
+  if (seq !== currentSeq) return false;
   if (generation !== ffEndpointGeneration) return false;
   return storedKeyAtStart === flutterflowApiKey
     || requestKey === flutterflowApiKey;
@@ -1651,15 +1662,22 @@ function renderApiKeyConnection() {
  */
 async function validateFlutterFlowConnection() {
   // The connection identity this check belongs to. If the endpoint, the
-  // configured key, or the newest request moves while the check is in flight,
-  // its outcome describes a previous identity and must be discarded rather
-  // than overwrite the new one's state.
-  const seq = beginProjectRequest();
+  // configured key, or the newest connection check moves while the check is in
+  // flight, its outcome describes a previous identity and must be discarded
+  // rather than overwrite the new one's state. A pending dropdown fetch is a
+  // different kind and does not supersede the check (nor the check it).
+  const seq = beginConnectionCheck();
   const generation = ffEndpointGeneration;
   const storedKeyAtStart = flutterflowApiKey;
   const apiKey = await getApiKey("flutterflow");
   const outcomeIsCurrent = () =>
-    isCurrentProjectRequest({ seq, generation, storedKeyAtStart, requestKey: apiKey });
+    isCurrentProjectRequest({
+      seq,
+      currentSeq: ffConnectionCheckSeq,
+      generation,
+      storedKeyAtStart,
+      requestKey: apiKey,
+    });
   if (!outcomeIsCurrent()) return null;
   if (!apiKey || !hasStoredKey("flutterflow")) {
     ffConnectionState = "not-configured";
@@ -1799,14 +1817,21 @@ async function fetchProjects(apiKey) {
   }
 
   // The connection identity this fetch belongs to. If the endpoint, the
-  // configured key, or the newest request moves while the fetch is in flight,
-  // its response describes a previous identity and must be discarded rather
-  // than overwrite the new one's list or status.
-  const seq = beginProjectRequest();
+  // configured key, or the newest dropdown fetch moves while the fetch is in
+  // flight, its response describes a previous identity and must be discarded
+  // rather than overwrite the new one's list or status. A connection check is
+  // a different kind and does not supersede the fetch (nor the fetch it).
+  const seq = beginProjectFetch();
   const generation = ffEndpointGeneration;
   const storedKeyAtStart = flutterflowApiKey;
   const outcomeIsCurrent = () =>
-    isCurrentProjectRequest({ seq, generation, storedKeyAtStart, requestKey: apiKey });
+    isCurrentProjectRequest({
+      seq,
+      currentSeq: ffProjectFetchSeq,
+      generation,
+      storedKeyAtStart,
+      requestKey: apiKey,
+    });
 
   // Show loading state
   select.innerHTML = '<option value="">Loading projects...</option>';

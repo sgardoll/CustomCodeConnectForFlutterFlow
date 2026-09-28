@@ -417,6 +417,54 @@ test.describe("STU-384 account connection", () => {
     ).toHaveCount(1);
   });
 
+  test("a connection check started while a dropdown fetch is pending must not strand the dropdown", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    const gate = await gateProductionListProjects(page);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its dropdown re-fetch is held in flight, so the
+    // dropdown shows the loading option while the response is pending.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+    await expect(page.locator("#flutterflow-projects-select")).toContainText(
+      "Loading projects...",
+    );
+
+    // Start a connection check for the same key and endpoint while the fetch
+    // is still pending. It answers immediately (the gate holds one request);
+    // the held fetch is the only response still outstanding.
+    await page.evaluate(() => window.validateFlutterFlowConnection());
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Release the fetch. It belongs to the current key and endpoint, so its
+    // response must still populate the dropdown — the check must not have
+    // superseded it. If it did, the dropdown would be stranded on
+    // "Loading projects..." forever.
+    const fetchSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await fetchSettled;
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#flutterflow-projects-select")).not.toContainText(
+      "Loading projects...",
+    );
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
   test("a late project fetch from the previous key cannot overwrite the new key's list", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, signedInContext());
