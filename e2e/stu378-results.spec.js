@@ -129,7 +129,7 @@ for (const viewport of [{ name: "mobile", width: 390, height: 844 }, { name: "de
     await renderResults(page, bundle, { summary: "Long file reviewed.", artifacts: [{ id: "long-file", review: { status: "pass", findings: [] } }] });
     await page.getByRole("tab", { name: /LongFile/ }).click();
 
-    const actions = page.locator(".results-action-bar > button");
+    const actions = page.locator(".results-action-bar button");
     await expect(actions).toHaveCount(3);
     await expect(actions.nth(0)).toContainText("Deploy to FlutterFlow");
     await expect(actions.nth(1)).toContainText("Add FlutterFlow Build Errors & Regenerate");
@@ -137,12 +137,8 @@ for (const viewport of [{ name: "mobile", width: 390, height: 844 }, { name: "de
     await expect(actions.nth(0)).toBeVisible();
     await expect(actions.nth(1)).toBeVisible();
     await expect(actions.nth(2)).toBeVisible();
-    // Equal prominence: all three actions must be styled alike (same font
-    // size, same padding, all filled) so none reads as a weaker secondary
-    // control. Height is only comparable at desktop — at mobile the longer
-    // labels wrap to a different number of lines, shifting the box height
-    // without changing the styling. This assertion fails if a single action
-    // is given a different size, padding or a hollow/outline treatment.
+    // Canonical HTML: equal-size actions; navy deploy, white outline secondary
+    // actions. The previous all-gradient assertion contradicted the source.
     const prominence = await actions.evaluateAll((els) =>
       els.map((el) => {
         const cs = getComputedStyle(el);
@@ -154,7 +150,8 @@ for (const viewport of [{ name: "mobile", width: 390, height: 844 }, { name: "de
           padBottom: parseFloat(cs.paddingBottom),
           padLeft: parseFloat(cs.paddingLeft),
           height: rect.height,
-          filled: cs.backgroundImage !== "none",
+          background: cs.backgroundColor,
+          gradient: cs.backgroundImage,
         };
       })
     );
@@ -166,7 +163,9 @@ for (const viewport of [{ name: "mobile", width: 390, height: 844 }, { name: "de
     expect(withinTolerance("padRight")).toBe(true);
     expect(withinTolerance("padBottom")).toBe(true);
     expect(withinTolerance("padLeft")).toBe(true);
-    expect(deploy.filled && errors.filled && refine.filled).toBe(true);
+    expect(prominence.map(action => action.gradient)).toEqual(['none','none','none']);
+    expect(deploy.background).not.toBe(errors.background);
+    expect(errors.background).toBe(refine.background);
     if (viewport.name === "desktop") expect(withinTolerance("height")).toBe(true);
 
     await page.locator("#btn-copy-results").click();

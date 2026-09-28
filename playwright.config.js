@@ -20,6 +20,10 @@ export default defineConfig({
     baseURL: BASE_URL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
+    serviceWorkers: "block",
+    launchOptions: {
+      args: ["--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1", "--no-proxy-server"],
+    },
   },
   projects: [
     {
