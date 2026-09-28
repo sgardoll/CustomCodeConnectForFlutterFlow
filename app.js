@@ -2679,14 +2679,16 @@ function getFileNameFromPath(filePath) {
 const projectSourceCache = new Map();
 
 // File writes whose provisioning outcome is unconfirmed, per cache key —
-// each dirty path maps content -> { uncertain, verified }: `uncertain` counts
-// provision attempts that may still write that content (a lost/dropped
-// request is not proof the runner stopped), and `verified` credits confirmed
-// writes an export sighting must consume first. An export showing content X
-// can retire an uncertain X-write only when no verified X-write explains the
-// observation — so a confirmed retry can never clear an earlier attempt whose
-// identical write may still land over a newer edit. While any entry is
-// outstanding, fresh exports are never cached.
+// each dirty path maps content -> { uncertain, verified, explainedByVerified }:
+// `uncertain` counts provision attempts that may still write that content (a
+// lost/dropped request is not proof the runner stopped), and `verified`
+// credits confirmed writes an export sighting must consume first. A sighting
+// of content X consumes a verified X-credit before it can retire an uncertain
+// X-write, and once a verified X-write has explained an X-sighting,
+// `explainedByVerified` marks the sighting as spent evidence: a later export
+// of the same unchanged X is the same fact, not a new landing, so it can never
+// retire an uncertain X-write whose identical content may still land. While
+// any entry is outstanding, fresh exports are never cached.
 const projectSourceDirtyWrites = new Map();
 
 // Unconfirmed sync pushes whose underlying request is still in flight, per
@@ -2930,12 +2932,13 @@ async function provisionMissingCodeFiles(
     );
 
     // A stream that ended (or a body that carried) no definitive result leaves
-    // the remote decision ambiguous. There are two distinct cases which must not
-    // be flattened: a server that explicitly refused the request (a 403/5xx
-    // `response.ok === false`) has made a definitive decision — the write did not
-    // happen — so that is a FAILURE, not an unknown outcome; only an ok response
-    // whose stream dropped before a result (or a client wait expiry) leaves the
-    // remote state genuinely unknown and must be reported UNCONFIRMED.
+    // the remote decision ambiguous. An explicit 4xx is a definitive pre-write
+    // refusal — the request was turned away before any write — so it is a
+    // FAILURE, not an unknown outcome. A 5xx is no such proof: a gateway can
+    // answer 502/503/504 after forwarding the request to the runner, which may
+    // already be deploying, so a 5xx — like an ok response whose stream dropped
+    // before a result, or a client wait expiry — leaves the remote state
+    // genuinely unknown and must be UNCONFIRMED.
     if (!result.finalResultReceived) {
       if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
         // Not marked remoteRefusal: the refusal comes from our deploy runner,
@@ -2945,9 +2948,16 @@ async function provisionMissingCodeFiles(
             `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
         );
       }
+      // The cause must match what actually happened. A non-ok status (a 5xx,
+      // typically a gateway) was received, so the runner answered — it did not
+      // drop the connection — and the message names the status. Only an ok
+      // response whose stream ended without a result is a dropped connection.
+      const cause =
+        result.httpRejected && typeof result.httpStatus === "number"
+          ? `The FlutterFlow deploy runner returned HTTP ${result.httpStatus} without reporting a result.`
+          : "The connection to the FlutterFlow deploy runner dropped before it reported a result.";
       throw new UnconfirmedDeployError(
-        "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
-          "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+        `${cause} The deploy may still be finishing on the server; open your FlutterFlow project to reconcile ` +
           "before retrying.",
       );
     }
@@ -3086,14 +3096,21 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
       // This fresh export is the authoritative read: an observed content
       // first consumes a verified write credit (the sighting is explained by
       // a confirmed provision), and only retires an uncertain write when no
-      // verified write could have produced it.
+      // verified write could have produced it. A sighting explained by a
+      // verified write is spent evidence — a later export of the same
+      // unchanged content is the same fact, so it must not retire the
+      // uncertain write whose identical content may still land.
       for (const [path, contents] of [...dirty]) {
         const observed = projectSource.files.get(path);
         if (observed !== undefined) {
           const record = contents.get(observed);
           if (record) {
-            if (record.verified > 0) record.verified -= 1;
-            else record.uncertain -= 1;
+            if (record.verified > 0) {
+              record.verified -= 1;
+              record.explainedByVerified = true;
+            } else if (!record.explainedByVerified) {
+              record.uncertain -= 1;
+            }
             if (record.uncertain <= 0 && record.verified <= 0) {
               contents.delete(observed);
             }
@@ -6772,6 +6789,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       updateProgressFromState(state);
     } else if (state === CommitState.SUCCESS || state === CommitState.ERROR) {
       updateProgressFromState(state);
+      if (commitProgressHideTimer) clearTimeout(commitProgressHideTimer);
       commitProgressHideTimer = setTimeout(() => {
         commitProgressHideTimer = null;
         hideCommitProgress();
