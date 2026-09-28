@@ -57,14 +57,14 @@ function stripComments(code) {
 }
 
 /**
- * Scans Dart source for `package:name/...` imports and returns the
- * third-party pub.dev packages it references, in first-seen order.
+ * Scans Dart source for `package:name/...` imports and exports and returns
+ * the third-party pub.dev packages they reference, in first-seen order.
  *
  * This is what a generated action's real dependencies are - not whatever an
  * AI-authored spec declared alongside it. A declared dependency list can miss
  * a package the code actually imports (a manual edit, a regeneration cycle
  * that added an import without updating the spec), and FlutterFlow rejects a
- * push whose pubspec.yaml omits a package the code imports.
+ * push whose pubspec.yaml omits a package the code imports or exports.
  *
  * @param {string} code - Dart source
  * @returns {string[]} Package names, deduplicated
@@ -100,11 +100,14 @@ export function extractImportUris(code = "") {
 export function extractPackageImports(code = "") {
   const names = [];
   const seen = new Set();
-  const importRegex = /\bimport\s+['"]package:([a-zA-Z0-9_]+)\//g;
+  // `export 'package:...'` makes the file depend on that package exactly as
+  // an import does: the package must be declared for the code to compile.
+  const directiveRegex =
+    /\b(?:import|export)\s+['"]package:([a-zA-Z0-9_]+)\//g;
   const stripped = stripComments(code);
   let match;
 
-  while ((match = importRegex.exec(stripped)) !== null) {
+  while ((match = directiveRegex.exec(stripped)) !== null) {
     const name = match[1];
     if (FLUTTER_SDK_PACKAGES.has(name) || seen.has(name)) continue;
     seen.add(name);

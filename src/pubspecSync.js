@@ -104,40 +104,60 @@ function splitValueAndComment(rest) {
 }
 
 /**
- * Reads the first key of a block-form dependency's own mapping.
+ * Reads the own-keys of a block-form dependency and reports the one that says
+ * where the package comes from.
  *
  * A block-form entry says where a package comes from on a following, more
  * deeply indented line: `sdk:`, `git:`, `path:`, a nested `hosted:`, or a
- * `version:` written on its own line. That key is the only thing that
- * distinguishes a package the Flutter SDK supplies from one the analysis
- * manifest cannot reproduce, so it is read here rather than guessed from the
- * package's name. A name list cannot work: it goes stale the moment the SDK
- * ships a package the list has not heard of, and every project declaring that
- * package then reads it as unreproducible.
+ * `version:` written on its own line. Those keys may appear in any order - a
+ * hosted dependency can validly write `version:` before `hosted:` - so the
+ * first own-key alone does not decide the source. Every own-key is scanned
+ * and the first that is not `version` wins, because `version` is a
+ * constraint, never a source. Reading only the first key would classify that
+ * version-first hosted entry as an ordinary pub.dev constraint and resolve
+ * different package code from the project's.
+ *
+ * The source is read rather than guessed from the package's name: a name list
+ * goes stale the moment the SDK ships a package it has not heard of, and
+ * every project declaring that package then reads it as unreproducible.
  *
  * @param {string[]} lines - pubspec.yaml split into lines
  * @param {number} entryIndex - Index of the dependency entry's own line
  * @param {number} endIndex - Exclusive end of the enclosing block
  * @param {number} parentIndent - Indent of the dependency entry itself
- * @returns {{key: string, value: string}|null} First own-key, or null if the
+ * @returns {{key: string, value: string}|null} The first non-`version`
+ *   own-key, the lone `version` when it is the only own-key, or null when the
  *   entry has no mapping below it
  */
 function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
+  let keyIndent = null;
+  let versionDirective = null;
+
   for (let i = entryIndex + 1; i < endIndex; i += 1) {
     const line = lines[i];
     if (isBlankOrComment(line)) continue;
-    // Shallower or equal indent means the entry's mapping has ended and this is
-    // a sibling dependency, so there is nothing of this entry's own to read.
-    if (indentOf(line) <= parentIndent) return null;
+    const indent = indentOf(line);
+    // Shallower or equal indent means the entry's mapping has ended and this
+    // is a sibling dependency, so there is nothing of this entry's own to
+    // read.
+    if (indent <= parentIndent) break;
+    if (keyIndent === null) keyIndent = indent;
+    // A line deeper than the entry's own keys belongs to the mapping of the
+    // key before it (`url:` under `hosted:`), not to the entry itself.
+    if (indent !== keyIndent) continue;
     const trimmed = line.trim();
     const key = parseDependencyName(trimmed);
     if (!key) continue;
     const { value } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
+    if (key === "version") {
+      versionDirective = { key, value };
+      continue;
+    }
     return { key, value };
   }
-  return null;
+  return versionDirective;
 }
 
 /**
