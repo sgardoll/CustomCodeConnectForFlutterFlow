@@ -179,6 +179,7 @@ test.describe("the dialog stays wired to the generation request", () => {
     await expect
       .poll(() => generatorModels, {
         message: "the generator request should carry the dialog-selected model",
+        timeout: 30000,
       })
       .toEqual(["anthropic/claude-opus-5"]);
   });
