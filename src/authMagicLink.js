@@ -36,12 +36,29 @@ export function explainPlusAliasRule(rawEmail) {
   return renderRejectionMessage(email, domain);
 }
 
+/**
+ * A magic-link send is only successful when the server says so: an explicit
+ * `success: true`, the success code, or a legacy response that carries no code
+ * and no failure field. An explicit `success: false` or a truthy `error` is
+ * never a success, with or without a code, and an empty or malformed body is
+ * not success-shaped either. Any other code — including the plus-alias
+ * rejection — is an error, even though the HTTP request itself succeeded.
+ */
+export function isMagicLinkSuccess(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  if (data.success === false || data.error) return false;
+  if (data.code) return data.code === MAGIC_LINK_SUCCESS_CODE;
+  // Legacy code-less response: only an explicit success or the legacy
+  // message-only shape counts.
+  return data.success === true || typeof data.message === 'string';
+}
+
 export function getMagicLinkResultMessage(data, email) {
   if (data?.code === PLUS_ALIAS_REJECTED_CODE) {
     return data.message || explainPlusAliasRule(email) || 'Please enter your primary email address.';
   }
-  if (data?.code === MAGIC_LINK_SUCCESS_CODE || !data?.code) {
+  if (isMagicLinkSuccess(data)) {
     return `Check your email — we sent a link to ${trimEmail(email)}`;
   }
-  return data.message || 'Something went wrong. Please try again.';
+  return data?.message || 'Something went wrong. Please try again.';
 }

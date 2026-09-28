@@ -4,6 +4,7 @@ import {
   guestIdentity,
   professionalSubscription,
   magicLinkSent,
+  ok,
   err,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
@@ -160,6 +161,33 @@ test.describe("STU-387 account access & data", () => {
     // A rate limit must not read identically to a server error: the real
     // failure reason (per the module contract) is what distinguishes them.
     expect(rateLimitText?.trim()).not.toBe(serverErrorText?.trim());
+  });
+
+  test("a resolved 200 that reports a send failure renders an error, never the sent confirmation", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...refreshOverride(),
+      [ENDPOINTS.identity]: identityWithUsage({ email: EMAIL, count: 12 }),
+      [ENDPOINTS.getSubscription]: professionalSubscription(),
+      // HTTP 200, but the body says the send failed: the request resolving is
+      // not proof a link was sent, so the row must surface the server's
+      // failure message instead of the sent confirmation.
+      [ENDPOINTS.authSendMagicLink]: ok({
+        code: "SEND_FAILED",
+        message: "We could not send the link right now.",
+      }),
+    });
+    await page.goto("/");
+    await openAccount(page);
+
+    const msg = page.locator("#send-new-link-msg");
+    const btn = page.locator("#send-new-link-btn");
+    await btn.click();
+
+    await expect(msg).toContainText("We could not send the link right now.");
+    await expect(msg).toHaveClass(/error/);
+    await expect(msg).not.toContainText("Check your email");
+    await expect(btn).toBeEnabled();
   });
 
   test("a second send while one is in flight is refused (single request)", async ({ page }) => {

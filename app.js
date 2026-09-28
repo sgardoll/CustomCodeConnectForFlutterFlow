@@ -48,7 +48,7 @@ import {
   explainPlusAliasRule,
   getMagicLinkResultMessage,
   isKnownProviderPlusAlias,
-  PLUS_ALIAS_REJECTED_CODE,
+  isMagicLinkSuccess,
   trimEmail,
 } from "./src/authMagicLink.js";
 import {
@@ -1072,6 +1072,149 @@ let confirmProjectToken = 0;
 //       | 'unauthorized' | 'network-error'
 let ffConnectionState = "not-configured";
 
+// Monotonic generation of the configured FlutterFlow endpoint. Every project
+// fetch and connection check captures it when it starts and discards its
+// outcome if the generation moved on, so a late response from a previous
+// endpoint can never overwrite the current endpoint's status or project list.
+let ffEndpointGeneration = 0;
+
+// Monotonic sequences of started projects requests. The dropdown fetch and the
+// connection check are independent consumers of the same endpoint, so each kind
+// keeps its own sequence: a check starting while a fetch is pending must not
+// discard the fetch's response (which would strand the dropdown on
+// "Loading projects..." forever), and a newer fetch must not discard a pending
+// check. Within one kind only the newest request may apply its outcome, so a
+// late response for a key that has since been replaced — or one superseded by a
+// newer same-kind request — can never overwrite the new key's project list or
+// status, even when the endpoint did not change.
+let ffProjectFetchSeq = 0;
+let ffConnectionCheckSeq = 0;
+
+// Issue order across BOTH request kinds. The dropdown fetch and the
+// connection check are superseded independently within their kind, but they
+// write shared state — the account connection status and the stored
+// project's confirmation. Ordering is split by what a request writes: an
+// applied CONNECTION outcome (the account status card) may only be written by
+// a request that actually produces one, so a list response that updates the
+// deploy dialog never leaves a pending check unable to settle the card; an
+// applied CONFIRMATION (the stored target's binding) is ordered separately so
+// the newest list response always wins the stored selection. A request may
+// write a domain only while no newer request already applied that domain.
+let ffRequestOrderSeq = 0;
+let ffAppliedOutcomeOrder = 0;
+let ffAppliedConfirmationOrder = 0;
+
+// Identity binding for project selections. A selection is only usable as a
+// deploy target while it is confirmed for the key + endpoint generation it was
+// made under. This binding is the one thing every read of a selection checks,
+// so a key replacement or endpoint change makes every previously confirmed
+// selection unusable until a completed listProjects response re-confirms it or
+// it is cleared. See isProjectSelectionConfirmed.
+let projectSelectionIdentity = null; // { projectId, key, generation } | null
+
+// Identity of the list currently populating the API-key editor's project
+// dropdown: the key + endpoint generation whose completed fetch produced the
+// options on screen. Starting a fetch clears it (the options are replaced by
+// the loading placeholder); only an applied response sets it.
+let projectListIdentity = null; // { key, generation } | null
+
+// Identity of the list currently populating the deploy confirmation modal's
+// project dropdown. A target may only be read from that dropdown while this
+// identity still matches the current key + endpoint generation.
+let confirmProjectListIdentity = null; // { key, generation } | null
+
+function beginProjectFetch() {
+  ffProjectFetchSeq += 1;
+  return ffProjectFetchSeq;
+}
+
+function beginConnectionCheck() {
+  ffConnectionCheckSeq += 1;
+  return ffConnectionCheckSeq;
+}
+
+/**
+ * Binds a project selection to the identity that produced it. The selection is
+ * an option of a completed fetch's list, so the binding copies that list's
+ * identity (the key it was fetched with and the endpoint generation it ran in).
+ * Called from the dropdown's change handler (a user choice) and when a
+ * completed response lists the stored selection (a re-confirmation).
+ */
+function bindProjectSelection(projectId, key, generation) {
+  projectSelectionIdentity = projectId ? { projectId, key, generation } : null;
+}
+
+/**
+ * The single gate every read of a project selection goes through. A selection
+ * may be used as the deploy target only while the binding names the same
+ * project and was confirmed under the key + endpoint generation being checked.
+ * A key replacement or endpoint change moves one of them, so the selection
+ * stops matching and cannot be read as a target until a completed fetch
+ * re-confirms it. The key is a parameter so the save path can check the key it
+ * is saving before that key has been loaded into memory.
+ */
+function isProjectSelectionConfirmed(projectId, key = flutterflowApiKey) {
+  if (!projectId) return false;
+  const identity = projectSelectionIdentity;
+  if (!identity) return false;
+  return (
+    identity.projectId === projectId &&
+    identity.key === key &&
+    identity.generation === ffEndpointGeneration
+  );
+}
+
+/**
+ * Reconciles the stored selection against a completed listProjects response
+ * for the current key + endpoint. A response that lists the stored project
+ * re-confirms it; one that does not strips its confirmation, so no later read
+ * can deploy to a project this key's completed response did not offer.
+ * Storage is left alone — the account card keeps mirroring the stored
+ * configuration; only the deploy gate changes. An in-flight explicit choice
+ * for a different project is never overwritten.
+ */
+function reconcileStoredProjectSelection(projects, key, generation) {
+  if (!flutterflowProjectId) return;
+  if (
+    projectSelectionIdentity &&
+    projectSelectionIdentity.projectId !== flutterflowProjectId
+  ) {
+    return;
+  }
+  const listed = (projects || []).some(
+    (project) => (project.id || project.projectId) === flutterflowProjectId,
+  );
+  if (listed) {
+    bindProjectSelection(flutterflowProjectId, key, generation);
+  } else if (projectSelectionIdentity) {
+    bindProjectSelection("", null, null);
+  }
+}
+
+/**
+ * Whether a projects request's outcome still describes the current connection
+ * identity and may be applied. Three things can move under an in-flight
+ * request: the endpoint (ffEndpointGeneration), the configured key (a
+ * replacement or a clear), and the newest request of the same kind (a newer
+ * fetch supersedes every older fetch; a newer check every older check). A
+ * response that lost any of them must not populate the current key's project
+ * list or connection status. A request made with the currently configured key
+ * stays valid even when it was issued before that key was saved — that is the
+ * editor's preview fetch.
+ */
+function isCurrentProjectRequest({
+  seq,
+  currentSeq,
+  generation,
+  storedKeyAtStart,
+  requestKey,
+}) {
+  if (seq !== currentSeq) return false;
+  if (generation !== ffEndpointGeneration) return false;
+  return storedKeyAtStart === flutterflowApiKey
+    || requestKey === flutterflowApiKey;
+}
+
 async function initializeApiKeys() {
   // Remove an exportable key left by an earlier version even if its encrypted
   // credentials were already cleared.
@@ -1437,6 +1580,7 @@ async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
   const enteredKey = flutterflowInput.value.trim();
+  const isKeyReplaced = Boolean(enteredKey) && enteredKey !== flutterflowApiKey;
   const selectedProjectId = projectSelect?.value.trim() || "";
 
   // Only save if user entered a new value
@@ -1451,13 +1595,54 @@ async function saveApiKeys() {
     }
   }
 
+  // The key the selection is saved under: a replacement key is the effective
+  // one even though initializeApiKeys has not loaded it into memory yet.
+  const effectiveKey = enteredKey || flutterflowApiKey;
+
   if (selectedProjectId) {
     if (!validateFlutterFlowProjectId(selectedProjectId)) {
       showToast("The selected FlutterFlow project has an unexpected ID format.", "error");
       projectSelect.focus();
       return;
     }
-    await saveApiKey("flutterflow_project_id", selectedProjectId);
+    // A selection is persisted only while the identity binding confirms it for
+    // the key being saved: the dropdown's change handler binds a choice to the
+    // key + endpoint generation of the list that produced it, and a completed
+    // response re-confirms the stored value. A choice made from the old key's
+    // list (or a value auto-reselected under a replaced key) carries the old
+    // identity, so it is cleared instead of becoming the new key's target.
+    if (isProjectSelectionConfirmed(selectedProjectId, effectiveKey)) {
+      await saveApiKey("flutterflow_project_id", selectedProjectId);
+    } else {
+      // The on-screen choice belongs to a different key's list. Only a key
+      // replacement may drop the stored target: with the configured key
+      // unchanged, that choice is a preview leftover — the stored project
+      // stays configured and merely the options are reloaded for it.
+      if (isKeyReplaced) {
+        clearStoredProjectSelection();
+      } else {
+        // Drop the preview binding so the reloaded list's reconcile can
+        // re-confirm the stored project (its different-project guard would
+        // otherwise keep skipping it, leaving the stored target refused).
+        projectSelectionIdentity = null;
+      }
+      projectSelect.value = "";
+      // The options on screen came from a list that does not belong to the key
+      // being saved; refresh them for the saved key so the user can make a
+      // fresh, confirmable choice.
+      if (
+        effectiveKey &&
+        !(
+          projectListIdentity &&
+          projectListIdentity.key === effectiveKey &&
+          projectListIdentity.generation === ffEndpointGeneration
+        )
+      ) {
+        fetchProjects(effectiveKey);
+      }
+    }
+  } else if (isKeyReplaced) {
+    clearStoredProjectSelection();
   }
 
   // Reinitialize keys
@@ -1510,6 +1695,11 @@ async function clearAllApiKeys() {
   localStorage.removeItem(STORAGE_KEY_PREFIX + "flutterflow_project_id");
   sessionStorage.removeItem(SESSION_STORAGE_KEY_PREFIX + "flutterflow");
   sessionStorage.removeItem(SESSION_STORAGE_KEY_PREFIX + "flutterflow_project_id");
+
+  // No key and no list: every project selection binding is meaningless now.
+  projectSelectionIdentity = null;
+  projectListIdentity = null;
+  confirmProjectListIdentity = null;
 
   // Reinitialize keys
   await initializeApiKeys();
@@ -1603,8 +1793,35 @@ function renderApiKeyConnection() {
  * @returns {Promise<Array|null>} the loaded projects, or null on error.
  */
 async function validateFlutterFlowConnection() {
+  // The connection identity this check belongs to. If the endpoint, the
+  // configured key, or the newest connection check moves while the check is in
+  // flight, its outcome describes a previous identity and must be discarded
+  // rather than overwrite the new one's state. A pending dropdown fetch is a
+  // different kind and does not supersede the check (nor the check it).
+  const seq = beginConnectionCheck();
+  const order = ++ffRequestOrderSeq;
+  const generation = ffEndpointGeneration;
+  const storedKeyAtStart = flutterflowApiKey;
   const apiKey = await getApiKey("flutterflow");
+  const outcomeIsCurrent = () =>
+    isCurrentProjectRequest({
+      seq,
+      currentSeq: ffConnectionCheckSeq,
+      generation,
+      storedKeyAtStart,
+      requestKey: apiKey,
+    });
+  // Everything a check writes is shared connection state, so a check that
+  // started before a newer request's outcome was applied has nothing left to
+  // write: skip it entirely rather than flash "validating" over the newer
+  // result and then fail silently.
+  if (!outcomeIsCurrent() || order <= ffAppliedOutcomeOrder) return null;
+  const applyConfirmation = () => {
+    ffAppliedConfirmationOrder = Math.max(ffAppliedConfirmationOrder, order);
+  };
   if (!apiKey || !hasStoredKey("flutterflow")) {
+    ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     ffConnectionState = "not-configured";
     renderApiKeyConnection();
     return null;
@@ -1621,12 +1838,29 @@ async function validateFlutterFlowConnection() {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
+    if (!outcomeIsCurrent()) return null;
+    // A newer request of either kind already applied its outcome: this older
+    // response must not write shared state over it.
+    if (order <= ffAppliedOutcomeOrder) return null;
+    ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     ffConnectionState = projects && projects.length > 0
       ? "connected"
       : "no-projects";
+    // A completed check for the current key is authoritative for what that key
+    // can reach: it re-confirms the stored selection when the response lists
+    // it, and strips its confirmation when it does not — but only while it is
+    // still the newest confirmation writer, so a fresher list response wins.
+    if (order >= ffAppliedConfirmationOrder) {
+      reconcileStoredProjectSelection(projects, apiKey, generation);
+    }
     renderApiKeyConnection();
     return projects;
   } catch (error) {
+    if (!outcomeIsCurrent()) return null;
+    if (order <= ffAppliedOutcomeOrder) return null;
+    ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
       ? "unauthorized"
@@ -1639,12 +1873,14 @@ async function validateFlutterFlowConnection() {
 /**
  * Clears the currently selected FlutterFlow project so a stale selection
  * (belonging to a different endpoint, or a removed key) is never reused as a
- * deploy/sync default. Storage, the in-memory value and the dropdown mirror
- * each other: the account connection card and the deploy confirmation read the
- * same stored value, so invalidating it keeps them consistent.
+ * deploy/sync default. Storage, the in-memory value, its identity binding and
+ * the dropdown mirror each other: the account connection card and the deploy
+ * confirmation read the same stored value, so invalidating it keeps them
+ * consistent.
  */
 function clearStoredProjectSelection() {
   flutterflowProjectId = "";
+  projectSelectionIdentity = null;
   localStorage.removeItem(STORAGE_KEY_PREFIX + "flutterflow_project_id");
   sessionStorage.removeItem(SESSION_STORAGE_KEY_PREFIX + "flutterflow_project_id");
 }
@@ -1655,6 +1891,12 @@ function clearStoredProjectSelection() {
  * re-fetch the project list for the new endpoint when a key is configured.
  */
 function invalidateStaleProjectSelection() {
+  // Any request still in flight belongs to the previous endpoint: advancing
+  // the generation makes it discard its outcome instead of writing it over the
+  // new endpoint's status or project list.
+  ffEndpointGeneration += 1;
+  projectListIdentity = null;
+  confirmProjectListIdentity = null;
   clearStoredProjectSelection();
   const select = document.getElementById("flutterflow-projects-select");
   if (select) {
@@ -1701,6 +1943,26 @@ function setupFlutterFlowValidation() {
       }, 500),
     );
   }
+
+  const projectSelect = document.getElementById("flutterflow-projects-select");
+  if (projectSelect) {
+    projectSelect.addEventListener("change", () => {
+      const chosen = projectSelect.value.trim();
+      // A choice is one of the options a completed fetch produced, so it is
+      // bound to that list's identity. Without a completed list there is
+      // nothing to bind, and any previous binding no longer matches the value
+      // on screen.
+      if (chosen && projectListIdentity) {
+        bindProjectSelection(
+          chosen,
+          projectListIdentity.key,
+          projectListIdentity.generation,
+        );
+      } else {
+        bindProjectSelection("", null, null);
+      }
+    });
+  }
 }
 
 /**
@@ -1735,13 +1997,49 @@ async function fetchProjects(apiKey) {
     return;
   }
 
-  // Show loading state
+  // The connection identity this fetch belongs to. If the endpoint, the
+  // configured key, or the newest dropdown fetch moves while the fetch is in
+  // flight, its response describes a previous identity and must be discarded
+  // rather than overwrite the new one's list or status. A connection check is
+  // a different kind and does not supersede the fetch (nor the fetch it).
+  const seq = beginProjectFetch();
+  const order = ++ffRequestOrderSeq;
+  const generation = ffEndpointGeneration;
+  const storedKeyAtStart = flutterflowApiKey;
+  const outcomeIsCurrent = () =>
+    isCurrentProjectRequest({
+      seq,
+      currentSeq: ffProjectFetchSeq,
+      generation,
+      storedKeyAtStart,
+      requestKey: apiKey,
+    });
+  // The dropdown is this fetch's own surface: the newest fetch still fills it
+  // even when its shared-state outcome is stale. Shared writes — connection
+  // status and stored-project confirmation — go to the newest request of
+  // either kind only, so an older list cannot re-mark the account connected
+  // after a newer check failed.
+  const mayWriteConnectionOutcome = () => order > ffAppliedOutcomeOrder;
+  const claimConnectionOutcome = () => {
+    ffAppliedOutcomeOrder = Math.max(ffAppliedOutcomeOrder, order);
+  };
+
+  // Show loading state. The options are replaced by the loading placeholder
+  // below, so no list is on screen until this fetch's response is applied.
+  projectListIdentity = null;
   select.innerHTML = '<option value="">Loading projects...</option>';
   if (errorElement) errorElement.classList.add("hidden");
 
   // A real request is in flight; the account connection card shows validating
-  // until the outcome is known (never "connected" from storage alone).
-  if (hasStoredKey("flutterflow") || apiKey) {
+  // until the outcome is known (never "connected" from storage alone). Only a
+  // request for the key that is actually configured describes the account — a
+  // preview request for a key that is never saved must not flash validating
+  // (and must not write any account status below).
+  if (
+    mayWriteConnectionOutcome() &&
+    apiKey === flutterflowApiKey &&
+    (hasStoredKey("flutterflow") || apiKey)
+  ) {
     ffConnectionState = "validating";
   }
   renderApiKeyConnection();
@@ -1755,16 +2053,39 @@ async function fetchProjects(apiKey) {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
+    if (!outcomeIsCurrent()) return;
+
+    // The applied options belong to this fetch's key + endpoint generation.
+    projectListIdentity = { key: apiKey, generation };
+    // Shared writes — account status and stored-project confirmation — belong
+    // to the configured key only: a preview fetch for a key that is never
+    // saved must not describe the account or confirm a selection, while one
+    // whose key became the configured key mid-flight still applies.
+    const requestIsForConfiguredKey = apiKey === flutterflowApiKey;
+    const outcomeIsNewest =
+      mayWriteConnectionOutcome() && requestIsForConfiguredKey;
+    if (outcomeIsNewest) claimConnectionOutcome();
+    // A response for the configured key re-confirms (or strips) the stored
+    // selection while it is still the newest confirmation response: an older
+    // list must not restore the target's confirmation over a newer one.
+    if (order > ffAppliedConfirmationOrder && requestIsForConfiguredKey) {
+      ffAppliedConfirmationOrder = order;
+      reconcileStoredProjectSelection(projects, apiKey, generation);
+    }
 
     if (!projects || projects.length === 0) {
-      ffConnectionState = "no-projects";
-      renderApiKeyConnection();
+      if (outcomeIsNewest) {
+        ffConnectionState = "no-projects";
+        renderApiKeyConnection();
+      }
       select.innerHTML = '<option value="">No projects found</option>';
       return;
     }
 
-    ffConnectionState = "connected";
-    renderApiKeyConnection();
+    if (outcomeIsNewest) {
+      ffConnectionState = "connected";
+      renderApiKeyConnection();
+    }
 
     // Populate dropdown
     select.innerHTML = '<option value="">Select a project...</option>';
@@ -1781,12 +2102,16 @@ async function fetchProjects(apiKey) {
       select.value = flutterflowProjectId;
     }
   } catch (error) {
+    if (!outcomeIsCurrent()) return;
     console.error("Failed to fetch projects:", error);
     const msg = String((error && error.message) || "");
-    ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
-      ? "unauthorized"
-      : "network-error";
-    renderApiKeyConnection();
+    if (mayWriteConnectionOutcome() && apiKey === flutterflowApiKey) {
+      claimConnectionOutcome();
+      ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
+        ? "unauthorized"
+        : "network-error";
+      renderApiKeyConnection();
+    }
     select.innerHTML = '<option value="">Error loading projects</option>';
     if (errorElement) {
       errorElement.textContent = `Failed to load projects: ${error.message}`;
@@ -3634,6 +3959,72 @@ const commitState = {
 };
 
 /**
+ * The only way a deploy resolves its target from stored state. The stored
+ * project is returned only while the identity binding confirms it for the key
+ * the deploy will actually use (the stored key); otherwise "" is returned and
+ * the caller fails or asks for a fresh selection. Every deploy read goes
+ * through here, so a selection that survived a key or endpoint change cannot
+ * reach a push.
+ */
+async function getConfirmedStoredProjectId(forApiKey) {
+  // The deploy passes the key it captured, so the verification describes the
+  // same credential identity the push will use — never a key saved mid-flight.
+  const apiKey =
+    forApiKey !== undefined ? forApiKey : await getApiKey("flutterflow");
+  const projectId = await getApiKey("flutterflow_project_id");
+  if (!apiKey || !projectId) return "";
+  if (isProjectSelectionConfirmed(projectId, apiKey)) return projectId;
+
+  // The binding is process-local and starts empty on load, so a stored target
+  // is unconfirmed while the startup listProjects is still pending — and stays
+  // unconfirmed when no fetch ever ran. Before refusing the deploy, verify the
+  // stored target against the current key's real list here: the same guard
+  // applies (a completed response that omits the project leaves it refused),
+  // and a superseded or failed verification still returns "".
+  const order = ++ffRequestOrderSeq;
+  const generation = ffEndpointGeneration;
+  let verified = false;
+  try {
+    const client = new FlutterFlowApiClient(
+      apiKey,
+      "",
+      "main",
+      getFlutterFlowEndpoint(),
+    );
+    const projects = await client.listProjects();
+    verified = (projects || []).some(
+      (project) => (project.id || project.projectId) === projectId,
+    );
+  } catch (error) {
+    // A project-scoped key can sync its project without list permission: its
+    // listProjects denial is a 403, not proof the stored project is absent.
+    // Nothing can disprove the stored target for such a key, so it stands
+    // (still guarded by the endpoint generation + key checks below) and the
+    // push itself decides reachability; any other failure refuses.
+    const msg = String((error && error.message) || "");
+    if (!/denied \(403\)|without list permission/i.test(msg)) return "";
+    verified = true;
+  }
+  // A response that describes a superseded identity — the endpoint moved on,
+  // the configured key changed, or a newer request already applied its
+  // outcome (including one that stripped this target's confirmation) —
+  // verifies nothing.
+  if (generation !== ffEndpointGeneration) return "";
+  if (apiKey !== flutterflowApiKey) return "";
+  if (order <= ffAppliedConfirmationOrder) return "";
+  ffAppliedConfirmationOrder = order;
+  if (!verified) return "";
+  // Never overwrite an in-flight explicit choice for a different project.
+  if (
+    !projectSelectionIdentity ||
+    projectSelectionIdentity.projectId === projectId
+  ) {
+    bindProjectSelection(projectId, apiKey, generation);
+  }
+  return projectId;
+}
+
+/**
  * Commits generated code to FlutterFlow with full state tracking.
  * @param {string} dartCode - The generated Dart code to commit
  * @param {string} fileName - Name of the file (e.g., "MyWidget.dart")
@@ -3658,13 +4049,27 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
   commitState.setState(CommitState.PREPARING);
 
   try {
-    // Get credentials
+    // Get credentials. The target project is read through the identity gate:
+    // a stored selection that is not confirmed for the stored key is never
+    // used.
     const apiKey = await getApiKey("flutterflow");
-    const projectId = await getApiKey("flutterflow_project_id");
+    const endpoint = getFlutterFlowEndpoint();
+    let projectId = await getConfirmedStoredProjectId(apiKey);
+    // A key save or endpoint switch landing during the verification await
+    // would pair this captured identity with a target confirmed for another
+    // one — refuse rather than deploy a mismatched credential pair.
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
-    if (!apiKey || !projectId) {
+    if (!apiKey) {
       throw new Error(
-        "FlutterFlow credentials not configured. Please set your API key and Project ID in the API Keys settings.",
+        "FlutterFlow API Key not configured. Please set your API key in the API Keys settings.",
+      );
+    }
+    if (!projectId) {
+      throw new Error(
+        "No confirmed FlutterFlow project target. Choose a project from the loaded list in API Keys settings.",
       );
     }
 
@@ -3672,7 +4077,6 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       throw new Error("Invalid FlutterFlow Project ID format.");
     }
 
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -3857,8 +4261,18 @@ async function executeCommit(code, options = {}) {
     // Step 3: Validate FlutterFlow credentials
     commitState.setState(CommitState.VALIDATING);
     const apiKey = await getApiKey("flutterflow");
-    const projectId =
-      commitTargetProjectId || (await getApiKey("flutterflow_project_id"));
+    const endpoint = getFlutterFlowEndpoint();
+    const storedProjectId = await getApiKey("flutterflow_project_id");
+    // The modal's choice was gated on its list identity at read time; the
+    // stored fallback verifies against this deploy's captured key so the push
+    // always pairs one credential identity — and a key save or endpoint
+    // switch landing during that verification refuses rather than pairing
+    // the captured key with a target confirmed for another identity.
+    let projectId =
+      commitTargetProjectId || (await getConfirmedStoredProjectId(apiKey));
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
     if (!apiKey) {
       throw new Error(
@@ -3867,7 +4281,9 @@ async function executeCommit(code, options = {}) {
     }
     if (!projectId) {
       throw new Error(
-        "FlutterFlow Project ID not configured. Please add it in API Keys settings.",
+        storedProjectId
+          ? "The FlutterFlow project target is not confirmed for your current API key. Reopen the deploy dialog and choose a project from the loaded list."
+          : "FlutterFlow Project ID not configured. Please add it in API Keys settings.",
       );
     }
 
@@ -3905,7 +4321,6 @@ async function executeCommit(code, options = {}) {
     }
 
     commitState.setState(CommitState.PUSHING);
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -4094,14 +4509,28 @@ async function executeBundleCommit(bundlePlan, options = {}) {
 
     commitState.setState(CommitState.VALIDATING);
     const apiKey = await getApiKey("flutterflow");
-    const projectId =
-      commitTargetProjectId || (await getApiKey("flutterflow_project_id"));
+    const endpoint = getFlutterFlowEndpoint();
+    const storedProjectId = await getApiKey("flutterflow_project_id");
+    // The modal's choice was gated on its list identity at read time; the
+    // stored fallback verifies against this deploy's captured key so the push
+    // always pairs one credential identity — and a key save or endpoint
+    // switch landing during that verification refuses rather than pairing
+    // the captured key with a target confirmed for another identity.
+    let projectId =
+      commitTargetProjectId || (await getConfirmedStoredProjectId(apiKey));
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
     if (!apiKey) {
       throw new Error("FlutterFlow API Key not configured. Please add it in API Keys settings.");
     }
     if (!projectId) {
-      throw new Error("FlutterFlow Project ID not configured. Please add it in API Keys settings.");
+      throw new Error(
+        storedProjectId
+          ? "The FlutterFlow project target is not confirmed for your current API key. Reopen the deploy dialog and choose a project from the loaded list."
+          : "FlutterFlow Project ID not configured. Please add it in API Keys settings.",
+      );
     }
     if (!validateFlutterFlowProjectId(projectId)) {
       throw new Error("Invalid FlutterFlow Project ID format.");
@@ -4112,7 +4541,6 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     targetIdentity.projectId = projectId;
 
     commitState.setState(CommitState.PUSHING);
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -5585,10 +6013,14 @@ async function handleMagicLinkRequest() {
 
   try {
     const data = await sendMagicLink(email)
-    const isAliasRejected = data?.code === PLUS_ALIAS_REJECTED_CODE
-    if (input && !isAliasRejected) input.value = ''
-    input?.setAttribute('aria-invalid', String(isAliasRejected))
-    setSignInMessage(getMagicLinkResultMessage(data, email), isAliasRejected ? 'error' : 'success')
+    // Only the explicit success code (or a legacy code-less response) counts
+    // as sent. Any other code — the plus-alias rejection or an unexpected
+    // error — keeps the address, marks the field invalid and reports an
+    // error, so the user is never told to check for a link that was not sent.
+    const isSuccess = isMagicLinkSuccess(data)
+    if (input && isSuccess) input.value = ''
+    input?.setAttribute('aria-invalid', String(!isSuccess))
+    setSignInMessage(getMagicLinkResultMessage(data, email), isSuccess ? 'success' : 'error')
     // A successful send must stay retryable — the user may want to resend to
     // a different address, or send another link if the first one expires —
     // so the button is re-enabled either way, never left permanently disabled.
@@ -5596,8 +6028,8 @@ async function handleMagicLinkRequest() {
     // clearly reads as usable again.
     if (btn) {
       btn.disabled = false
-      btn.textContent = isAliasRejected ? 'Send Sign-in Link' : 'Sent!'
-      if (!isAliasRejected) {
+      btn.textContent = isSuccess ? 'Sent!' : 'Send Sign-in Link'
+      if (isSuccess) {
         setTimeout(() => { if (btn.textContent === 'Sent!') btn.textContent = 'Send Sign-in Link' }, 2500)
       }
     }
@@ -6858,7 +7290,13 @@ async function populateConfirmProjectSelect() {
   // closed and reopened while this is in flight, its token falls behind and it
   // bails instead of resetting the selection with stale data.
   const token = ++confirmProjectToken;
+  const order = ++ffRequestOrderSeq;
   const isCurrent = () => token === confirmProjectToken;
+  const generation = ffEndpointGeneration;
+
+  // The options are replaced by the loading placeholder below, so the previous
+  // list is no longer on screen and nothing may be read from it.
+  confirmProjectListIdentity = null;
 
   const apiKey = await getApiKey("flutterflow");
   const storedId = await getApiKey("flutterflow_project_id");
@@ -6882,6 +7320,23 @@ async function populateConfirmProjectSelect() {
     );
     const projects = await client.listProjects();
     if (!isCurrent()) return;
+    // The response describes the endpoint + key it was issued under. If either
+    // moved while the request was in flight, its options belong to a different
+    // identity than the deploy would use — repopulate for the current one
+    // rather than filling the modal with stale, undeployable projects.
+    if (generation !== ffEndpointGeneration || apiKey !== flutterflowApiKey) {
+      return populateConfirmProjectSelect();
+    }
+
+    // A completed response for the current key is authoritative: it re-confirms
+    // the stored selection when it lists it and strips its confirmation when it
+    // does not, so the stored fallback can never target a project this key's
+    // list did not offer. The confirmation write is shared connection state,
+    // so it applies only while no newer request has already applied an outcome.
+    if (order > ffAppliedConfirmationOrder) {
+      ffAppliedConfirmationOrder = order;
+      reconcileStoredProjectSelection(projects, apiKey, generation);
+    }
 
     if (!projects || projects.length === 0) {
       select.innerHTML = '<option value="">No projects found</option>';
@@ -6897,9 +7352,16 @@ async function populateConfirmProjectSelect() {
       select.appendChild(option);
     });
 
+    // Only now do the options belong to this key + endpoint generation and may
+    // a value read from them be used as the deploy target.
+    confirmProjectListIdentity = { key: apiKey, generation };
+
     if (storedId) select.value = storedId;
   } catch (error) {
     if (!isCurrent()) return;
+    if (generation !== ffEndpointGeneration || apiKey !== flutterflowApiKey) {
+      return populateConfirmProjectSelect();
+    }
     console.error("Failed to load projects for deploy:", error);
     select.innerHTML =
       '<option value="">Failed to load projects — check your API Key</option>';
@@ -6907,13 +7369,26 @@ async function populateConfirmProjectSelect() {
 }
 
 /**
- * Reads the project chosen in the confirm modal, falling back to the stored
- * API Keys default when none was selected.
+ * Reads the project chosen in the confirm modal. A target is only returned
+ * while the dropdown still holds a list a completed fetch produced for the
+ * current key + endpoint: a value that survives a key or endpoint change is not
+ * a confirmed target. Returns null when no confirmed choice exists, so the
+ * caller falls back to the stored selection (itself identity-gated) or fails
+ * rather than deploying to an unconfirmed project.
  */
 function readCommitTargetProjectId() {
   const select = document.getElementById("confirm-project-select");
   const chosen = select?.value?.trim();
-  return chosen || null;
+  if (!chosen) return null;
+  const identity = confirmProjectListIdentity;
+  if (
+    !identity ||
+    identity.key !== flutterflowApiKey ||
+    identity.generation !== ffEndpointGeneration
+  ) {
+    return null;
+  }
+  return chosen;
 }
 
 /**
