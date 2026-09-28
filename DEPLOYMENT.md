@@ -97,18 +97,26 @@ reported rather than silently dropped:
   package would resolve different code, and a check against the wrong version
   reports a result that does not describe what ships.
 
-The second case is decided **per class**, from that class's own imports. A
-`git:` dependency stops only the classes that import it; classes that do not are
-still compiled. Deciding it once for the whole project meant one such entry left
-an entire deploy uncompiled.
+The second case poisons the whole resolution graph, so it is decided **at the
+graph level**. A git or path dependency's own pubspec still constrains every
+package it shares with a class's imports - even ones the class never names -
+and only the project's `pubspec.lock`, which is never uploaded, records which
+versions actually resolved. A check that cannot reproduce the graph cannot
+distinguish "clean" from "clean under different code", so any class importing
+a `package:` URI is reported unverified. A class using only `dart:` imports
+resolves nothing through pub and is still compiled, and a class naming the
+unreproducible entry directly gets a reason that says so.
 
 **Which packages the Flutter SDK supplies is read from the project's own
 pubspec** - a dependency written in block form under `sdk:` is an SDK package by
-definition. Nothing keeps a list of SDK package names, because a list goes stale
-the moment the SDK ships one it has not heard of, and a stale list reads a
-perfectly valid package as unreproducible. That is not hypothetical: a list
-missing `flutter_web_plugins` refused whole deploys for projects that declared
-it.
+definition. A small name list still exists, but only for names the pubspec does
+not declare at all: a package the code imports and the project lacks is written
+as `sdk: flutter` when the SDK supplies it, so discovery never emits a hosted
+constraint pub.dev cannot resolve. A name the list has not heard of degrades to
+the ordinary hosted lookup, not a wrong answer. For declared dependencies the
+list plays no part - the pubspec's own keys are the authority, because a stale
+list read a perfectly valid `flutter_web_plugins` declaration as
+unreproducible and refused whole deploys over it.
 
 The manifest is sent as package names and version constraints, never as
 pubspec.yaml text, and the runner builds the document itself - it runs
