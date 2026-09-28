@@ -140,6 +140,12 @@ export function initComposer({ onSubmit }) {
   // real input event lands, that prefix is demo-owned, not user text: it must
   // gate the send control and Enter exactly like a still-running demo.
   let heroDemoFrozen = false;
+  // Text the demo supplied while it was interrupted: a frozen prefix, or the
+  // complete example a non-editing takeover restored. The first real
+  // beforeinput clears it, so a new prompt never silently joins the shipped
+  // example. A demo that finishes untouched hands the shipped text back as
+  // the field's own content, and ordinary editing resumes.
+  let heroDemoOwned = false;
   let attachmentsPending = false; // image uploads in flight own the run's attachments
   let debounceTimer = null;
   let chipTimer = null;
@@ -280,6 +286,7 @@ export function initComposer({ onSubmit }) {
     const hash = window.location.hash.replace(/^#/, "");
     if (hash && hash !== "home") return;
     heroDemoTyping = true;
+    heroDemoOwned = true;
     field.value = "";
     mirrorTyped();
     syncSend();
@@ -292,7 +299,9 @@ export function initComposer({ onSubmit }) {
       mirrorTyped();
       if (index >= shippedPrompt.length) {
         // The prompt is fully written: retire the caret and hand the field
-        // back exactly as the markup shipped it.
+        // back exactly as the markup shipped it — as the field's own
+        // content, editable in place like the shipped default.
+        heroDemoOwned = false;
         cancelHeroDemo();
       } else {
         syncSend();
@@ -337,6 +346,7 @@ export function initComposer({ onSubmit }) {
     if (!heroDemoTyping) return;
     field.value = shippedPrompt;
     mirrorTyped();
+    heroDemoOwned = false;
     cancelHeroDemo();
   }
 
@@ -372,6 +382,7 @@ export function initComposer({ onSubmit }) {
 
   function fillChip(chip) {
     heroDemoFrozen = false;
+    heroDemoOwned = false;
     const text = chip.dataset.prompt || "";
     cancelHeroDemo();
     cancelChipTyping();
@@ -456,8 +467,23 @@ export function initComposer({ onSubmit }) {
     }
   });
 
+  // Demo-owned text is never a draft: any real edit — typed characters,
+  // Backspace, a paste, a drag-dropped snippet, an IME commit — clears it
+  // first, so the user's input lands on an empty field instead of joining
+  // the shipped example. beforeinput sees every vector the browser will
+  // mutate for; the demo's own programmatic writes never reach it.
+  field.addEventListener("beforeinput", () => {
+    if (!heroDemoOwned) return;
+    heroDemoOwned = false;
+    heroDemoFrozen = false;
+    field.value = "";
+    mirrorTyped();
+    cancelHeroDemo();
+  });
+
   // --- Input (prototype input handler, line 1800) ---
   field.addEventListener("input", () => {
+    heroDemoOwned = false;
     heroDemoFrozen = false;
     cancelHeroDemo();
     cancelChipTyping();

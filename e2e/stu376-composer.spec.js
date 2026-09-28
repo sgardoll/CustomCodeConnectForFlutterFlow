@@ -462,6 +462,66 @@ test.describe("STU-445 hero composer behaviour", () => {
     expect(prompts[0]).toContain(COMPOSER_DEFAULT_PROMPT);
   });
 
+  test("mid-demo typing writes a new prompt — it never joins the example", async ({
+    page,
+  }) => {
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo mid-type: a real prefix is in the field and the rest of
+    // the prompt is still seconds away.
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // The demo's text is demo-owned, not a draft: the first real edit clears
+    // it, so the keystrokes produce a prompt of the user's own — never the
+    // shipped example with new text joined to it.
+    const field = page.locator("#pipeline-input");
+    await field.pressSequentially("A velocity gauge");
+    await expect(field).toHaveValue("A velocity gauge");
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+  });
+
+  test("Backspace during the demo clears the demo text, not the whole example", async ({
+    page,
+  }) => {
+    await page.goto("/", { waitUntil: "commit" });
+
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // Deleting into a demo-owned field removes the demo's text: the native
+    // delete sees the cleared field, not a restored example to delete inside.
+    const field = page.locator("#pipeline-input");
+    await field.press("Backspace");
+    await expect(field).toHaveValue("");
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+  });
+
   test("a live reduced-motion flip mid-demo stops the typing and restores the prompt", async ({
     page,
   }) => {
