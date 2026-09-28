@@ -8306,10 +8306,16 @@ function renderPipelineTrack() {
   const fillEl = document.getElementById("pipeline-progress-fill");
   if (fillEl) {
     if (pipelineStageStates[pipelineActiveStage] === "failed") {
-      // Pin the fill where it visibly is: writing a newer % target would let
-      // the 700ms width transition keep animating after the run died.
+      // Pin the fill where it visibly is. Read the rendered width BEFORE
+      // disabling the transition — disabling it first snaps the element to
+      // its pending target — and freeze as a track percentage so a later
+      // resize keeps the same proportion instead of a stale pixel count.
+      const rendered = getComputedStyle(fillEl).width;
+      const track = fillEl.parentElement;
+      const trackPx = track ? track.getBoundingClientRect().width : 0;
+      const renderedPx = parseFloat(rendered) || 0;
       fillEl.style.transition = "none";
-      fillEl.style.width = getComputedStyle(fillEl).width;
+      fillEl.style.width = trackPx ? `${(renderedPx / trackPx) * 100}%` : rendered;
     } else {
       fillEl.style.transition = "";
       fillEl.style.width = `${pipelineTrackPercent()}%`;

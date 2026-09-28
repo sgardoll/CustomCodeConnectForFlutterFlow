@@ -485,9 +485,15 @@ test.describe("Recoverable failure states", () => {
       .toBeGreaterThan(100 / 3 + 0.5);
 
     // The 700ms width transition must not keep animating after the run dies:
-    // the fill is pinned at its rendered position and stops moving.
+    // the fill is pinned at its rendered position and stops moving. The pin
+    // is a track percentage, so a later resize keeps the same proportion.
     pipeline.release("generator");
     await expect(failure(page)).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.getElementById("pipeline-progress-fill").style.width),
+      )
+      .toMatch(/%$/);
     const frozenWidth = () =>
       page.evaluate(
         () => getComputedStyle(document.getElementById("pipeline-progress-fill")).width,
