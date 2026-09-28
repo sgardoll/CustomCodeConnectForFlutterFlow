@@ -5888,7 +5888,7 @@ async function canRunPipeline() {
   const { count } = getUsage()
   const limit = getRunLimit()
   if (count >= limit) {
-    showPaywallExhausted(count, limit, { openModal: true, dismissWalkthrough: true })
+    showPaywallExhausted(count, limit, { openModal: true })
     return false
   }
   const warningThreshold = Math.floor(limit * 0.8)
@@ -5906,14 +5906,8 @@ function hidePaywallExhausted() {
 
 function showPaywallExhausted(count, limit, options = {}) {
   setGenerationStageVisible(true);
-
-  // Only a run attempt may take an open tour away. canRunPipeline passes
-  // dismissWalkthrough because an out-of-runs run must surface the paywall in
-  // place of the tour.
-  if (options.dismissWalkthrough) {
-    const walkthroughModal = document.getElementById('walkthrough-modal')
-    if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
-  }
+  const walkthroughModal = document.getElementById('walkthrough-modal')
+  if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
 
   const readyState = document.getElementById('ready-state')
   if (readyState) readyState.classList.add('hidden')

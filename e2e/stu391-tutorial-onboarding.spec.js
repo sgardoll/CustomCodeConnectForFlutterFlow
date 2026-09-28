@@ -344,17 +344,23 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     }
   });
 
-  // Regression: the startup usage decision must never close a tour the user is
-  // reading. resolveIdentity lands its metered count asynchronously and, when
-  // that count is exhausted, renders the paywall state through
-  // updateUsageDisplay -> showPaywallExhausted. That passive render used to
-  // close any open walkthrough, so a user who opened the tour before the
-  // decision resolved lost it as the response landed. The identity response is
-  // gated here so the tour is guaranteed open when the decision arrives — the
-  // exact sequence the original flake pinned — and the tour must survive it.
-  // A run attempt is not passive: an out-of-runs run must still surface the
-  // paywall and take the tour with it.
-  test("the startup paywall decision never closes an open tour; an out-of-runs run attempt still surfaces the paywall", async ({ page }) => {
+  // Contract: the startup usage decision is PASSIVE, and a passive exhausted
+  // decision must never take a tour the user is reading away from them.
+  // resolveIdentity lands its metered count asynchronously and, when that count
+  // is exhausted, renders the paywall state through updateUsageDisplay ->
+  // showPaywallExhausted. updateUsageDisplay defers the ENTIRE paywall while
+  // any dialog is open, so the exhausted surface is held back — it is not
+  // rendered alongside the tour, and the tour is not closed either. The identity
+  // response is gated so the tour is guaranteed open when the decision arrives
+  // (the exact sequence the original flake pinned), and the persisted metered
+  // count is cleared first so "the decision landed" is observed, not assumed:
+  // resolveIdentity writes it and calls updateUsageDisplay in one synchronous
+  // block, so the key reappearing at the limit means the decision has fully run.
+  // Once no dialog is open, the very next usage decision DOES surface the
+  // paywall — the deferral is a delay, never a suppression. A run attempt is not
+  // passive: an out-of-runs run must still surface the paywall, take the tour
+  // with it, and open pricing.
+  test("the startup paywall decision defers the paywall while a tour is open; an out-of-runs run attempt still surfaces it", async ({ page }) => {
     let releaseIdentity;
     const identityGate = new Promise((resolve) => {
       releaseIdentity = resolve;
@@ -383,21 +389,57 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     // Fresh user: the tour auto-opens before resolveIdentity has fetched, so it
     // is already open when the decision lands.
     await waitForWalkthroughOpen(page);
+    // Nothing has been metered yet at this point, so dropping the key leaves the
+    // decision's own write as the only thing that can satisfy the wait below.
+    await page.evaluate(() => localStorage.removeItem("ccc_usage"));
     releaseIdentity();
 
-    // The decision has landed: the exhausted surface renders and the metered
-    // count is persisted. The passive render must leave the open tour alone.
-    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    // The decision has landed — the exhausted count is persisted.
+    await page.waitForFunction(
+      (limit) => {
+        const raw = localStorage.getItem("ccc_usage");
+        if (!raw) return false;
+        try {
+          return JSON.parse(raw).count >= limit;
+        } catch {
+          return false;
+        }
+      },
+      PLAN_LIMITS.free,
+      { timeout: 8000 },
+    );
+
+    // The passive decision defers the paywall entirely while the tour is open:
+    // the exhausted surface is not rendered, and the tour the user is reading
+    // is neither hidden nor closed.
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
     await expect(page.locator(WALKTHROUGH)).toHaveClass(/open/);
+    await expect(page.locator(WALKTHROUGH)).toHaveAttribute("aria-hidden", "false");
     await expect(page.locator(WALKTHROUGH)).toBeVisible();
 
-    // A run attempt is not passive: an out-of-runs run must surface the
-    // paywall in place of the tour.
+    // The tour is closed the way a user closes it, so the next startup decision
+    // runs with no dialog open.
+    await page.check("#walkthrough-dont-show");
+    await clickInsideWalkthrough(page, ".wt-gotit-btn");
+    await expect(page.locator(WALKTHROUGH)).toBeHidden();
+
+    // Deferral is a delay, not a suppression: the next passive usage decision
+    // with nothing open renders the exhausted surface.
+    await page.reload();
+    await expect(page.locator(WALKTHROUGH)).toBeHidden();
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+
+    // A run attempt is not passive: an out-of-runs run must surface the paywall
+    // in place of the tour, and open pricing so the user can act on it.
+    await reopenWalkthrough(page);
+    await expect(page.locator(WALKTHROUGH)).toHaveClass(/open/);
+
     await page.evaluate(() => {
       document.getElementById("pipeline-input").value = "A circular progress gauge";
       window.runThinkingPipeline();
     });
     await expect(page.locator(WALKTHROUGH)).not.toHaveClass(/open/);
+    await expect(page.locator(WALKTHROUGH)).toHaveAttribute("aria-hidden", "true");
     await expect(page.locator("#paywall-exhausted")).toBeVisible();
     await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
   });
