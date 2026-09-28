@@ -2940,9 +2940,16 @@ async function provisionMissingCodeFiles(
             `FlutterFlow custom class provisioning failed (HTTP ${result.httpStatus}).`,
         );
       }
+      // The cause must match what actually happened. A non-ok status (a 5xx,
+      // typically a gateway) was received, so the runner answered — it did not
+      // drop the connection — and the message names the status. Only an ok
+      // response whose stream ended without a result is a dropped connection.
+      const cause =
+        result.httpRejected && typeof result.httpStatus === "number"
+          ? `The FlutterFlow deploy runner returned HTTP ${result.httpStatus} without reporting a result.`
+          : "The connection to the FlutterFlow deploy runner dropped before it reported a result.";
       throw new UnconfirmedDeployError(
-        "The connection to the FlutterFlow deploy runner dropped before it reported a result. " +
-          "The deploy may still be finishing on the server; open your FlutterFlow project to reconcile " +
+        `${cause} The deploy may still be finishing on the server; open your FlutterFlow project to reconcile ` +
           "before retrying.",
       );
     }

@@ -1027,6 +1027,12 @@ test.describe("STU-380 transport outcome regressions", () => {
     // The UI must not report a definitive "nothing was written".
     expect(outcome.name).toBe("UnconfirmedDeployError");
     expect(outcome.outcome).toBe("unconfirmed");
+    // The cause must be truthful: an HTTP 502 was actually received, so the
+    // message names the status and may not claim the connection dropped. The
+    // reconcile-before-retry advice stays in both cases.
+    expect(outcome.message).toContain("HTTP 502");
+    expect(outcome.message).not.toContain("dropped");
+    expect(outcome.message).toContain("reconcile");
 
     // The possibly-written class keeps the snapshot dirty: the next deploy
     // must re-export instead of planning against the cached pre-write snapshot
