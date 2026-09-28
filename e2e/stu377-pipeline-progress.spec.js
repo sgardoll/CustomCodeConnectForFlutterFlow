@@ -161,6 +161,54 @@ test.describe("Generation progress binds to real stage events", () => {
     pipeline.release("review");
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
   });
+
+  test("the track eases through each stage's slice instead of jumping", async ({ page }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, {
+      hold: ["architect", "generator", "review"],
+    });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+
+    // Sample the fill while stage 1 is held: it moves continuously inside
+    // the stage's third of the track, never claiming the slice is done.
+    const widths = await page.evaluate(async () => {
+      const seen = [];
+      const deadline = Date.now() + 2500;
+      const fill = document.getElementById("pipeline-progress-fill");
+      while (Date.now() < deadline) {
+        const value = parseFloat(fill.style.width) || 0;
+        if (seen[seen.length - 1] !== value) seen.push(value);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return seen;
+    });
+    expect(widths.length).toBeGreaterThan(1);
+    for (let index = 1; index < widths.length; index += 1) {
+      expect(widths[index]).toBeGreaterThan(widths[index - 1]);
+    }
+    expect(widths[widths.length - 1]).toBeLessThan(100 / 3);
+
+    const trackWidth = () =>
+      page.evaluate(
+        () => parseFloat(document.getElementById("pipeline-progress-fill").style.width) || 0,
+      );
+
+    // Completing the stage lands the bar on its real boundary, and the next
+    // stage eases forward from there rather than snapping to the end.
+    pipeline.release("architect");
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+    await expect.poll(trackWidth).toBeGreaterThan(100 / 3 + 0.5);
+
+    pipeline.release("generator");
+    await expect(stage(page, 3)).toHaveAttribute("data-state", "active");
+    await expect.poll(trackWidth).toBeGreaterThan((200 / 3) + 0.5);
+
+    pipeline.release("review");
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+  });
 });
 
 test.describe("Recoverable failure states", () => {

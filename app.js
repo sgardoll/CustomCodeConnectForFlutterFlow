@@ -8156,6 +8156,9 @@ let pipelineStartTime = null;
 // instead of overwriting the newer run's state.
 let pipelineStageStates = { 1: "pending", 2: "pending", 3: "pending" };
 let pipelineActiveStage = 1;
+// When the active stage's slice of the track started easing; each stage
+// entry re-arms it.
+let pipelineStageStartedAt = null;
 let pipelineSelectedStage = null;
 
 const PIPELINE_STAGE_LABELS = {
@@ -8301,10 +8304,33 @@ function completedPipelineStageCount() {
 function renderPipelineTrack() {
   const fillEl = document.getElementById("pipeline-progress-fill");
   if (fillEl) {
-    fillEl.style.width = `${(completedPipelineStageCount() / 3) * 100}%`;
+    fillEl.style.width = `${pipelineTrackPercent()}%`;
   }
   const countEl = document.getElementById("progress-stage-count");
   if (countEl) countEl.textContent = `Step ${pipelineActiveStage} of 3`;
+}
+
+/**
+ * Each stage owns a third of the track. While a stage runs the fill eases
+ * asymptotically toward 95% of its slice, so a slow stage still looks alive
+ * without the bar ever claiming the stage finished ahead of its response.
+ * A failed stage freezes where it eased to; completed stages sit on their
+ * real boundaries.
+ */
+function pipelineTrackPercent() {
+  const span = 100 / 3;
+  const state = pipelineStageStates[pipelineActiveStage];
+  if (
+    (state === "active" || state === "failed") &&
+    pipelineStageStartedAt !== null
+  ) {
+    const elapsed = (Date.now() - pipelineStageStartedAt) / 1000;
+    return (
+      (pipelineActiveStage - 1) * span +
+      span * 0.95 * (1 - Math.exp(-elapsed / 12))
+    );
+  }
+  return (completedPipelineStageCount() / 3) * 100;
 }
 
 /**
@@ -8477,6 +8503,7 @@ function showPipelineProgress(options = {}) {
 function updatePipelineProgressStep(step, runId) {
   if (!isCurrentPipelineRun(runId)) return;
   pipelineActiveStage = step;
+  pipelineStageStartedAt = Date.now();
   clearPipelineStageSelection();
 
   [1, 2, 3].forEach((candidate) => {
@@ -8627,6 +8654,8 @@ function startProgressTimer() {
     const elapsed = (Date.now() - pipelineStartTime) / 1000;
     const elapsedEl = document.getElementById("progress-elapsed");
     if (elapsedEl) elapsedEl.textContent = `${Math.floor(elapsed)}s`;
+    // The same tick drives the fill's in-slice easing.
+    renderPipelineTrack();
   }, 250);
 }
 
