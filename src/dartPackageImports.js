@@ -38,10 +38,15 @@ function stripComments(code) {
       i += 2;
       out += " ";
     } else if (code[i] === "'" || code[i] === '"') {
-      const quote = code[i];
-      out += code[i];
-      i++;
-      while (i < code.length && code[i] !== quote) {
+      // A triple quote opens a multiline string, which ends only at the next
+      // matching triple - a lone quote inside it is content, not a delimiter.
+      const quote =
+        code.slice(i, i + 3) === "'''" || code.slice(i, i + 3) === '"""'
+          ? code.slice(i, i + 3)
+          : code[i];
+      out += quote;
+      i += quote.length;
+      while (i < code.length && !code.startsWith(quote, i)) {
         if (code[i] === "\\") {
           out += code[i];
           i++;
@@ -50,8 +55,8 @@ function stripComments(code) {
         i++;
       }
       if (i < code.length) {
-        out += code[i];
-        i++;
+        out += quote;
+        i += quote.length;
       }
     } else {
       out += code[i];
@@ -91,7 +96,11 @@ const DIRECTIVE_PATTERN =
 // a directive. A raw `r"..."` literal needs no alternative of its own - `r`
 // matches nothing, and the quote after it opens the string alternative, whose
 // escape-aware body ends at the same quote a raw literal would.
-const STRING_PATTERN = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"/.source;
+// Triple-quoted alternatives come first: a `'`/`"` literal cannot hold a
+// newline, so without them `'''example\nimport 'package:x/x.dart';\n'''`
+// scans its second line as a directive and invents a dependency on `x`.
+// Their bodies are lazy `'`/`"`-tolerant runs to the matching triple quote.
+const STRING_PATTERN = /'''(?:\\.|[^\\])*?'''|"""(?:\\.|[^\\])*?"""|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"/.source;
 const SCAN_PATTERN = new RegExp(`${DIRECTIVE_PATTERN.source}|${STRING_PATTERN}`, "g");
 
 function* directiveMatches(code) {

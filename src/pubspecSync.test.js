@@ -374,3 +374,20 @@ test("reads a source from dependency_overrides too", () => {
 
   assert.equal(overrides.get("flutter_web_plugins").sourceKey, "sdk");
 });
+
+test("a brace inside a flow-map comment does not close the mapping", () => {
+  const pubspec = `dependencies:
+  flutter_web_plugins: {
+    # close } later
+    sdk: flutter
+  }
+  intl: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // YAML flow mappings permit comments between members; counting the `}` in
+  // the comment would end the map before `sdk:` and classify the package
+  // unrepresentable instead of SDK-sourced.
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+});
