@@ -1018,6 +1018,11 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
+        /* Auto margins take precedence over the panel's align/justify center:
+           the card centers when there is room and starts at the top (still
+           scrollable) when the results stage is shorter than the card. */
+        margin: auto;
+        flex-shrink: 0;
       }
       .error-input-header {
         display: flex;
@@ -3586,7 +3591,7 @@
             </div>
 
             <!-- Error Input Panel (overlay on results) -->
-            <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;">
+            <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;overflow-y:auto;">
               <div class="error-input-card" style="width:100%;max-width:560px;">
                 <div class="error-input-header">
                   <div class="flex items-center gap-2">
