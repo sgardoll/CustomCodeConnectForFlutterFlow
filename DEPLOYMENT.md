@@ -92,15 +92,22 @@ reported rather than silently dropped:
 * It imports something FlutterFlow only generates once the app is built -
   `/backend/schema/structs/index.dart`, `../flutter_flow/lat_lng.dart`. Those
   files do not exist until after the deploy.
-* It imports a package the project declares from a source this manifest cannot
-  express: a `git:` or `path:` source, or a nested `hosted:` block. The scratch
-  package would resolve different code, and a check against the wrong version
-  reports a result that does not describe what ships.
+* The project declares a dependency from a source this manifest cannot
+  express - a `git:` or `path:` source, a private `hosted:` block, or a
+  `dependency_overrides` entry written that way - and the class resolves
+  packages at all. `pubspec.lock`, the only document recording which packages
+  that source brings in, never leaves the project, so the unreproducible
+  package can sit anywhere in the class's transitive closure and an override
+  can rewrite any name in the graph. The scratch package would resolve
+  different code, and a check against the wrong version reports a result that
+  does not describe what ships.
 
-The second case is decided **per class**, from that class's own imports. A
-`git:` dependency stops only the classes that import it; classes that do not are
-still compiled. Deciding it once for the whole project meant one such entry left
-an entire deploy uncompiled.
+The second case is decided once per deploy, not per class, because a
+project-level source can alter resolution for a class that never names it. A
+class that imports or exports the unreproducible package is skipped for that
+stated reason; every other package-resolving class is skipped because the
+graph could not be matched exactly. A class that uses only `dart:` resolves
+nothing through pub and is still compiled.
 
 **Which packages the Flutter SDK supplies is read from the project's own
 pubspec** - a dependency written in block form under `sdk:` is an SDK package by
