@@ -472,9 +472,15 @@ function rewriteVersionMember(lines, entry, constraint) {
         ? /\{[^}]*(?:'version'|"version"|\bversion)\s*:/.test(line)
         : /^\s*(?:'version'|"version"|version)\s*:/.test(line);
     if (!isMember) continue;
-    const keyMatch = /(?:'version'|"version"|\bversion)\s*:\s*/.exec(line);
+    // On the name line the member sits inside the `{...}` map - searching
+    // from `{` stops a package literally named `version` from matching its
+    // own key (`version: {version: x}` must rewrite the member, not the key).
+    const searchStart = j === entry.lineIndex ? line.indexOf("{") : 0;
+    const keyMatch = /(?:'version'|"version"|\bversion)\s*:\s*/.exec(
+      line.slice(searchStart),
+    );
     if (!keyMatch) continue;
-    const valueStart = keyMatch.index + keyMatch[0].length;
+    const valueStart = searchStart + keyMatch.index + keyMatch[0].length;
     let valueEnd = valueStart;
     const first = line[valueStart];
     if (first === "'" || first === '"') {

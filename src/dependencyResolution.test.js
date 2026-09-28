@@ -99,6 +99,23 @@ dependencies:
   assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0  # deliberate cap/);
 });
 
+test("rule 2: a package named 'version' rewrites its member, not its key", async () => {
+  // `version` is a real pub.dev package; `version: {version: x}` must raise
+  // the member inside the map, not the entry's own key value.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  version: {version: 0.19.0}
+`;
+  const plan = await planDependencyChanges(pubspec, { version: "0.20.0" });
+
+  assert.deepEqual(plan.overrides, { version: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /version: \{version: \^0\.20\.0\}/);
+});
+
 test("rule 2: a quoted 'version' key rewrites like a bare one", async () => {
   const pubspec = `name: my_app
 dependencies:
