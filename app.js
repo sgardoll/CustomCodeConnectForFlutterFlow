@@ -3185,11 +3185,9 @@ async function provisionMissingCodeFiles(
   const unverified = verificationPlan.skipped.map((entry) => entry.reason);
   unverified.forEach((reason) => console.warn(`[custom class deploy] ${reason}`));
 
-  // Classes that do not import an unrepresentable package directly are still
-  // checked, but against a scratch graph that omits it. That approximation is
-  // disclosed here - before the push - and returned alongside `unverified`,
-  // so it reaches the deploy result and is never mistaken for a full-graph
-  // check.
+  // The planner skips every class that resolves packages when a source is
+  // unrepresentable, so nothing is checked approximately; the field stays in
+  // the deploy result's shape for the outcome renderers that read it.
   const approximate = verificationPlan.approximate;
   approximate.forEach((notice) => console.warn(`[custom class deploy] ${notice}`));
 
@@ -7534,9 +7532,10 @@ function showCommitSuccessModal(result) {
   const warningsSection = document.getElementById("success-warnings-section");
   const warningsList = document.getElementById("success-warnings-list");
   // A class that could not be compiled before the push is reported here rather
-  // than left implicit, so "deployed" never reads as "checked". A class that
-  // was compiled against a reduced package graph is reported beside it: the
-  // check ran, but approximately, and that has to stay visible too.
+  // than left implicit, so "deployed" never reads as "checked". The
+  // approximate list rides alongside: empty under the current planner, which
+  // skips rather than compiles on a reduced graph, but rendered whenever a
+  // result carries it so the check is never mistaken for a full-graph one.
   const unverified = result.unverified || [];
   const approximate = result.approximate || [];
   const fileWarnings = result.warnings || [];
