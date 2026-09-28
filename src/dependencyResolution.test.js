@@ -76,6 +76,29 @@ dependencies:
   assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0/);
 });
 
+test("rule 2: a quoted range in a version member is replaced whole, comment kept", async () => {
+  // A quoted range holds spaces - replacing only up to the first space would
+  // leave the old upper bound glued onto the new constraint.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {version: '>=0.19.0 <0.20.0'}
+  block_pinned:
+    version: '>=0.18.0 <0.20.0'  # deliberate cap
+`;
+  const plan = await planDependencyChanges(pubspec, {
+    intl: "0.20.0",
+    block_pinned: "0.20.0",
+  });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0", block_pinned: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /intl: \{version: \^0\.20\.0\}/);
+  assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0  # deliberate cap/);
+});
+
 test("rule 2: a {version: x} pin satisfying the floor is kept", async () => {
   const pubspec = `name: my_app
 dependencies:

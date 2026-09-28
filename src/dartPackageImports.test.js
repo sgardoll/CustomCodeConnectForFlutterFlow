@@ -147,6 +147,21 @@ test("raw string literals in directives are still URIs", () => {
   assert.deepEqual(extractPackageImports(code), ["foo", "bar", "a", "b"]);
 });
 
+test("a paren inside a condition's comparison string is not syntax", () => {
+  // `== 'a(b'` is a comparison against a literal that happens to contain `(` -
+  // counting it as syntax would leave depth positive past the `)` and lose
+  // the conditional URI that follows.
+  const code =
+    "import 'package:base/base.dart' if (flag.value == 'a(b') 'package:alternate/alternate.dart';\n" +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "package:base/base.dart",
+    "package:alternate/alternate.dart",
+  ]);
+  assert.deepEqual(extractPackageImports(code), ["base", "alternate"]);
+});
+
 test("a comparison literal inside `if (...)` is not a URI", () => {
   // `== 'true'` compares a config variable with a string; the literal is not
   // a file, and reading it as one would skip an otherwise verifiable class.

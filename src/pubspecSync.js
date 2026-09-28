@@ -453,7 +453,9 @@ export function formatConstraint(constraint) {
 
 // A `version:` member sits inside a `{...}` map on the name line or on a
 // deeper child line in block form; only its value is rewritten so the entry
-// keeps its declared shape.
+// keeps its declared shape. The value is read as a complete YAML scalar -
+// a quoted range like `'>=0.19.0 <0.20.0'` must go whole, or its suffix would
+// be left behind - and a trailing `,`, `}`, or comment stays untouched.
 function rewriteVersionMember(lines, entry, constraint) {
   const parentIndent = indentOf(lines[entry.lineIndex]);
   for (let j = entry.lineIndex; j < lines.length; j += 1) {
@@ -464,12 +466,39 @@ function rewriteVersionMember(lines, entry, constraint) {
         ? /\{[^}]*\bversion\s*:/.test(line)
         : /^\s*version\s*:/.test(line);
     if (!isMember) continue;
-    const memberMatch = line.match(/\bversion\s*:\s*([^,}\s#]+)/);
-    if (!memberMatch) continue;
-    lines[j] = line.replace(
-      memberMatch[0],
-      `version: ${formatConstraint(constraint)}`,
-    );
+    const keyMatch = /\bversion\s*:\s*/.exec(line);
+    if (!keyMatch) continue;
+    const valueStart = keyMatch.index + keyMatch[0].length;
+    let valueEnd = valueStart;
+    const first = line[valueStart];
+    if (first === "'" || first === '"') {
+      valueEnd += 1;
+      while (valueEnd < line.length) {
+        if (line[valueEnd] === first) {
+          // YAML escapes a single quote by doubling it; a double-quoted
+          // scalar uses `\.` pairs.
+          if (first === "'" && line[valueEnd + 1] === "'") {
+            valueEnd += 2;
+            continue;
+          }
+          valueEnd += 1;
+          break;
+        }
+        if (first === '"' && line[valueEnd] === "\\") valueEnd += 1;
+        valueEnd += 1;
+      }
+    } else {
+      // Plain scalar: ends at a flow-map delimiter or a ` #` comment start.
+      while (valueEnd < line.length && line[valueEnd] !== "," && line[valueEnd] !== "}") {
+        if (line[valueEnd] === "#" && /\s/.test(line[valueEnd - 1] || " ")) break;
+        valueEnd += 1;
+      }
+      while (valueEnd > valueStart && /\s/.test(line[valueEnd - 1])) {
+        valueEnd -= 1;
+      }
+    }
+    lines[j] =
+      line.slice(0, valueStart) + formatConstraint(constraint) + line.slice(valueEnd);
     return;
   }
 }

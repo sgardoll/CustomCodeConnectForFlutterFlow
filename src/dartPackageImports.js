@@ -76,9 +76,10 @@ function stripComments(code) {
 // so escape handling never changes where one ends). URI literals are read
 // with paren awareness rather than a pattern: a string inside an `if (...)`
 // condition is a comparison value (`dart.library.io == 'true'`), not a file,
-// so only literals outside the parentheses count. The apostrophe inside a
-// double-quoted URI (`"src/it's.dart"`) is a filename char, not a delimiter,
-// so each literal ends at its own quote type.
+// so only literals outside the parentheses count - and a literal inside is
+// still consumed whole, because `== 'a(b'` holds a paren that isn't syntax.
+// The apostrophe inside a double-quoted URI (`"src/it's.dart"`) is a filename
+// char, not a delimiter, so each literal ends at its own quote type.
 const DIRECTIVE_PATTERN =
   /\b(?:import|export)\s+(?=r?['"])(?:'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
 
@@ -101,7 +102,6 @@ function* directiveUriLiterals(text) {
       depth = Math.max(0, depth - 1);
       continue;
     }
-    if (depth > 0) continue;
 
     let raw = false;
     let quoteAt = i;
@@ -113,6 +113,9 @@ function* directiveUriLiterals(text) {
       continue;
     }
 
+    // A literal is consumed at every depth so parentheses inside a comparison
+    // value (`== 'a(b'`) never count as syntax - only depth-0 literals are
+    // yielded, since only they name code.
     const quote = text[quoteAt];
     let end = quoteAt + 1;
     for (; end < text.length; end += 1) {
@@ -120,7 +123,7 @@ function* directiveUriLiterals(text) {
       if (!raw && text[end] === "\\") end += 1;
       else if (text[end] === quote) break;
     }
-    yield text.slice(quoteAt + 1, end);
+    if (depth === 0) yield text.slice(quoteAt + 1, end);
     i = end;
   }
 }
