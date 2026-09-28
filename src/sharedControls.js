@@ -25,6 +25,13 @@ function setBackgroundInert(modal) {
     child.inert = true;
     child.setAttribute("aria-hidden", "true");
   }
+  // A focused element inside content that was just made inert would strand
+  // focus under aria-hidden, which browsers block; drop it to the body and
+  // let the modal's own focus step pick an initial control.
+  const focused = document.activeElement;
+  if (focused && focused !== document.body && !modal.contains(focused)) {
+    focused.blur();
+  }
 }
 
 function restoreBackground() {
