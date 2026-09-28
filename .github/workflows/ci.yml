@@ -5,7 +5,7 @@ on:
     branches: [main]
   pull_request:
 
-# The job only reads the repository; it never needs a writable token.
+# The workflow only checks out code and runs tests; it never needs write access.
 permissions:
   contents: read
 
@@ -15,16 +15,16 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
       - name: Set up PHP
-        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2.37.2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: '8.3'
 
@@ -36,6 +36,30 @@ jobs:
 
       - name: Build production bundle
         run: npm run build
+
+      # The test:ui and test:accessibility scripts land with the milestone
+      # branches; until they do, npm exits "Missing script" and fails the
+      # required check, so these steps only run when the scripts exist.
+      - name: Check for browser test suites
+        id: browser-tests
+        run: |
+          if node -e 'const s=require("./package.json").scripts;process.exit(s["test:ui"]||s["test:accessibility"]?0:1)'; then
+            echo "present=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Playwright Chromium
+        if: steps.browser-tests.outputs.present == 'yes'
+        run: npx playwright install chromium --with-deps
+
+      - name: Run browser tests
+        if: steps.browser-tests.outputs.present == 'yes'
+        run: npm run test:ui
+
+      - name: Run accessibility modal tests
+        if: steps.browser-tests.outputs.present == 'yes'
+        run: npm run test:accessibility
 
       - name: Run deploy guard
         run: npm run test:deploy-guard
