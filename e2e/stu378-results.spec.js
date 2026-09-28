@@ -129,7 +129,7 @@ for (const viewport of [{ name: "mobile", width: 390, height: 844 }, { name: "de
     await renderResults(page, bundle, { summary: "Long file reviewed.", artifacts: [{ id: "long-file", review: { status: "pass", findings: [] } }] });
     await page.getByRole("tab", { name: /LongFile/ }).click();
 
-    const actions = page.locator(".results-action-bar > button");
+    const actions = page.locator(".results-action-bar button");
     await expect(actions).toHaveCount(3);
     await expect(actions.nth(0)).toContainText("Deploy to FlutterFlow");
     await expect(actions.nth(1)).toContainText("Add FlutterFlow Build Errors & Regenerate");
