@@ -127,6 +127,11 @@ const SOURCE_KEYS = new Set(["sdk", "git", "path", "hosted"]);
  * it goes stale the moment the SDK ships a package the list has not heard of,
  * and every project declaring that package then reads it as unreproducible.
  *
+ * YAML mapping order is not significant, so `version:` may precede `hosted:`.
+ * Every own-key is read and a source key (anything other than `version:`)
+ * wins over a bare `version:`; a constraint only stands on its own when no
+ * source accompanies it.
+ *
  * @param {string[]} lines - pubspec.yaml split into lines
  * @param {number} entryIndex - Index of the dependency entry's own line
  * @param {number} endIndex - Exclusive end of the enclosing block
@@ -137,13 +142,21 @@ const SOURCE_KEYS = new Set(["sdk", "git", "path", "hosted"]);
  *   when one appears
  */
 function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
+  let ownIndent = null;
   let version = null;
   for (let i = entryIndex + 1; i < endIndex; i += 1) {
     const line = lines[i];
     if (isBlankOrComment(line)) continue;
+    const indent = indentOf(line);
     // Shallower or equal indent means the entry's mapping has ended and this is
     // a sibling dependency, so there is nothing of this entry's own left to read.
-    if (indentOf(line) <= parentIndent) break;
+    if (indent <= parentIndent) break;
+    // The first mapping line fixes the own-key indent; anything deeper belongs
+    // to one of the own-keys (`git:` -> `url:`) and is not a source itself, so a
+    // nested `hosted:` inside an unrelated own-key cannot masquerade as the
+    // entry's source.
+    if (ownIndent === null) ownIndent = indent;
+    if (indent !== ownIndent) continue;
     const trimmed = line.trim();
     const key = parseDependencyName(trimmed);
     if (!key) continue;
@@ -157,13 +170,147 @@ function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
 }
 
 /**
+ * Reads the source key of a dependency written as an inline flow mapping.
+ *
+ * YAML allows the same mapping inline that readSourceDirective reads in block
+ * form: `name: {sdk: flutter}` is the same declaration as the block form, and
+ * `name: {version: ^1.0.0, hosted: {name: x, url: y}}` puts version beside its
+ * source exactly as the block form does. The same precedence applies: a source
+ * key wins over `version:`.
+ *
+ * Without this an inline mapping looks scalar - its value is nonempty - and
+ * gets forwarded as a version constraint, which the runner then rejects for
+ * containing braces. A map whose members cannot be read yields key null, so
+ * the entry is classified unrepresentable rather than sent downstream as
+ * something it is not.
+ *
+ * @param {string} value - The text after `name:` on the dependency's own line
+ * @returns {{key: string|null, value: string|null, version: string|null}|null}
+ *   The source own-key and inline value — null when the mapping holds no
+ *   sdk/git/path/hosted key — plus the `version:` member's value when one
+ *   appears; key null for an unreadable mapping, or null when the value is
+ *   not a flow mapping at all
+ */
+function parseFlowSourceDirective(value) {
+  const text = String(value || "").trim();
+  if (!text.startsWith("{")) return null;
+
+  const end = findFlowMappingEnd(text);
+  if (end === -1) return { key: null, value: null, version: null };
+
+  // Split the members on top-level commas only - a comma inside a nested map
+  // or a quote belongs to the member, not the map.
+  const inner = text.slice(1, end);
+  const segments = [];
+  let quote = null;
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < inner.length; i += 1) {
+    const char = inner[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") depth -= 1;
+    else if (char === "," && depth === 0) {
+      segments.push(inner.slice(start, i));
+      start = i + 1;
+    }
+  }
+  segments.push(inner.slice(start));
+
+  let version = null;
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (!trimmed) continue;
+    const key = parseDependencyName(trimmed);
+    if (!key) return { key: null, value: null, version: null };
+    const { value: memberValue } = splitValueAndComment(
+      trimmed.slice(trimmed.indexOf(":") + 1),
+    );
+    if (SOURCE_KEYS.has(key)) return { key, value: memberValue, version };
+    if (key === "version" && version === null) version = memberValue;
+  }
+  return { key: null, value: null, version };
+}
+
+/**
+ * Finds the `}` closing the `{` at the start of the text, skipping nested
+ * mappings and quoted text.
+ *
+ * @param {string} text - Text starting with `{`
+ * @returns {number} Index of the closing brace, or -1 when unclosed
+ */
+function findFlowMappingEnd(text) {
+  let quote = null;
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+      if (depth < 0) return -1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Reassembles a flow mapping that wraps members onto following lines.
+ *
+ * YAML allows the same `{...}` members on subsequent lines - `name: {`, then
+ * `sdk: flutter`, then `}` - and only the dependency's own line reaches
+ * parseFlowSourceDirective, so a lone `{` reads as an unclosed, hence
+ * unreadable, mapping and classifies the entry unrepresentable. Lines are
+ * pulled in only while the map is still open - a map that closes but is
+ * unreadable (`{sdk flutter}`) gets no more lines, so the dependencies after
+ * it are still read as themselves - and a map that never closes stays
+ * unreadable, which is the right answer for it anyway.
+ *
+ * @param {string[]} lines - All lines of the pubspec
+ * @param {number} startIndex - Index of the dependency's own line
+ * @param {number} endIndex - Index of the line that ends the block
+ * @param {string} value - The text after `name:` on the dependency's own line
+ * @returns {{text: string, lastIndex: number}} The joined flow text and the
+ *   last line index consumed
+ */
+function collectFlowMappingText(lines, startIndex, endIndex, value) {
+  let text = value;
+  let i = startIndex;
+  while (
+    text.trimStart().startsWith("{") &&
+    findFlowMappingEnd(text) === -1 &&
+    i + 1 < endIndex
+  ) {
+    i += 1;
+    text += "\n" + lines[i];
+  }
+  return { text, lastIndex: i };
+}
+
+/**
  * Reads every package declared under `dependencies:` with its constraint.
  *
  * A dependency written in block form (`sdk:`, `git:`, `path:`, a nested
- * `hosted:`, or a `version:` on its own line) has no scalar constraint and
- * must never be rewritten as one, so it is reported with `isScalar: false`.
- * An entry whose own keys are only `version:` is a normal pub.dev dependency:
- * `sourceKey` is null and the constraint travels in `version`.
+ * `hosted:`, or a `version:` on its own line) or as an inline flow mapping
+ * (`{sdk: flutter}`) has no scalar constraint and must never be rewritten as
+ * one, so it is reported with `isScalar: false`. An entry whose own keys are
+ * only `version:` is a normal pub.dev dependency: `sourceKey` is null and the
+ * constraint travels in `version`.
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
  * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null, version: string|null}>}
@@ -188,18 +335,26 @@ export function parseExistingDependencies(yamlContent) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    const isScalar = value !== "";
+    // An inline `{sdk: flutter}`-style mapping is not a constraint, so it is
+    // read for its own source keys like a block entry is. Its members may
+    // wrap onto following lines, which collectFlowMappingText reassembles.
+    const nameIndex = i;
+    const flow = collectFlowMappingText(lines, i, block.endIndex, value);
+    const flowSource = parseFlowSourceDirective(flow.text);
+    i = flow.lastIndex;
+    const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever
     // dependency follows.
     const directive = isScalar
       ? null
-      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+      : (flowSource ??
+        readSourceDirective(lines, nameIndex, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,
       comment,
-      lineIndex: i,
+      lineIndex: nameIndex,
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,
@@ -247,18 +402,23 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    const isScalar = value !== "";
+    const nameIndex = i;
+    const flow = collectFlowMappingText(lines, i, block.endIndex, value);
+    const flowSource = parseFlowSourceDirective(flow.text);
+    i = flow.lastIndex;
+    const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever
     // dependency follows.
     const directive = isScalar
       ? null
-      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+      : (flowSource ??
+        readSourceDirective(lines, nameIndex, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,
       comment,
-      lineIndex: i,
+      lineIndex: nameIndex,
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,
@@ -309,9 +469,77 @@ export function formatConstraint(constraint) {
   return `'${constraint.replace(/'/g, "''")}'`;
 }
 
-function formatDependencyLine(indent, name, version) {
+// A `version:` member sits inside a `{...}` map on the name line or on a
+// deeper child line in block form; only its value is rewritten so the entry
+// keeps its declared shape. The value is read as a complete YAML scalar -
+// a quoted range like `'>=0.19.0 <0.20.0'` must go whole, or its suffix would
+// be left behind - and a trailing `,`, `}`, or comment stays untouched.
+// Returns false when no member was found, so the caller never reports an
+// override it did not write.
+function rewriteVersionMember(lines, entry, constraint) {
+  const parentIndent = indentOf(lines[entry.lineIndex]);
+  for (let j = entry.lineIndex; j < lines.length; j += 1) {
+    const line = lines[j];
+    if (j !== entry.lineIndex && indentOf(line) <= parentIndent) break;
+    // YAML permits quoted keys - `{'version': 0.19.0}` declares the same
+    // member as `{version: 0.19.0}`.
+    const isMember =
+      j === entry.lineIndex
+        ? /\{[^}]*(?:'version'|"version"|\bversion)\s*:/.test(line)
+        : /^\s*(?:'version'|"version"|version)\s*:/.test(line);
+    if (!isMember) continue;
+    // On the name line the member sits inside the `{...}` map - searching
+    // from `{` stops a package literally named `version` from matching its
+    // own key (`version: {version: x}` must rewrite the member, not the key).
+    const searchStart = j === entry.lineIndex ? line.indexOf("{") : 0;
+    const keyMatch = /(?:'version'|"version"|\bversion)\s*:\s*/.exec(
+      line.slice(searchStart),
+    );
+    if (!keyMatch) continue;
+    const valueStart = searchStart + keyMatch.index + keyMatch[0].length;
+    let valueEnd = valueStart;
+    const first = line[valueStart];
+    if (first === "'" || first === '"') {
+      valueEnd += 1;
+      while (valueEnd < line.length) {
+        if (line[valueEnd] === first) {
+          // YAML escapes a single quote by doubling it; a double-quoted
+          // scalar uses `\.` pairs.
+          if (first === "'" && line[valueEnd + 1] === "'") {
+            valueEnd += 2;
+            continue;
+          }
+          valueEnd += 1;
+          break;
+        }
+        if (first === '"' && line[valueEnd] === "\\") valueEnd += 1;
+        valueEnd += 1;
+      }
+    } else {
+      // Plain scalar: ends at a flow-map delimiter or a ` #` comment start.
+      while (valueEnd < line.length && line[valueEnd] !== "," && line[valueEnd] !== "}") {
+        if (line[valueEnd] === "#" && /\s/.test(line[valueEnd - 1] || " ")) break;
+        valueEnd += 1;
+      }
+      while (valueEnd > valueStart && /\s/.test(line[valueEnd - 1])) {
+        valueEnd -= 1;
+      }
+    }
+    lines[j] =
+      line.slice(0, valueStart) + formatConstraint(constraint) + line.slice(valueEnd);
+    return true;
+  }
+  return false;
+}
+
+function formatDependencyLines(indent, name, version) {
+  // An SDK-supplied package takes a block entry - `name:` then its own
+  // `sdk:` key - not a version constraint.
+  if (version && typeof version === "object" && version.sdk) {
+    return [`${indent}${name}:`, `${indent}  sdk: ${version.sdk}`];
+  }
   const constraint = String(version || "").trim();
-  return `${indent}${name}: ${constraint ? formatConstraint(constraint) : ">=0.0.0"}`;
+  return [`${indent}${name}: ${constraint ? formatConstraint(constraint) : ">=0.0.0"}`];
 }
 
 /**
@@ -323,7 +551,8 @@ function formatDependencyLine(indent, name, version) {
  * (or FlutterFlow) may have pinned it deliberately.
  *
  * @param {string} yamlContent - The project's current pubspec.yaml
- * @param {Object<string, string>} newDependencies - name -> version constraint
+ * @param {Object<string, string|{sdk: string}>} newDependencies - name ->
+ *   version constraint, or `{sdk}` for a package the Flutter SDK supplies
  * @returns {{yaml: string, added: string[], alreadyPresent: string[]}}
  */
 export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
@@ -357,8 +586,8 @@ export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
 
   const block = findDependenciesBlock(lines);
   if (block) {
-    const insertions = added.map(([name, version]) =>
-      formatDependencyLine(block.childIndent, name, version),
+    const insertions = added.flatMap(([name, version]) =>
+      formatDependencyLines(block.childIndent, name, version),
     );
     lines.splice(block.endIndex, 0, ...insertions);
   } else {
@@ -366,7 +595,7 @@ export function mergeDependenciesIntoYaml(yamlContent, newDependencies = {}) {
     if (lines.length > 0 && lines[lines.length - 1].trim() !== "") lines.push("");
     lines.push("dependencies:");
     added.forEach(([name, version]) => {
-      lines.push(formatDependencyLine("  ", name, version));
+      lines.push(...formatDependencyLines("  ", name, version));
     });
   }
 
@@ -404,8 +633,30 @@ export function applyDependencyOverrides(yamlContent, overrides = {}) {
 
   for (const [name, constraint] of entries) {
     const existing = declared.get(name);
-    if (!existing || !existing.isScalar || !String(constraint || "").trim()) {
+    // `name: {version: 0.19.0}` (or a `version:` own-key in block form) is a
+    // hosted pin in mapping shape: not isScalar, but raiseable - and only its
+    // `version:` member is rewritten, so the entry keeps its declared form.
+    const versionPinned =
+      existing &&
+      !existing.isScalar &&
+      existing.sourceKey === null &&
+      existing.version !== null;
+    if (
+      !existing ||
+      (!existing.isScalar && !versionPinned) ||
+      !String(constraint || "").trim()
+    ) {
       skipped.push(name);
+      continue;
+    }
+    if (versionPinned) {
+      if (rewriteVersionMember(lines, existing, String(constraint).trim())) {
+        overridden.push({ name, from: existing.version, to: constraint });
+      } else {
+        // No member rewrite means the old pin stays - reporting it applied
+        // would let the deploy claim a raise the YAML never got.
+        skipped.push(name);
+      }
       continue;
     }
     const indent = " ".repeat(indentOf(lines[existing.lineIndex]));

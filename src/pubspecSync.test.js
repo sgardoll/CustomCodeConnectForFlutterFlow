@@ -268,6 +268,27 @@ test("a version written before an unrecognized key does not invent a source", ()
   assert.equal(declared.get("odd_thing").version, "^5.0.0");
 });
 
+test("a hosted source is read even when version: is written before it", () => {
+  // YAML mapping order is not significant, so this is the same dependency as
+  // hosted-then-version. Reading only the first own-key would classify it as a
+  // plain constraint and the verification manifest would resolve it from
+  // pub.dev instead of the project's own host.
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  plain_thing:
+    version: ^2.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("plain_thing").sourceKey, null);
+  assert.equal(declared.get("plain_thing").version, "^2.0.0");
+});
+
 test("a git source keeps only its first key, whatever the nested shape", () => {
   const pubspec = `dependencies:
   private_thing:
@@ -284,6 +305,62 @@ test("a git source keeps only its first key, whatever the nested shape", () => {
 
   assert.equal(declared.get("private_thing").sourceKey, "git");
   assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+});
+
+test("an inline flow mapping is read as a source, not a constraint", () => {
+  // YAML permits the same mapping inline: `name: {sdk: flutter}` declares the
+  // same thing as the block form. Reading it as a scalar would forward braces
+  // as a version constraint, which the runner rejects.
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {sdk: flutter}
+  private_thing: {git: {url: https://example.invalid/private.git}}
+  pinned_thing: {version: ^1.2.0}
+  hosted_thing: {version: ^1.0.0, hosted: {name: hosted_thing, url: https://example.invalid}}
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+  assert.equal(declared.get("private_thing").sourceKey, "git");
+  assert.equal(declared.get("pinned_thing").sourceKey, null);
+  assert.equal(declared.get("pinned_thing").version, "^1.2.0");
+  // Mapping order is not significant, so a source key wins over a version
+  // written before it.
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+});
+
+test("a flow mapping that cannot be read is unrepresentable, not a constraint", () => {
+  const pubspec = `dependencies:
+  broken_thing: {sdk: flutter
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("broken_thing").isScalar, false);
+  assert.equal(declared.get("broken_thing").sourceKey, null);
+});
+
+test("a flow mapping spanning lines is still read as a source", () => {
+  // YAML lets the same `{...}` members wrap onto following lines. Only the
+  // dependency's own line used to reach the reader, so the opening `{` alone
+  // looked unclosed and the entry classified unrepresentable.
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {
+    sdk: flutter
+  }
+  intl: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+  // Lines the wrapped map consumed must not reappear as dependencies.
+  assert.equal(declared.get("sdk"), undefined);
+  assert.equal(declared.get("intl").constraint, "^0.20.3");
+  assert.equal(declared.get("intl").isScalar, true);
 });
 
 test("reads a source from dependency_overrides too", () => {
