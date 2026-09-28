@@ -63,7 +63,7 @@ async function seedSession(page, email = EMAIL) {
 
 async function openAccount(page) {
   await dismissOpenModals(page);
-  await page.locator('a.nav-link[data-view="account"]').click();
+  await page.locator("#topbar-avatar").click();
   await expect(page.locator("#account-view")).toBeVisible();
 }
 
@@ -319,13 +319,14 @@ test.describe("STU-384 account connection", () => {
     });
     await page.goto("/");
 
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#auth-signedout")).toBeVisible();
     await expect(page.locator("#account-view #auth-signedin")).toBeHidden();
 
     // The canonical editor stays reachable from the home settings entry point.
-    await page.locator('a.nav-link[data-view="home"]').click();
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.locator("header.topbar .brand").click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#api-keys-modal")).toBeVisible();
     await page.locator("#flutterflow-api-key-input").fill(KEY);
     await page.locator("#api-keys-modal .bg-blue-500").click();
@@ -333,7 +334,8 @@ test.describe("STU-384 account connection", () => {
 
     // Reload reads the saved key from the same storage (one value).
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#flutterflow-api-key-input")).toHaveAttribute(
       "placeholder",
       /Key saved/,

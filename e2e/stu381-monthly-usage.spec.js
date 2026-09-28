@@ -202,7 +202,7 @@ test.describe("STU-381 monthly usage metering", () => {
     await expect(page.locator("#topbar-credits-count")).toHaveText("43");
 
     // Account row reflects the reconciled count without ever opening a dialog.
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#usage-counter")).toHaveText("7 / 50 runs this month");
 
     await openUsage(page);
@@ -236,7 +236,7 @@ test.describe("STU-381 monthly usage metering", () => {
     await expect(page.locator("#topbar-credits").getByText("43")).toBeVisible();
 
     // The account row and the dialog converge on the same reconciled count.
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#usage-counter")).toHaveText("7 / 50 runs this month");
 
     await openUsage(page);

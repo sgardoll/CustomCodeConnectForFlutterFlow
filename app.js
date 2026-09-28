@@ -88,6 +88,7 @@ import {
   renderMarkdownAudit,
 } from "./src/auditRenderer.js";
 import { initComposer } from "./src/composerAdapter.js";
+import { cancelSurfaceMotion, currentSurfaceRect, morphSurface, exitHero } from "./src/surfaceMotion.js";
 
 // --- CONFIGURATION ---
 const IS_DEV = import.meta.env.DEV
@@ -4580,6 +4581,7 @@ function restoreAndShowReplacementFailure(error, { previous, stage, runId, retry
   setGenerationStageVisible(true);
   showResultsView();
   updateSelectedArtifactPanels();
+  cancelPipelineMorph();
   showReplacementFailure(error, { stage, runId, retry });
   updateDeployButtonVisibility();
 }
@@ -4936,8 +4938,10 @@ async function runThinkingPipeline() {
 
     // Show pipeline progress bar. The outline morph runs over the panel once
     // the panel itself is in place, so busy feedback is immediate either way.
+    const composerRect = document.getElementById("composer")?.getBoundingClientRect();
+    const heroRect = document.getElementById("hero")?.getBoundingClientRect();
     showPipelineProgress({ prompt: userInput, runId });
-    morphComposerToPipeline();
+    morphComposerToPipeline(composerRect, heroRect);
 
     // Step 1: Prompt Architect
     selectWorkflowStep(1);
@@ -5017,7 +5021,6 @@ async function runThinkingPipeline() {
     // panel into it and hand the outline morph over to the expansion.
     hidePipelineProgress();
     const auditHtml = renderMarkdownAudit(pipelineState.step3Result);
-    morphPipelineToResults();
     showResultsView(cleanStep2, auditHtml);
   } catch (error) {
     // A cancelled request belongs to a run the user already abandoned; it is
@@ -6707,6 +6710,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // button's listener exists while auth/subscription requests are still in
   // flight; runThinkingPipeline waits on sessionReadiness before checking
   // entitlements.
+  initExactShell();
   composerControls = initComposer({ onSubmit: runThinkingPipeline });
 
   // Startup auth + subscription share one promise: the pipeline awaits it so
@@ -7605,6 +7609,7 @@ window.advanceWalkthrough = advanceWalkthrough;
 window.commitToFlutterFlow = commitToFlutterFlow;
 
 function focusPromptInput() {
+  if (!pipelineState.isRunning) setGenerationStageVisible(false);
   const input = document.getElementById("pipeline-input");
   if (input) {
     input.focus();
@@ -7612,9 +7617,8 @@ function focusPromptInput() {
 }
 
 function openModelSelector() {
-  const details = document.getElementById("advanced-settings");
-  if (details) details.open = true;
-  const select = document.getElementById("code-generator-model");
+  openComposerSettings();
+  const select = document.getElementById("composer-settings-model");
   if (select) {
     select.scrollIntoView({ behavior: "smooth", block: "center" });
     select.focus();
@@ -7920,106 +7924,29 @@ function pipelineMorphDurationMs() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : PIPELINE_MORPH_FALLBACK_MS;
 }
 
-let pipelineMorphGhost = null;
-let pipelineMorphAnimation = null;
-
 function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
 function cancelPipelineMorph() {
-  if (pipelineMorphAnimation) {
-    try {
-      pipelineMorphAnimation.cancel();
-    } catch {
-      /* an already-finished animation cannot be cancelled */
-    }
-    pipelineMorphAnimation = null;
-  }
-  if (pipelineMorphGhost) {
-    pipelineMorphGhost.remove();
-    pipelineMorphGhost = null;
-  }
-  window.removeEventListener("resize", cancelPipelineMorph);
+  cancelSurfaceMotion();
 }
 
-function runOutlineMorph(fromEl, toEl) {
-  cancelPipelineMorph();
-  if (prefersReducedMotion() || !fromEl || !toEl || !document.body) return;
-  if (typeof Element.prototype.animate !== "function") return;
-
-  const from = fromEl.getBoundingClientRect();
-  const to = toEl.getBoundingClientRect();
-  if (!from.width || !from.height || !to.width || !to.height) return;
-
-  const ghost = document.createElement("div");
-  ghost.className = "composer-morph";
-  ghost.setAttribute("aria-hidden", "true");
-  ghost.style.cssText = `left:${to.left}px;top:${to.top}px;width:${to.width}px;height:${to.height}px;opacity:0;`;
-  document.body.appendChild(ghost);
-
-  const dx = from.left + from.width / 2 - (to.left + to.width / 2);
-  const dy = from.top + from.height / 2 - (to.top + to.height / 2);
-  const sx = from.width / to.width;
-  const sy = from.height / to.height;
-  const base = `translate(${dx}px,${dy}px) scale(${sx},${sy})`;
-
-  // 0-14%: the outline eases in over the surface it is leaving. 14-28%: the
-  // anticipatory shrink. 28-100%: one longer growth that settles with weight.
-  const animation = ghost.animate(
-    [
-      { transform: base, opacity: 0, offset: 0, easing: "cubic-bezier(.2,0,0,1)" },
-      { transform: base, opacity: 1, offset: 0.14, easing: "cubic-bezier(.4,0,.2,1)" },
-      {
-        transform: `translate(${dx}px,${dy}px) scale(${sx * 0.93},${sy * 0.93})`,
-        opacity: 1,
-        offset: 0.28,
-        easing: "cubic-bezier(.32,1.38,.5,1)",
-      },
-      { transform: "translate(0px,0px) scale(1,1)", opacity: 1, offset: 1 },
-    ],
-    { duration: pipelineMorphDurationMs(), fill: "both" },
-  );
-
-  pipelineMorphGhost = ghost;
-  pipelineMorphAnimation = animation;
-  window.addEventListener("resize", cancelPipelineMorph);
-
-  animation.onfinish = () => {
-    if (pipelineMorphGhost !== ghost) return;
-    const out = ghost.animate([{ opacity: 1 }, { opacity: 0 }], {
-      duration: 260,
-      fill: "forwards",
-    });
-    out.onfinish = () => {
-      if (pipelineMorphGhost === ghost) cancelPipelineMorph();
-    };
-  };
+function pipelineRevealNodes() {
+  return [".pipeline-prompt-kicker", "#pipeline-submitted-prompt", "#pipeline-edit-prompt", ".pipeline-glyph", "#progress-title-text", "#progress-description-text", ".progress-track", ".progress-meta"].map((selector) => document.querySelector(selector));
 }
+
+function togglePipelineStageNavigation() {
+  const nav = document.getElementById("pipeline-stage-nav");
+  const open = nav.classList.toggle("is-open");
+  document.getElementById("progress-stage-count").setAttribute("aria-expanded", String(open));
+}
+window.togglePipelineStageNavigation = togglePipelineStageNavigation;
 
 /** Composer -> generation panel. */
-function morphComposerToPipeline() {
-  const from = document.getElementById("composer");
-  const fromRect = from?.getBoundingClientRect();
-  if (!fromRect) return;
-  // The generation stage only gains a box once it is revealed a frame later,
-  // so the outline is measured against the panel that is actually on screen.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      runOutlineMorph(
-        { getBoundingClientRect: () => fromRect },
-        document.getElementById("main-stage-container"),
-      );
-    });
-  });
-}
-
-/** Generation panel -> expanded Results view. */
-function morphPipelineToResults() {
-  runOutlineMorph(
-    document.getElementById("pipeline-progress"),
-    document.getElementById("main-stage-container"),
-  );
+function morphComposerToPipeline(from, heroRect) {
+  morphSurface(from, document.getElementById("main-stage-container"), pipelineRevealNodes());
+  exitHero(document.getElementById("hero"), heroRect);
 }
 
 // Navigating away abandons the hand-off rather than leaving an orphaned
@@ -8032,6 +7959,7 @@ function showPipelineProgress(options = {}) {
   if (!isCurrentPipelineRun(runId)) return;
   // A previous run's delayed hide must not blank this run's panel.
   cancelPipelineHideTimer();
+  cancelPipelineMorph();
 
   setGenerationStageVisible(true);
   const progress = document.getElementById("pipeline-progress");
@@ -8042,6 +7970,8 @@ function showPipelineProgress(options = {}) {
   if (resultsView) resultsView.classList.remove("visible");
   document.body.classList.remove("results-fullscreen", "results-with-sidebar");
   if (progress) progress.classList.add("visible");
+  document.getElementById("pipeline-stage-nav")?.classList.remove("is-open");
+  document.getElementById("progress-stage-count")?.setAttribute("aria-expanded", "false");
   setPipelineRunState("running");
 
   if (prompt !== null) {
@@ -8358,16 +8288,16 @@ function renderSummaryDetail(presentation) {
   const manualSteps = presentation.manualSteps.length
     ? `
       <section class="summary-manual-callout">
-        <h3>${reviewStatusIcon("info")} Complete in FlutterFlow</h3>
-        <p class="summary-manual-lead">For your information — these don't block the deploy. Finish them by hand in the FlutterFlow editor once the code is pushed.</p>
-        <ul>
+        <h3 class="sr-only">Complete in FlutterFlow</h3>
+        <p class="summary-manual-lead sr-only">For your information — these don't block the deploy. Finish them by hand in the FlutterFlow editor once the code is pushed.</p>
+        <ol>
           ${presentation.manualSteps.map((step) => `
             <li>
               <strong>${escapeHtml(step.title)}</strong>
               ${step.detail && step.detail !== step.title ? `<span>${escapeHtml(step.detail)}</span>` : ""}
             </li>
           `).join("")}
-        </ul>
+        </ol>
       </section>
     `
     : "";
@@ -8375,10 +8305,16 @@ function renderSummaryDetail(presentation) {
   summaryDetail.innerHTML = `
     <section class="review-summary">
       <div class="review-summary-copy">
+        <h3 class="summary-heading">${escapeHtml(presentation.title)}</h3>
         <p class="review-summary-text">${escapeHtml(presentation.summary)}</p>
+        <dl class="summary-spec">
+          <div><dt>Artifact${presentation.artifacts.length === 1 ? "" : "s"}</dt><dd>${presentation.artifacts.map((artifact) => escapeHtml(artifact.artifactType || artifact.type || artifact.name)).join(" · ")}</dd></div>
+          <div><dt>Public API</dt><dd>${presentation.artifacts.flatMap((artifact) => artifact.publicApi || []).map(escapeHtml).join(" · ") || "No parameters returned"}</dd></div>
+          <div><dt>Manual Steps Required</dt><dd>${manualSteps || "None reported"}</dd></div>
+          <div><dt>Review</dt><dd>${escapeHtml(presentation.status || "Not reported")}</dd></div>
+        </dl>
         ${findings}
         ${bundleWarnings}
-        ${manualSteps}
       </div>
       <div class="review-score-column">
         <aside class="review-score review-score-${escapeAttr(scoreTone)}" aria-label="${score == null ? "Review not scored" : `Review score ${score} out of 100`}">
@@ -8636,8 +8572,20 @@ function updateSelectedArtifactPanels() {
 
   if (codeOutput) codeOutput.textContent = "";
   if (codeOutput) {
-    const highlighted = highlightCode(selectedCode);
-    codeOutput.innerHTML = highlighted; // eslint-disable-line -- highlight.js output
+    // Highlight each raw line independently, preserving exact copied source.
+    // Line presentation never writes back into the artifact bundle.
+    codeOutput.replaceChildren();
+    selectedCode.split("\n").forEach((line, index) => {
+      const span = document.createElement("span");
+      span.className = "code-line";
+      span.innerHTML = highlightCode(line); // highlight.js escapes source
+      if (!prefersReducedMotion() && pipelineState.resultsViewMode === "file") {
+        span.classList.add("is-in");
+        span.style.setProperty("--d", `${index * 10}ms`);
+        span.addEventListener("animationend", () => span.classList.remove("is-in"), { once:true });
+      }
+      codeOutput.appendChild(span);
+    });
   }
   if (auditOutput) {
     auditOutput.innerHTML = renderSelectedArtifactReview(presentation);
@@ -8652,6 +8600,11 @@ function updateSelectedArtifactPanels() {
 }
 
 function showResultsView(codeContent, auditContent) {
+  const panel = document.getElementById("main-stage-container");
+  const from = currentSurfaceRect(panel);
+  const wasResults = document.body.classList.contains("results-fullscreen");
+  cancelPipelineHideTimer();
+  document.getElementById("pipeline-progress")?.classList.remove("visible");
   setGenerationStageVisible(true);
   if (!pipelineState.selectedArtifactId) {
     pipelineState.selectedArtifactId = getPrimaryArtifact(pipelineState.artifactBundle).id;
@@ -8667,6 +8620,9 @@ function showResultsView(codeContent, auditContent) {
   // carry a prior vote (visual, aria-pressed, pending lock or status) into
   // code the user has not yet reviewed.
   resetResultsFeedbackState();
+  if (!wasResults) {
+    morphSurface(from, panel, ["#bundle-strip", ".summary-heading", ".review-summary-text", ".summary-spec", ".review-score-column", ".results-action-bar"].map((selector) => document.querySelector(selector)), { results:true });
+  }
 }
 
 function resetResultsFeedbackState() {
@@ -9073,19 +9029,41 @@ function hideErrorInputPanel() {
 
 // --- VIEW ROUTER & SHELL UI (STU-375) ---
 
+function initExactShell() {
+  const stage = document.getElementById("shell-stage");
+  const panel = document.getElementById("main-stage-container");
+  const sidebar = panel?.querySelector(".pipeline-prompt-recap");
+  const mobile = window.matchMedia("(max-width: 920px)");
+  const fit = () => stage?.style.setProperty("--fit", Math.min(1, document.documentElement.clientWidth / 1920));
+  const order = () => {
+    if (!sidebar) return;
+    const focused = sidebar.contains(document.activeElement) ? document.activeElement : null;
+    // Use the same persistent node; DOM, screen-reader and keyboard order agree
+    // with the reference's desktop sidebar and mobile workflow-first layout.
+    if (mobile.matches) panel.appendChild(sidebar);
+    else panel.prepend(sidebar);
+    focused?.focus({ preventScroll:true });
+  };
+  fit(); order();
+  window.addEventListener("resize", fit);
+  mobile.addEventListener("change", order);
+}
+
 function setGenerationStageVisible(visible) {
   const stage = document.getElementById("generation-stage");
   if (!stage) return;
+  const hero = document.getElementById("hero");
+  if (hero) { hero.hidden = visible; hero.inert = visible; }
   if (visible) {
     stage.hidden = false;
     stage.inert = false;
-    requestAnimationFrame(() => stage.classList.add("is-active"));
+    stage.classList.add("is-active");
   } else {
+    cancelPipelineMorph();
+    document.body.classList.remove("results-fullscreen", "results-with-sidebar");
     stage.classList.remove("is-active");
     stage.inert = true;
-    setTimeout(() => {
-      if (!stage.classList.contains("is-active")) stage.hidden = true;
-    }, 260);
+    stage.hidden = true;
   }
 }
 
@@ -9138,6 +9116,16 @@ function closeCreditsModal(event) {
 
 function switchView(view, pushState = true, moveFocus = true) {
   view = ["home", "account", "plans"].includes(view) ? view : "home";
+  document.body.dataset.shellView = view;
+  if (view !== "home") {
+    cancelPipelineMorph(); composerControls?.cancelTyping?.();
+    if (pipelineState.isRunning) {
+      invalidatePipelineRun(); abortPipelineRequests();
+      pipelineState.isRunning = false;
+      setRunPipelineButtonBusy(false);
+      stopProgressTimer(); cancelPipelineHideTimer();
+    }
+  }
   const views = document.querySelectorAll(".view[data-view]");
   views.forEach((el) => {
     const isTarget = el.dataset.view === view;
@@ -9164,12 +9152,6 @@ function switchView(view, pushState = true, moveFocus = true) {
     const stage = document.getElementById("main-stage-container");
     if (stage && stage.classList.contains("visible")) setGenerationStageVisible(true);
   }
-
-  document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
-    const active = link.dataset.view === view;
-    link.setAttribute("aria-current", active ? "page" : null);
-    if (!active) link.removeAttribute("aria-current");
-  });
 
   if (pushState) {
     const hash = view === "home" ? "" : `#${view}`;
