@@ -129,6 +129,24 @@ test("an escaped quote inside a URI does not end the literal", () => {
   assert.deepEqual(extractPackageImports(code), ["private_thing"]);
 });
 
+test("raw string literals in directives are still URIs", () => {
+  // `r'...'` is a legal Dart prefix - the URI inside is a dependency like any
+  // other, and a raw string takes no escape pairs.
+  const code =
+    "import r'package:foo/foo.dart';\n" +
+    'export r"package:bar/bar.dart";\n' +
+    "import 'package:a/a.dart' if (dart.library.io) r'package:b/b.dart';\n" +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "package:foo/foo.dart",
+    "package:bar/bar.dart",
+    "package:a/a.dart",
+    "package:b/b.dart",
+  ]);
+  assert.deepEqual(extractPackageImports(code), ["foo", "bar", "a", "b"]);
+});
+
 test("a comparison literal inside `if (...)` is not a URI", () => {
   // `== 'true'` compares a config variable with a string; the literal is not
   // a file, and reading it as one would skip an otherwise verifiable class.

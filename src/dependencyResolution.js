@@ -99,9 +99,20 @@ export async function planDependencyChanges(
       continue;
     }
 
+    // A `version:` own-key - `intl: {version: 0.19.0}` or the same key on a
+    // block form's child line - is a hosted pin written in mapping shape, so
+    // it has no scalar constraint but still bounds what the project resolves
+    // and must be compared like one. Other block sources (git, path, SDK,
+    // hosted-without-version) carry no comparable version.
+    const effectiveConstraint = existing.isScalar
+      ? existing.constraint
+      : existing.sourceKey === "version"
+        ? existing.sourceValue
+        : null;
+
     // Checked before the constraint itself: a block-form entry has no scalar
     // constraint, and an empty one would read as `any` and look satisfiable.
-    if (!existing.isScalar) {
+    if (effectiveConstraint === null) {
       plan.warnings.push(
         `"${name}" is declared in your project from a git, path, or SDK source, but the generated code needs at least ${minimum}. ` +
           "Left as-is — update it yourself if the build fails.",
@@ -110,14 +121,14 @@ export async function planDependencyChanges(
       continue;
     }
 
-    if (constraintCanReach(existing.constraint, minimum)) {
-      plan.kept.push({ name, constraint: existing.constraint });
+    if (constraintCanReach(effectiveConstraint, minimum)) {
+      plan.kept.push({ name, constraint: effectiveConstraint });
       continue;
     }
 
     plan.overrides[name] = `^${minimum}`;
     plan.warnings.push(
-      `"${name}" was pinned to ${existing.constraint} in your project, which cannot resolve the ${minimum} the generated code needs. ` +
+      `"${name}" was pinned to ${effectiveConstraint} in your project, which cannot resolve the ${minimum} the generated code needs. ` +
         `Raising it to ^${minimum} — this changes a dependency the rest of your app also uses.`,
     );
   }

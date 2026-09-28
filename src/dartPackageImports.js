@@ -70,13 +70,16 @@ function stripComments(code) {
 // file, and stopping at its `;` would lose the URI. String alternatives
 // consume `\x` escape pairs so an escaped quote does not end the literal
 // early - `'a\'b.dart'` is one URI, not `a\` followed by a stranded quote.
-// URI literals are read with paren awareness rather than a pattern: a string
-// inside an `if (...)` condition is a comparison value (`dart.library.io ==
-// 'true'`), not a file, so only literals outside the parentheses count. The
-// apostrophe inside a double-quoted URI (`"src/it's.dart"`) is a filename
-// char, not a delimiter, so each literal ends at its own quote type.
+// A `r` prefix makes a raw string, legal in directives too: `r'a\'b'` ends at
+// the first quote because a raw literal consumes no escapes, so the raw
+// alternatives run before the escape-aware ones. URI literals are read with
+// paren awareness rather than a pattern: a string inside an `if (...)`
+// condition is a comparison value (`dart.library.io == 'true'`), not a file,
+// so only literals outside the parentheses count. The apostrophe inside a
+// double-quoted URI (`"src/it's.dart"`) is a filename char, not a delimiter,
+// so each literal ends at its own quote type.
 const DIRECTIVE_PATTERN =
-  /\b(?:import|export)\s+(?=['"])(?:'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
+  /\b(?:import|export)\s+(?=r?['"])(?:r'[^'\n]*'|r"[^"\n]*"|'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
 
 /**
  * Yields the contents of every quoted literal in a directive that names code -
@@ -89,17 +92,35 @@ function* directiveUriLiterals(text) {
   let depth = 0;
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i];
-    if (char === "(") depth += 1;
-    else if (char === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0 && (char === "'" || char === '"')) {
-      let end = i + 1;
-      for (; end < text.length; end += 1) {
-        if (text[end] === "\\") end += 1;
-        else if (text[end] === char) break;
-      }
-      yield text.slice(i + 1, end);
-      i = end;
+    if (char === "(") {
+      depth += 1;
+      continue;
     }
+    if (char === ")") {
+      depth = Math.max(0, depth - 1);
+      continue;
+    }
+    if (depth > 0) continue;
+
+    let raw = false;
+    let quoteAt = i;
+    if (char === "r") {
+      if (text[i + 1] !== "'" && text[i + 1] !== '"') continue;
+      raw = true;
+      quoteAt = i + 1;
+    } else if (char !== "'" && char !== '"') {
+      continue;
+    }
+
+    const quote = text[quoteAt];
+    let end = quoteAt + 1;
+    for (; end < text.length; end += 1) {
+      // Raw strings take no escape pairs - `r'a\'b'` ends at the quote.
+      if (!raw && text[end] === "\\") end += 1;
+      else if (text[end] === quote) break;
+    }
+    yield text.slice(quoteAt + 1, end);
+    i = end;
   }
 }
 

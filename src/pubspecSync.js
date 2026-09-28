@@ -451,6 +451,29 @@ export function formatConstraint(constraint) {
   return `'${constraint.replace(/'/g, "''")}'`;
 }
 
+// A `version:` member sits inside a `{...}` map on the name line or on a
+// deeper child line in block form; only its value is rewritten so the entry
+// keeps its declared shape.
+function rewriteVersionMember(lines, entry, constraint) {
+  const parentIndent = indentOf(lines[entry.lineIndex]);
+  for (let j = entry.lineIndex; j < lines.length; j += 1) {
+    const line = lines[j];
+    if (j !== entry.lineIndex && indentOf(line) <= parentIndent) break;
+    const isMember =
+      j === entry.lineIndex
+        ? /\{[^}]*\bversion\s*:/.test(line)
+        : /^\s*version\s*:/.test(line);
+    if (!isMember) continue;
+    const memberMatch = line.match(/\bversion\s*:\s*([^,}\s#]+)/);
+    if (!memberMatch) continue;
+    lines[j] = line.replace(
+      memberMatch[0],
+      `version: ${formatConstraint(constraint)}`,
+    );
+    return;
+  }
+}
+
 function formatDependencyLines(indent, name, version) {
   // An SDK-supplied package takes a block entry - `name:` then its own
   // `sdk:` key - not a version constraint.
@@ -552,8 +575,22 @@ export function applyDependencyOverrides(yamlContent, overrides = {}) {
 
   for (const [name, constraint] of entries) {
     const existing = declared.get(name);
-    if (!existing || !existing.isScalar || !String(constraint || "").trim()) {
+    // `name: {version: 0.19.0}` (or a `version:` own-key in block form) is a
+    // hosted pin in mapping shape: not isScalar, but raiseable - and only its
+    // `version:` member is rewritten, so the entry keeps its declared form.
+    const versionPinned =
+      existing && !existing.isScalar && existing.sourceKey === "version";
+    if (
+      !existing ||
+      (!existing.isScalar && !versionPinned) ||
+      !String(constraint || "").trim()
+    ) {
       skipped.push(name);
+      continue;
+    }
+    if (versionPinned) {
+      rewriteVersionMember(lines, existing, String(constraint).trim());
+      overridden.push({ name, from: existing.sourceValue, to: constraint });
       continue;
     }
     const indent = " ".repeat(indentOf(lines[existing.lineIndex]));
