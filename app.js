@@ -1092,12 +1092,16 @@ let ffConnectionCheckSeq = 0;
 // Issue order across BOTH request kinds. The dropdown fetch and the
 // connection check are superseded independently within their kind, but they
 // write shared state — the account connection status and the stored
-// project's confirmation. A request may write shared state only when no newer
-// request of either kind has already applied its outcome, so an older
-// response can never re-mark the account connected (or restore a stored
-// target's confirmation) after a newer request already failed.
+// project's confirmation. Ordering is split by what a request writes: an
+// applied CONNECTION outcome (the account status card) may only be written by
+// a request that actually produces one, so a list response that updates the
+// deploy dialog never leaves a pending check unable to settle the card; an
+// applied CONFIRMATION (the stored target's binding) is ordered separately so
+// the newest list response always wins the stored selection. A request may
+// write a domain only while no newer request already applied that domain.
 let ffRequestOrderSeq = 0;
 let ffAppliedOutcomeOrder = 0;
+let ffAppliedConfirmationOrder = 0;
 
 // Identity binding for project selections. A selection is only usable as a
 // deploy target while it is confirmed for the key + endpoint generation it was
@@ -1811,8 +1815,12 @@ async function validateFlutterFlowConnection() {
   // write: skip it entirely rather than flash "validating" over the newer
   // result and then fail silently.
   if (!outcomeIsCurrent() || order <= ffAppliedOutcomeOrder) return null;
+  const applyConfirmation = () => {
+    ffAppliedConfirmationOrder = Math.max(ffAppliedConfirmationOrder, order);
+  };
   if (!apiKey || !hasStoredKey("flutterflow")) {
     ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     ffConnectionState = "not-configured";
     renderApiKeyConnection();
     return null;
@@ -1834,19 +1842,24 @@ async function validateFlutterFlowConnection() {
     // response must not write shared state over it.
     if (order <= ffAppliedOutcomeOrder) return null;
     ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     ffConnectionState = projects && projects.length > 0
       ? "connected"
       : "no-projects";
     // A completed check for the current key is authoritative for what that key
     // can reach: it re-confirms the stored selection when the response lists
-    // it, and strips its confirmation when it does not.
-    reconcileStoredProjectSelection(projects, apiKey, generation);
+    // it, and strips its confirmation when it does not — but only while it is
+    // still the newest confirmation writer, so a fresher list response wins.
+    if (order >= ffAppliedConfirmationOrder) {
+      reconcileStoredProjectSelection(projects, apiKey, generation);
+    }
     renderApiKeyConnection();
     return projects;
   } catch (error) {
     if (!outcomeIsCurrent()) return null;
     if (order <= ffAppliedOutcomeOrder) return null;
     ffAppliedOutcomeOrder = order;
+    applyConfirmation();
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
       ? "unauthorized"
@@ -2017,9 +2030,15 @@ async function fetchProjects(apiKey) {
   if (errorElement) errorElement.classList.add("hidden");
 
   // A real request is in flight; the account connection card shows validating
-  // until the outcome is known (never "connected" from storage alone). An
-  // already-superseded request leaves the newer applied status alone.
-  if (mayWriteConnectionOutcome() && (hasStoredKey("flutterflow") || apiKey)) {
+  // until the outcome is known (never "connected" from storage alone). Only a
+  // request for the key that is actually configured describes the account — a
+  // preview request for a key that is never saved must not flash validating
+  // (and must not write any account status below).
+  if (
+    mayWriteConnectionOutcome() &&
+    apiKey === flutterflowApiKey &&
+    (hasStoredKey("flutterflow") || apiKey)
+  ) {
     ffConnectionState = "validating";
   }
   renderApiKeyConnection();
@@ -2037,14 +2056,19 @@ async function fetchProjects(apiKey) {
 
     // The applied options belong to this fetch's key + endpoint generation.
     projectListIdentity = { key: apiKey, generation };
-    const outcomeIsNewest = mayWriteConnectionOutcome();
+    // Shared writes — account status and stored-project confirmation — belong
+    // to the configured key only: a preview fetch for a key that is never
+    // saved must not describe the account or confirm a selection, while one
+    // whose key became the configured key mid-flight still applies.
+    const requestIsForConfiguredKey = apiKey === flutterflowApiKey;
+    const outcomeIsNewest =
+      mayWriteConnectionOutcome() && requestIsForConfiguredKey;
     if (outcomeIsNewest) claimConnectionOutcome();
-    // A response issued with the already-stored key re-confirms (or strips) the
-    // stored selection — but only while its connection outcome is still the
-    // newest: after a newer request's failure, this older success must not
-    // restore the target's confirmation. A preview fetch for a not-yet-saved
-    // key never confirms anything regardless.
-    if (outcomeIsNewest && storedKeyAtStart === apiKey) {
+    // A response for the configured key re-confirms (or strips) the stored
+    // selection while it is still the newest confirmation response: an older
+    // list must not restore the target's confirmation over a newer one.
+    if (order > ffAppliedConfirmationOrder && requestIsForConfiguredKey) {
+      ffAppliedConfirmationOrder = order;
       reconcileStoredProjectSelection(projects, apiKey, generation);
     }
 
@@ -2080,7 +2104,7 @@ async function fetchProjects(apiKey) {
     if (!outcomeIsCurrent()) return;
     console.error("Failed to fetch projects:", error);
     const msg = String((error && error.message) || "");
-    if (mayWriteConnectionOutcome()) {
+    if (mayWriteConnectionOutcome() && apiKey === flutterflowApiKey) {
       claimConnectionOutcome();
       ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
         ? "unauthorized"
@@ -3920,8 +3944,11 @@ const commitState = {
  * through here, so a selection that survived a key or endpoint change cannot
  * reach a push.
  */
-async function getConfirmedStoredProjectId() {
-  const apiKey = await getApiKey("flutterflow");
+async function getConfirmedStoredProjectId(forApiKey) {
+  // The deploy passes the key it captured, so the verification describes the
+  // same credential identity the push will use — never a key saved mid-flight.
+  const apiKey =
+    forApiKey !== undefined ? forApiKey : await getApiKey("flutterflow");
   const projectId = await getApiKey("flutterflow_project_id");
   if (!apiKey || !projectId) return "";
   if (isProjectSelectionConfirmed(projectId, apiKey)) return projectId;
@@ -3932,8 +3959,8 @@ async function getConfirmedStoredProjectId() {
   // stored target against the current key's real list here: the same guard
   // applies (a completed response that omits the project leaves it refused),
   // and a superseded or failed verification still returns "".
-  const generation = ffEndpointGeneration;
   const order = ++ffRequestOrderSeq;
+  const generation = ffEndpointGeneration;
   let verified = false;
   try {
     const client = new FlutterFlowApiClient(
@@ -3962,8 +3989,8 @@ async function getConfirmedStoredProjectId() {
   // verifies nothing.
   if (generation !== ffEndpointGeneration) return "";
   if (apiKey !== flutterflowApiKey) return "";
-  if (order <= ffAppliedOutcomeOrder) return "";
-  ffAppliedOutcomeOrder = order;
+  if (order <= ffAppliedConfirmationOrder) return "";
+  ffAppliedConfirmationOrder = order;
   if (!verified) return "";
   // Never overwrite an in-flight explicit choice for a different project.
   if (
@@ -4004,7 +4031,14 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
     // a stored selection that is not confirmed for the stored key is never
     // used.
     const apiKey = await getApiKey("flutterflow");
-    const projectId = await getConfirmedStoredProjectId();
+    const endpoint = getFlutterFlowEndpoint();
+    let projectId = await getConfirmedStoredProjectId(apiKey);
+    // A key save or endpoint switch landing during the verification await
+    // would pair this captured identity with a target confirmed for another
+    // one — refuse rather than deploy a mismatched credential pair.
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
     if (!apiKey) {
       throw new Error(
@@ -4021,7 +4055,6 @@ async function commitToFlutterFlow(dartCode, fileName, options = {}) {
       throw new Error("Invalid FlutterFlow Project ID format.");
     }
 
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -4206,14 +4239,18 @@ async function executeCommit(code, options = {}) {
     // Step 3: Validate FlutterFlow credentials
     commitState.setState(CommitState.VALIDATING);
     const apiKey = await getApiKey("flutterflow");
+    const endpoint = getFlutterFlowEndpoint();
     const storedProjectId = await getApiKey("flutterflow_project_id");
     // The modal's choice was gated on its list identity at read time; the
-    // stored fallback goes through the same verifying read every deploy uses,
-    // so a stored selection that is not confirmed for the stored key is never
-    // used — and one merely awaiting confirmation is verified here rather
-    // than refused on a pending binding.
-    const projectId =
-      commitTargetProjectId || (await getConfirmedStoredProjectId());
+    // stored fallback verifies against this deploy's captured key so the push
+    // always pairs one credential identity — and a key save or endpoint
+    // switch landing during that verification refuses rather than pairing
+    // the captured key with a target confirmed for another identity.
+    let projectId =
+      commitTargetProjectId || (await getConfirmedStoredProjectId(apiKey));
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
     if (!apiKey) {
       throw new Error(
@@ -4262,7 +4299,6 @@ async function executeCommit(code, options = {}) {
     }
 
     commitState.setState(CommitState.PUSHING);
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -4451,14 +4487,18 @@ async function executeBundleCommit(bundlePlan, options = {}) {
 
     commitState.setState(CommitState.VALIDATING);
     const apiKey = await getApiKey("flutterflow");
+    const endpoint = getFlutterFlowEndpoint();
     const storedProjectId = await getApiKey("flutterflow_project_id");
     // The modal's choice was gated on its list identity at read time; the
-    // stored fallback goes through the same verifying read every deploy uses,
-    // so a stored selection that is not confirmed for the stored key is never
-    // used — and one merely awaiting confirmation is verified here rather
-    // than refused on a pending binding.
-    const projectId =
-      commitTargetProjectId || (await getConfirmedStoredProjectId());
+    // stored fallback verifies against this deploy's captured key so the push
+    // always pairs one credential identity — and a key save or endpoint
+    // switch landing during that verification refuses rather than pairing
+    // the captured key with a target confirmed for another identity.
+    let projectId =
+      commitTargetProjectId || (await getConfirmedStoredProjectId(apiKey));
+    if (apiKey !== flutterflowApiKey || endpoint !== getFlutterFlowEndpoint()) {
+      projectId = "";
+    }
 
     if (!apiKey) {
       throw new Error("FlutterFlow API Key not configured. Please add it in API Keys settings.");
@@ -4479,7 +4519,6 @@ async function executeBundleCommit(bundlePlan, options = {}) {
     targetIdentity.projectId = projectId;
 
     commitState.setState(CommitState.PUSHING);
-    const endpoint = getFlutterFlowEndpoint();
     const apiClient = new FlutterFlowApiClient(
       apiKey,
       projectId,
@@ -7264,8 +7303,8 @@ async function populateConfirmProjectSelect() {
     // does not, so the stored fallback can never target a project this key's
     // list did not offer. The confirmation write is shared connection state,
     // so it applies only while no newer request has already applied an outcome.
-    if (order > ffAppliedOutcomeOrder) {
-      ffAppliedOutcomeOrder = order;
+    if (order > ffAppliedConfirmationOrder) {
+      ffAppliedConfirmationOrder = order;
       reconcileStoredProjectSelection(projects, apiKey, generation);
     }
 

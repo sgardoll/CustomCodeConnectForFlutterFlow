@@ -9,6 +9,7 @@ import {
   sampleProjectList,
   stagingProjectList,
   emptyProjectList,
+  projectExport,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
 
@@ -1003,6 +1004,168 @@ test.describe("STU-384 account connection", () => {
     await expect(
       page.locator(`#confirm-project-select option[value="${PROJ}"]`),
     ).toHaveCount(0);
+  });
+
+  test("a deploy-dialog fetch cannot strand the connection card on checking", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Hold the startup check (first request after reload). The deploy
+    // dialog's fetch settles first and must not claim the connection outcome
+    // — it writes no account status, so doing so would leave the older check
+    // unable to settle the card.
+    let releaseCheck;
+    let markCheck;
+    const checkHeld = new Promise((resolve) => {
+      markCheck = resolve;
+    });
+    let seen = 0;
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      seen += 1;
+      if (seen === 1) {
+        markCheck();
+        await new Promise((resolve) => {
+          releaseCheck = resolve;
+        });
+      }
+      await route.fulfill(sampleProjectList());
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await checkHeld;
+
+    // The dialog's fetch (request 2) resolves while the check is pending.
+    const modalSettled = page.waitForResponse(
+      ENDPOINTS.flutterFlowListProjects,
+    );
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await modalSettled;
+
+    // The older check now lands: its status must still reach the card.
+    releaseCheck();
+    await page.evaluate(() => window.closeCommitConfirmModal());
+    await openAccount(page);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a preview key's failure cannot mark the saved account rejected", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    // Requests for the unsaved preview key are denied; the saved key keeps
+    // answering normally.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      const auth = route.request().headers()["authorization"] || "";
+      await route.fulfill(
+        auth.includes(NEW_KEY) ? err(401, { error: "unauthorized" }) : sampleProjectList(),
+      );
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Preview a different key without saving: its blur fetch is denied, but
+    // the outcome describes the preview key — not the saved account — so the
+    // card must stay connected.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    const previewSettled = page.waitForResponse(
+      ENDPOINTS.flutterFlowListProjects,
+    );
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await previewSettled;
+    await page.waitForTimeout(150);
+
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a key saved mid-deploy cannot pair the old key with a new target", async ({ page }) => {
+    await seedSession(page);
+    const newKeyList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-b-789", project: { name: "New Key Project" } },
+          ],
+        }),
+      });
+    await applyDefaultRoutes(page, signedInContext());
+    // The replacement key answers with its own project's list.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      const auth = route.request().headers()["authorization"] || "";
+      await route.fulfill(
+        auth.includes(NEW_KEY) ? newKeyList() : sampleProjectList(),
+      );
+    });
+    let exportCalls = 0;
+    await page.route(ENDPOINTS.flutterFlowExportCode, async (route) => {
+      exportCalls += 1;
+      await route.fulfill(projectExport());
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Capture the old stored key's ciphertext, then replace the credential
+    // pair through the app's real save path (input blur fires the preview
+    // fetch, the select change binds the new project to the new key, and
+    // saveApiKeys persists both — the deploy progress overlay would block a
+    // UI save, so the app's own handlers are driven directly).
+    const oldCipher = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow"),
+    );
+    await page.evaluate((key) => {
+      const input = document.getElementById("flutterflow-api-key-input");
+      input.value = key;
+      input.dispatchEvent(new FocusEvent("blur"));
+    }, NEW_KEY);
+    await page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    await page.evaluate((project) => {
+      const select = document.getElementById("flutterflow-projects-select");
+      select.value = project;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, "proj-b-789");
+    await page.evaluate(() => window.saveApiKeys());
+
+    // Model the save landing mid-deploy: the deploy's first credential read
+    // still returns the pre-save ciphertext (the captured key), while every
+    // later read — the target lookup's own reads — sees the saved pair.
+    await page.evaluate((cipher) => {
+      const orig = localStorage.getItem.bind(localStorage);
+      let reads = 0;
+      localStorage.getItem = (k) =>
+        k === "ccc_api_key_flutterflow" && ++reads === 1 ? cipher : orig(k);
+    }, oldCipher);
+
+    // The deploy must refuse: its captured key belongs to a different
+    // credential identity than the saved target now confirms — pushing
+    // would pair the old key with the new key's project.
+    const result = await page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    expect(result.error || "").toMatch(/no confirmed|not confirmed/i);
+    expect(exportCalls).toBe(0);
   });
 
   test("signed-out entry can still save the key without a connection card", async ({ page }) => {
