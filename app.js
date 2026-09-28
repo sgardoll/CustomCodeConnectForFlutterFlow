@@ -5880,7 +5880,7 @@ async function canRunPipeline() {
   const { count } = getUsage()
   const limit = getRunLimit()
   if (count >= limit) {
-    showPaywallExhausted(count, limit, { openModal: true })
+    showPaywallExhausted(count, limit, { openModal: true, dismissWalkthrough: true })
     return false
   }
   const warningThreshold = Math.floor(limit * 0.8)
@@ -5898,8 +5898,17 @@ function hidePaywallExhausted() {
 
 function showPaywallExhausted(count, limit, options = {}) {
   setGenerationStageVisible(true);
-  const walkthroughModal = document.getElementById('walkthrough-modal')
-  if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
+
+  // The exhausted surface also renders passively whenever usage is re-read —
+  // startup identity resolution and post-run reconciliation both land here via
+  // updateUsageDisplay. Only a run attempt may take an open tour away: when the
+  // async startup decision resolves to exhausted after the user has opened the
+  // tour, the tour must survive it. canRunPipeline passes dismissWalkthrough
+  // because an out-of-runs run must surface the paywall in place of the tour.
+  if (options.dismissWalkthrough) {
+    const walkthroughModal = document.getElementById('walkthrough-modal')
+    if (walkthroughModal) closeModal(walkthroughModal, { restoreFocus: false })
+  }
 
   const readyState = document.getElementById('ready-state')
   if (readyState) readyState.classList.add('hidden')

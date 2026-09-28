@@ -8,6 +8,7 @@ import {
   sampleProjectList,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
+import { PLAN_LIMITS } from "../src/plansSurface.js";
 
 /**
  * STU-391 — tutorials and connection onboarding in the new visual system.
@@ -103,43 +104,19 @@ async function clickInsideWalkthrough(page, selector) {
   await target.click();
 }
 
-// The identity response drives the startup usage decision: resolveIdentity
-// persists the metered count and, in the same synchronous block, runs
-// updateUsageDisplay — which surfaces the exhausted-paywall state and, for an
-// out-of-runs free user, closes any open walkthrough (showPaywallExhausted).
-// Opening the tour while that decision is still in flight lets the async close
-// land after the click and take the just-opened tour with it, so the open never
-// settles. Wait for the persisted count (written in the same synchronous block
-// as the decision) before clicking; this is app-readiness, not a fixed sleep,
-// and it holds for guests and signed-in users alike.
-async function waitForUsageDecision(page) {
-  await page.waitForFunction(
-    () => {
-      try {
-        const raw = localStorage.getItem("ccc_usage");
-        return !!raw && Number.isFinite(JSON.parse(raw).count);
-      } catch {
-        return false;
-      }
-    },
-    null,
-    { timeout: 8000 },
-  );
-}
-
 // Reopen the tutorial from the nav. On a cold start the deferred app.js module
 // may not have wired openWalkthroughModal yet, so a click can land while the
 // handler is undefined and silently navigate to #tutorial instead of opening
 // the modal — wait for the wire-up (state) before clicking, then wait for the
-// open animation to finish. The startup usage decision is awaited too: the
-// paywall it may surface closes an open walkthrough, so a click that races it
-// would be undone asynchronously.
+// open animation to finish. The startup usage decision is deliberately NOT
+// awaited: with the app fix a passive exhausted resolution no longer closes an
+// open tour, so the click may land before or after the decision — the race
+// itself is exercised, and the tour survives either order.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
     { timeout: 8000 },
   );
-  await waitForUsageDecision(page);
   await page.click("#wt-reopen");
   await waitForWalkthroughOpen(page);
 }
@@ -365,5 +342,63 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
       await expect(page.locator(WALKTHROUGH)).toBeHidden();
       await page.waitForTimeout(100);
     }
+  });
+
+  // Regression: the startup usage decision must never close a tour the user is
+  // reading. resolveIdentity lands its metered count asynchronously and, when
+  // that count is exhausted, renders the paywall state through
+  // updateUsageDisplay -> showPaywallExhausted. That passive render used to
+  // close any open walkthrough, so a user who opened the tour before the
+  // decision resolved lost it as the response landed. The identity response is
+  // gated here so the tour is guaranteed open when the decision arrives — the
+  // exact sequence the original flake pinned — and the tour must survive it.
+  // A run attempt is not passive: an out-of-runs run must still surface the
+  // paywall and take the tour with it.
+  test("the startup paywall decision never closes an open tour; an out-of-runs run attempt still surfaces the paywall", async ({ page }) => {
+    let releaseIdentity;
+    const identityGate = new Promise((resolve) => {
+      releaseIdentity = resolve;
+    });
+    await applyDefaultRoutes(page);
+    // Hold the identity response until the tour is open, then answer with a
+    // free user at the tier limit. Registered after applyDefaultRoutes, which
+    // matches routes in reverse registration order, so this handler wins.
+    await page.route(ENDPOINTS.identity, async (route) => {
+      await identityGate;
+      await route.fulfill({
+        status: 200,
+        body: JSON.stringify({
+          status: "guest",
+          user_id: "guest-exhausted-0001",
+          identity_token: null,
+          usage_count: PLAN_LIMITS.free,
+          usage_month: new Date().toISOString().slice(0, 7),
+        }),
+        contentType: "application/json",
+      });
+    });
+
+    await page.goto("/");
+
+    // Fresh user: the tour auto-opens before resolveIdentity has fetched, so it
+    // is already open when the decision lands.
+    await waitForWalkthroughOpen(page);
+    releaseIdentity();
+
+    // The decision has landed: the exhausted surface renders and the metered
+    // count is persisted. The passive render must leave the open tour alone.
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await expect(page.locator(WALKTHROUGH)).toHaveClass(/open/);
+    await expect(page.locator(WALKTHROUGH)).toBeVisible();
+
+    // A run attempt is not passive: an out-of-runs run must surface the
+    // paywall in place of the tour.
+    await page.evaluate(() => {
+      document.getElementById("pipeline-input").value = "A circular progress gauge";
+      window.runThinkingPipeline();
+    });
+    await expect(page.locator(WALKTHROUGH)).not.toHaveClass(/open/);
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
   });
 });
