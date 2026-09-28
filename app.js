@@ -8147,8 +8147,9 @@ window.closePricingModal = closePricingModal;
 // The three-stage view is bound to the real Architect -> Generator -> Review
 // events, so nothing here invents an outcome: the track advances only when a
 // stage actually reports, a stage that never ran is never drawn as completed,
-// and a failure never falls through to a result. The elapsed counter is the
-// only time-driven element, and it reports real elapsed time.
+// and a failure never falls through to a result. The run's one timer drives
+// both the elapsed counter (real time) and the fill's in-slice easing (an
+// estimate that never completes a stage ahead of its response).
 let pipelineElapsedTimer = null;
 let pipelineStartTime = null;
 // Every view update carries the run it belongs to (pipelineState.runId), so a
@@ -8304,7 +8305,15 @@ function completedPipelineStageCount() {
 function renderPipelineTrack() {
   const fillEl = document.getElementById("pipeline-progress-fill");
   if (fillEl) {
-    fillEl.style.width = `${pipelineTrackPercent()}%`;
+    if (pipelineStageStates[pipelineActiveStage] === "failed") {
+      // Pin the fill where it visibly is: writing a newer % target would let
+      // the 700ms width transition keep animating after the run died.
+      fillEl.style.transition = "none";
+      fillEl.style.width = getComputedStyle(fillEl).width;
+    } else {
+      fillEl.style.transition = "";
+      fillEl.style.width = `${pipelineTrackPercent()}%`;
+    }
   }
   const countEl = document.getElementById("progress-stage-count");
   if (countEl) countEl.textContent = `Step ${pipelineActiveStage} of 3`;
@@ -8314,23 +8323,23 @@ function renderPipelineTrack() {
  * Each stage owns a third of the track. While a stage runs the fill eases
  * asymptotically toward 95% of its slice, so a slow stage still looks alive
  * without the bar ever claiming the stage finished ahead of its response.
- * A failed stage freezes where it eased to; completed stages sit on their
- * real boundaries.
+ * A finished stage sits on its own boundary — a stage-2 re-entry (refine,
+ * pasted errors) whose Review completes lands on 100%, not the count of
+ * stages that ran.
  */
 function pipelineTrackPercent() {
   const span = 100 / 3;
   const state = pipelineStageStates[pipelineActiveStage];
-  if (
-    (state === "active" || state === "failed") &&
-    pipelineStageStartedAt !== null
-  ) {
+  if (state === "active" && pipelineStageStartedAt !== null) {
     const elapsed = (Date.now() - pipelineStageStartedAt) / 1000;
     return (
       (pipelineActiveStage - 1) * span +
       span * 0.95 * (1 - Math.exp(-elapsed / 12))
     );
   }
-  return (completedPipelineStageCount() / 3) * 100;
+  return state === "done"
+    ? (pipelineActiveStage / 3) * 100
+    : (completedPipelineStageCount() / 3) * 100;
 }
 
 /**

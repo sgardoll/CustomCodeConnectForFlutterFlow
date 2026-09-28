@@ -201,10 +201,16 @@ test.describe("Generation progress binds to real stage events", () => {
     pipeline.release("architect");
     await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
     await expect.poll(trackWidth).toBeGreaterThan(100 / 3 + 0.5);
+    // A held stage 2 keeps easing but never claims stage 3's slice.
+    await page.waitForTimeout(1200);
+    expect(await trackWidth()).toBeLessThan(200 / 3);
 
     pipeline.release("generator");
     await expect(stage(page, 3)).toHaveAttribute("data-state", "active");
     await expect.poll(trackWidth).toBeGreaterThan((200 / 3) + 0.5);
+    // And stage 3 never claims the run finished ahead of its response.
+    await page.waitForTimeout(1200);
+    expect(await trackWidth()).toBeLessThan(100);
 
     pipeline.release("review");
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
@@ -455,6 +461,41 @@ test.describe("Recoverable failure states", () => {
       { url: "https://img.example/ref.png" },
     ]);
   });
+
+  test("a failed stage freezes the fill mid-transition instead of letting it drift", async ({
+    page,
+  }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, {
+      hold: ["generator"],
+      responses: { generator: providerError },
+    });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+
+    // Let the fill get moving inside stage 2's slice before the failure.
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => parseFloat(document.getElementById("pipeline-progress-fill").style.width) || 0,
+        ),
+      )
+      .toBeGreaterThan(100 / 3 + 0.5);
+
+    // The 700ms width transition must not keep animating after the run dies:
+    // the fill is pinned at its rendered position and stops moving.
+    pipeline.release("generator");
+    await expect(failure(page)).toBeVisible();
+    const frozenWidth = () =>
+      page.evaluate(
+        () => getComputedStyle(document.getElementById("pipeline-progress-fill")).width,
+      );
+    const first = await frozenWidth();
+    await page.waitForTimeout(900);
+    expect(await frozenWidth()).toBe(first);
+  });
 });
 
 test.describe("Stateful transitions stay isolated per run", () => {
@@ -544,6 +585,13 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
 
     refinement.release("generator");
+    // A stage-2 re-entry still finishes on 100%: the skipped Architect does
+    // not drag the completed run's bar back to two thirds.
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.getElementById("pipeline-progress-fill").style.width),
+      )
+      .toBe("100%");
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
     await expect(stage(page, 3)).toHaveAttribute("data-state", "done");
     await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");
