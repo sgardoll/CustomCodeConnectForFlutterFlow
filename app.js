@@ -2924,12 +2924,13 @@ async function provisionMissingCodeFiles(
     );
 
     // A stream that ended (or a body that carried) no definitive result leaves
-    // the remote decision ambiguous. There are two distinct cases which must not
-    // be flattened: a server that explicitly refused the request (a 403/5xx
-    // `response.ok === false`) has made a definitive decision — the write did not
-    // happen — so that is a FAILURE, not an unknown outcome; only an ok response
-    // whose stream dropped before a result (or a client wait expiry) leaves the
-    // remote state genuinely unknown and must be reported UNCONFIRMED.
+    // the remote decision ambiguous. An explicit 4xx is a definitive pre-write
+    // refusal — the request was turned away before any write — so it is a
+    // FAILURE, not an unknown outcome. A 5xx is no such proof: a gateway can
+    // answer 502/503/504 after forwarding the request to the runner, which may
+    // already be deploying, so a 5xx — like an ok response whose stream dropped
+    // before a result, or a client wait expiry — leaves the remote state
+    // genuinely unknown and must be UNCONFIRMED.
     if (!result.finalResultReceived) {
       if (deployOutcomeOfStreamResult(result) === DeployOutcome.FAILED) {
         // Not marked remoteRefusal: the refusal comes from our deploy runner,
