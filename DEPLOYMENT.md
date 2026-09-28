@@ -97,18 +97,12 @@ reported rather than silently dropped:
   package would resolve different code, and a check against the wrong version
   reports a result that does not describe what ships.
 
-The second case is handled **by scope, not breadth**. A class that imports
-the unreproducible entry directly cannot compile without it at all, so it is
-reported with a reason that names the import as its own problem. Every other
-class is still compiled - but against a scratch graph that omits the
-unreproducible package, whose own pubspec may still constrain packages those
-classes reach transitively (only the project's `pubspec.lock`, never
-uploaded, records which versions actually resolved). Because that drift
-cannot be ruled out, the deploy surfaces one **approximation notice** per
-unreproducible package saying the check ran against a reduced graph - the
-limitation is disclosed rather than silently trusted. A class using only
-`dart:` imports resolves nothing through pub, so the approximation does not
-reach it and it is compiled normally.
+The second case is decided once per deploy, not per class, because a
+project-level source can alter resolution for a class that never names it. A
+class that imports or exports the unreproducible package is skipped for that
+stated reason; every other package-resolving class is skipped because the
+graph could not be matched exactly. A class that uses only `dart:` resolves
+nothing through pub and is still compiled.
 
 **Which packages the Flutter SDK supplies is read from the project's own
 pubspec** - a dependency written in block form under `sdk:` is an SDK package by

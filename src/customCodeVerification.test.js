@@ -145,28 +145,22 @@ dependencies:
   assert.equal("hosted_thing" in manifest.dependencies, false);
 });
 
-test("a representable import verifies beside an unrelated git dependency, and the plan discloses the approximation", () => {
+test("a representable import is skipped beside an unrelated git dependency, since the graph can shift", () => {
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
     PROJECT_PUBSPEC,
   );
 
-  // The project declares `private_thing` from git, which the scratch manifest
-  // cannot express - but this class never imports it, so it is still compiled
-  // and checked. The check is approximate (whether what it does import
-  // reaches `private_thing` transitively is knowable only by resolving the
-  // graph), so `approximate` says so per package instead of skipping the
-  // class, which would have disabled the check for nearly the whole deploy.
-  assert.deepEqual(plan.sources, [
-    {
-      fileName: "background_downloader_service.dart",
-      content: SELF_CONTAINED,
-    },
-  ]);
-  assert.deepEqual(plan.skipped, []);
-  assert.equal(plan.approximate.length, 1);
-  assert.match(plan.approximate[0], /private_thing/);
-  assert.match(plan.approximate[0], /approximate/);
+  // The class never imports `private_thing` directly, but the git source can
+  // sit in the transitive closure of what it does import, and the resolved
+  // graph that would prove otherwise is never available to a deploy, so the
+  // class is reported rather than compiled against a resolution the project
+  // would not produce.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.skipped[0].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[0].reason, /private_thing/);
+  assert.deepEqual(plan.approximate, []);
 });
 
 test("a class that imports the unreproducible dependency is skipped, and named as the reason", () => {
@@ -183,22 +177,24 @@ class UsesPrivateThing {}
     PROJECT_PUBSPEC,
   );
 
-  // The direct import keeps its own reason: it names this class's own
-  // import, so it says what to do about this class.
-  assert.deepEqual(
-    plan.sources.map((source) => source.fileName),
-    ["background_downloader_service.dart"],
+  // The direct importer keeps its own reason: it names this class's own
+  // import, so it says what to do about this class. The sibling resolves
+  // packages too, so it is reported as well - the git source can alter its
+  // transitive resolution - with the declaration-level reason.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 2);
+  const importer = plan.skipped.find(
+    (entry) => entry.className === "UsesPrivateThing",
   );
-  assert.equal(plan.skipped.length, 1);
-  assert.equal(plan.skipped[0].className, "UsesPrivateThing");
-  assert.match(plan.skipped[0].reason, /it imports private_thing/);
-  // The sibling never imports the git package, so it is checked rather than
-  // skipped - approximately, and the plan-level notice discloses that.
-  assert.equal(plan.approximate.length, 1);
-  assert.match(plan.approximate[0], /private_thing/);
+  assert.match(importer.reason, /imports or exports private_thing/);
+  const sibling = plan.skipped.find(
+    (entry) => entry.className === "BackgroundDownloaderService",
+  );
+  assert.match(sibling.reason, /private_thing/);
+  assert.deepEqual(plan.approximate, []);
 });
 
-test("a representable import verifies when an override elsewhere is unrepresentable, and the notice names it", () => {
+test("a class resolving packages is skipped when an override elsewhere is unrepresentable", () => {
   const pubspec = `name: my_app
 
 environment:
@@ -223,19 +219,14 @@ dependency_overrides:
   // The class imports `background_downloader`, which the manifest can
   // express, and never touches `intl` - but the git override of `intl`
   // cannot be carried, and whether `background_downloader` depends on
-  // `intl` transitively is knowable only by resolving the graph. The class
-  // is therefore checked rather than skipped, and the plan-level notice
-  // discloses the approximation the check ran with.
-  assert.deepEqual(plan.sources, [
-    {
-      fileName: "background_downloader_service.dart",
-      content: SELF_CONTAINED,
-    },
-  ]);
-  assert.deepEqual(plan.skipped, []);
-  assert.equal(plan.approximate.length, 1);
-  assert.match(plan.approximate[0], /intl/);
-  assert.match(plan.approximate[0], /approximate/);
+  // `intl` transitively is knowable only by resolving the graph, which a
+  // deploy never has. The class is therefore reported rather than checked
+  // against a resolution the project would not produce.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /dependency_overrides/);
+  assert.match(plan.skipped[0].reason, /intl/);
+  assert.deepEqual(plan.approximate, []);
 });
 
 test("a class compiled from dart: alone still verifies beside a git dependency", () => {
@@ -251,17 +242,13 @@ test("a class compiled from dart: alone still verifies beside a git dependency",
 
   // `dart:` libraries come from the SDK rather than pub resolution, so a
   // class importing nothing from `package:` compiles against exactly what
-  // the project will, whatever the project's sources are. `approximate` is
-  // plan-level, so it still carries the notice for the package-importing
-  // classes this deploy could contain - but nothing about this class's own
-  // check is approximate.
+  // the project will, whatever the project's sources are.
   assert.deepEqual(
     plan.sources.map((source) => source.fileName),
     ["pure_dart_service.dart"],
   );
   assert.deepEqual(plan.skipped, []);
-  assert.equal(plan.approximate.length, 1);
-  assert.match(plan.approximate[0], /private_thing/);
+  assert.deepEqual(plan.approximate, []);
 });
 
 test("a project whose sources are all representable verifies with nothing to disclose", () => {
@@ -448,7 +435,7 @@ class ReExportsPrivateThing {}
 
   assert.deepEqual(plan.sources, []);
   assert.equal(plan.skipped.length, 1);
-  assert.match(plan.skipped[0].reason, /it imports private_thing/);
+  assert.match(plan.skipped[0].reason, /it imports or exports private_thing/);
 });
 
 test("a dart:-only class still verifies under an unreproducible override", () => {
@@ -624,7 +611,7 @@ class LocalizesThings {}
 
   assert.deepEqual(plan.sources, []);
   assert.equal(plan.skipped.length, 1);
-  assert.match(plan.skipped[0].reason, /it imports flutter_localizations/);
+  assert.match(plan.skipped[0].reason, /it imports or exports flutter_localizations/);
 });
 
 test("an SDK dependency declared inline reproduces instead of breaking the manifest", () => {

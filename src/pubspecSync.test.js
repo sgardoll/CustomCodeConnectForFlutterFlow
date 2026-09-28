@@ -179,8 +179,8 @@ test("accepts a real project pubspec and rejects a synthesized stub", () => {
 test("reads where a block-form dependency comes from", () => {
   const declared = parseExistingDependencies(PROJECT_PUBSPEC);
 
-  // The first own-key is what says whether a package can be reproduced outside
-  // the project, so it is read rather than inferred from the package's name.
+  // The own-keys say whether a package can be reproduced outside the project,
+  // so they are read rather than inferred from the package's name.
   assert.equal(declared.get("flutter").sourceKey, "sdk");
   assert.equal(declared.get("flutter").sourceValue, "flutter");
   assert.equal(declared.get("cloud_firestore").sourceKey, null);
@@ -289,7 +289,22 @@ test("a hosted source is read even when version: is written before it", () => {
   assert.equal(declared.get("plain_thing").version, "^2.0.0");
 });
 
-test("a git source keeps only its first key, whatever the nested shape", () => {
+test("a hosted dependency may write its version before hosted:", () => {
+  const pubspec = `dependencies:
+  private_ui:
+    version: ^1.0.0
+    hosted:
+      url: https://example.invalid
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // Both orders are valid pubspec. Reading only the first own-key would
+  // mistake this for a pub.dev constraint and resolve public code in place of
+  // the project's private registry.
+  assert.equal(declared.get("private_ui").sourceKey, "hosted");
+});
+
+test("a source key wins over version wherever it appears in the entry", () => {
   const pubspec = `dependencies:
   private_thing:
     git:

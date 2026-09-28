@@ -184,31 +184,23 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * `skipped` so the deploy can say plainly what it did not verify.
  *
  * A dependency that cannot be reproduced outside the project - a `git:`,
- * `path:`, or custom-`hosted:` source - cannot be expressed in the scratch
- * manifest, which carries names and version constraints only. Such a
- * dependency is handled by scope, not by breadth:
- *
- * - A class that imports it directly cannot compile without it at all, so it
- *   is skipped and `skipped` names the import as this class's own problem.
- * - Every other class is still verified, against a scratch graph that omits
- *   the unrepresentable package. A representable import may reach that
- *   package transitively - knowable only by resolving the graph, which
- *   cannot happen here - so for those classes the check is approximate.
- *   `approximate` carries one notice per unrepresentable package stating
- *   exactly that, so the limitation is disclosed rather than silently
- *   trusted, and the result is never mistaken for full graph fidelity. A
- *   class importing only `dart:` never touches package resolution, so the
- *   approximation does not reach it.
- *
- * Skipping every class with a `package:` import instead was rejected: one
- * unrelated git or path dependency would disable the compile check for
- * nearly the whole deployment, and invalid custom code would land unopposed.
- * Verifying with a disclosed approximation keeps the check on the code that
- * ships while saying plainly what it could not reproduce.
+ * `path:`, or private `hosted:` source - stops every class that resolves
+ * packages, not only the ones that name it. The scratch manifest omits the
+ * project's source, so `pub get` resolves a different graph, and the
+ * difference is not confined to direct importers: the unreproducible package
+ * can sit in the transitive closure of anything a class imports, and a
+ * `dependency_overrides` entry applies to whatever resolves that name
+ * anywhere in the graph. Without the resolved graph there is no way to prove
+ * a class is unaffected, so it is left out of `sources` and named in
+ * `skipped` rather than compiled against a resolution the project would not
+ * produce. A class using only `dart:` resolves nothing through pub and is
+ * still verified.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
  * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>, approximate: string[]}}
+ *   `approximate` is retained for the deploy path's contract; nothing is
+ *   compiled approximately under this rule, so it is always empty.
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
@@ -219,6 +211,7 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     sdkOverrides,
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   } = buildAnalysisManifest(projectPubspecYaml);
 
   const manifest = {
@@ -230,16 +223,7 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   };
   const sources = [];
   const skipped = [];
-
-  // The scratch manifest omits every unrepresentable package, so any class
-  // that does not import one directly is checked against a reduced graph.
-  // Disclosing that per package - rather than skipping those classes or
-  // silently trusting the scratch - keeps the check running and the human
-  // told what it could not reproduce.
-  const approximate = unrepresentable.map(
-    (name) =>
-      `Your project declares ${name} from a source that cannot be reproduced outside it, so the pre-deploy compile check runs against a scratch package graph that omits ${name}. Classes that do not import ${name} directly are still checked, but against that reduced graph, so their transitive package resolution may differ from your project's and the check is approximate for them.`,
-  );
+  const approximate = [];
 
   for (const entry of classes) {
     const { className, content } = entry;
@@ -251,17 +235,47 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     // unverified.
     const importedPackages = extractPackageImports(content);
 
-    // A direct import of a dependency the manifest cannot express is this
-    // class's own problem, and the reason names it as such.
-    const unresolvablePackages = importedPackages.filter((name) =>
-      unrepresentable.includes(name),
+    // An entry the manifest cannot express poisons the whole resolution
+    // graph, not just classes that name it. A git/path/hosted dependency's
+    // own pubspec still constrains every package it shares with the ones a
+    // class imports, and a dependency_overrides entry rewrites resolution
+    // for every dependent - so dropping either can make the scratch package
+    // resolve different versions than the project, and a clean analysis
+    // then approves code the project cannot build. Which packages drift is
+    // only recorded in pubspec.lock, which a deploy never sees, so any
+    // class that resolves packages at all is reported instead of compiled.
+    // `dart:`-only classes need no package resolution and are unaffected.
+    const resolvesPackages = extractImportUris(content).some((uri) =>
+      uri.startsWith("package:"),
     );
 
-    if (unresolvablePackages.length > 0) {
-      skipped.push({
-        className,
-        reason: `${className} was not compiled before deploying: it imports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`,
-      });
+    if (unrepresentable.length > 0 && resolvesPackages) {
+      // When the class names one of these packages itself, the reason says
+      // so, because that is the actionable case; otherwise it names the
+      // entries and whether they come from dependencies or overrides.
+      const unresolvablePackages = importedPackages.filter((name) =>
+        unrepresentable.includes(name),
+      );
+      let reason;
+      if (unresolvablePackages.length > 0) {
+        reason = `${className} was not compiled before deploying: it imports or exports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`;
+      } else {
+        const depNames = unrepresentable.filter(
+          (name) => !unrepresentableOverrides.includes(name),
+        );
+        const described = [
+          depNames.length > 0
+            ? `your project's pubspec.yaml declares ${depNames.join(", ")} from a source that cannot be reproduced outside it`
+            : null,
+          unrepresentableOverrides.length > 0
+            ? `your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(", and ");
+        reason = `${className} was not compiled before deploying: ${described}, and an entry like that can change what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`;
+      }
+      skipped.push({ className, reason });
       continue;
     }
 

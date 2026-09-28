@@ -23,18 +23,37 @@ ENDPOINT_PATTERNS = {
     "OpenRouter endpoint": re.compile(r"openrouter\.ai"),
 }
 
+# An identifier naming a credential (`apiKey`, `api_key`, `x-api-key`,
+# `VITE_GEMINI_API_KEY`, `apiSecret`, ...) assigned a quoted string literal,
+# in either `key: "value"` or `KEY="value"` form. The value must be at least
+# 8 characters so empty placeholders like `apiKey: ""` do not trip the gate.
+KEY_ASSIGNMENT = (
+    r"[A-Za-z0-9_$-]*api[_-]?(?:key|secret)[A-Za-z0-9_$-]*['\"]?"
+    r"\s*[:=]\s*['\"][^'\"\s]{8,}['\"]"
+)
+
 # Credential literals, matched by shape rather than by the property they are
 # assigned to, so provider-specific or minified identifiers cannot hide them.
-# The sk- prefix is anchored so ordinary kebab-case text ("task-...") does not
-# match; a real key is a leak anywhere in dist/, the proxies included.
-CREDENTIAL_PATTERNS = {
-    "apiKey assignment": re.compile(
-        r"apiKey\s*[:=]\s*['\"][^'\"]+['\"]", re.IGNORECASE
+# A key baked into the bundle at build time (e.g. via a `define` replacement)
+# carries no identifier, so only its format gives it away. The sk- prefix is
+# anchored so ordinary kebab-case text ("task-...") does not match; a real
+# key is a leak anywhere in dist/, the proxies included.
+PROVIDER_KEY_FORMATS = {
+    "OpenAI API key": re.compile(
+        r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}"
     ),
-    "OpenAI API key": re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-)?[A-Za-z0-9_-]{30,}"),
     "OpenRouter API key": re.compile(r"sk-or-(?:v1-)?[A-Za-z0-9_-]{20,}"),
     "Anthropic API key": re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),
     "Google API key": re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
+    "Groq API key": re.compile(r"gsk_[0-9A-Za-z]{20,}"),
+    "Stripe secret key": re.compile(r"(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}"),
+}
+
+# Key material is checked in every bundled file, client or server-side alike:
+# a credential does not belong in a shipped artifact wherever it sits.
+KEY_PATTERNS = {
+    "API key/secret assignment": re.compile(KEY_ASSIGNMENT, re.IGNORECASE),
+    **PROVIDER_KEY_FORMATS,
 }
 
 
@@ -44,7 +63,7 @@ def patterns_for(path):
     Credential shapes are never legitimate anywhere. Endpoints are legitimate
     only inside the proxy directory, whose whole job is naming its upstream.
     """
-    checks = dict(CREDENTIAL_PATTERNS)
+    checks = dict(KEY_PATTERNS)
     if os.path.dirname(path) != PROXY_DIR:
         checks.update(ENDPOINT_PATTERNS)
     return checks
@@ -69,13 +88,18 @@ def main() -> int:
                 continue
             for label, pattern in patterns_for(path).items():
                 for match in pattern.finditer(content):
-                    snippet = content[max(0, match.start()-20):match.end()+20].replace("\n", " ")
-                    leaks.append((path, label, snippet))
+                    line_no = content.count("\n", 0, match.start()) + 1
+                    leaks.append((path, line_no, label))
 
     if leaks:
-        print("FAIL: Potential provider API key/endpoint leak detected in dist/", file=sys.stderr)
-        for path, label, snippet in leaks:
-            print(f"  {path} [{label}]: {snippet}", file=sys.stderr)
+        print(
+            "FAIL: Potential provider API key/endpoint leak detected in dist/",
+            file=sys.stderr,
+        )
+        # Report the location and which pattern hit, never the match itself:
+        # a hit can contain the credential it detected, and CI logs persist.
+        for path, line_no, label in sorted(set(leaks)):
+            print(f"  {path}:{line_no} [{label}]", file=sys.stderr)
         return 1
 
     print("No API key/endpoint leaks found.")
