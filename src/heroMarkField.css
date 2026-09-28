@@ -1,0 +1,75 @@
+/* Hero mark field: WebGL/2D FlutterFlow mark grid behind the prompt composer.
+   Decorative only — pointer-transparent and excluded from accessibility tree. */
+
+.hero-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  z-index: -2;
+  pointer-events: none;
+}
+
+.fx-grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  z-index: -2;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-reveal) var(--ease);
+}
+
+.fx-grid.is-ready { opacity: 1; }
+
+/* Soft background-coloured halos hug the chrome and the hero copy so the mark
+   field never reads under live content. They sit above the canvas but cannot
+   block controls because pointer-events are disabled. */
+.fx-mask {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--bg);
+  filter: blur(46px);
+}
+
+.fx-mask-hero {
+  left: 50%;
+  top: 50%;
+  width: 980px;
+  height: 520px;
+  transform: translate(-50%, -54%);
+}
+
+.fx-mask-top {
+  left: -48px;
+  right: -48px;
+  top: -48px;
+  height: 132px;
+}
+
+.fx-mask-bottom {
+  left: -48px;
+  right: -48px;
+  bottom: -48px;
+  height: 132px;
+}
+
+@media (max-width: 920px) {
+  .fx-mask { filter: blur(36px); }
+  .fx-mask-hero {
+    width: 92%;
+    height: 62%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .fx-mask-top { height: 104px; }
+  .fx-mask-bottom { height: 124px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-field,
+  .fx-grid,
+  .fx-mask { display: none; }
+}

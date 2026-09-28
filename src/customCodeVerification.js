@@ -76,16 +76,17 @@ function collect(declared, into, sdkPackages) {
       continue;
     }
 
-    // A block-form entry's first own-key says where the package comes from.
-    // `sdk:` is the Flutter SDK, which the runner reproduces from the name
-    // alone as `name: {sdk: flutter}`. A nested `version:` is simply a
-    // constraint written on its own line.
+    // A block-form entry's own keys say where the package comes from, in
+    // whatever order YAML allows. `sdk:` is the Flutter SDK, which the runner
+    // reproduces from the name alone as `name: {sdk: flutter}`. A mapping
+    // whose only own key is `version:` is a normal pub.dev dependency with
+    // its constraint written on its own line.
     if (info.sourceKey === "sdk") {
       sdkPackages.add(name);
       continue;
     }
-    if (info.sourceKey === "version") {
-      into[name] = unquoteConstraint(info.sourceValue);
+    if (info.sourceKey === null && info.version) {
+      into[name] = unquoteConstraint(info.version);
       continue;
     }
 
@@ -182,30 +183,32 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * FlutterFlow. Classes that depend on the generated app are reported in
  * `skipped` so the deploy can say plainly what it did not verify.
  *
- * A dependency that cannot be reproduced outside the project - a `git:` or
- * `path:` source - still shapes the resolved graph even for classes that
- * never import it, because its own pubspec's version constraints apply to
- * every package it shares with them. A `dependency_overrides` entry is
- * broader still: it rewrites resolution for every package depending on the
- * overridden name, imported or not. Which packages an omitted entry would
- * have constrained is only recorded in the project's pubspec.lock, which a
- * deploy never sees, so no per-class rule can separate the reachable from
- * the unreachable. An unreproducible entry therefore skips every class that
- * imports a `package:` URI at all; a class using only `dart:` resolves
- * nothing through pub and is still verified, and a class importing the entry
- * by name gets a reason that says so.
+ * A dependency that cannot be reproduced outside the project - a `git:`,
+ * `path:`, or custom-`hosted:` source - cannot be expressed in the scratch
+ * manifest, which carries names and version constraints only. Such a
+ * dependency is handled by scope, not by breadth:
  *
- * That breadth is the point of the change, not a retreat to the old
- * project-wide skip: the misread that motivated it was classification, not
- * scope. An SDK package no name list had heard of (`flutter_web_plugins`)
- * used to read as unreproducible and leave every class uncompiled; now the
- * source is read from the pubspec, so a genuinely unreproducible entry is
- * rare - and when one exists, skipping is what keeps a clean analysis from
- * approving code the project cannot build.
+ * - A class that imports it directly cannot compile without it at all, so it
+ *   is skipped and `skipped` names the import as this class's own problem.
+ * - Every other class is still verified, against a scratch graph that omits
+ *   the unrepresentable package. A representable import may reach that
+ *   package transitively - knowable only by resolving the graph, which
+ *   cannot happen here - so for those classes the check is approximate.
+ *   `approximate` carries one notice per unrepresentable package stating
+ *   exactly that, so the limitation is disclosed rather than silently
+ *   trusted, and the result is never mistaken for full graph fidelity. A
+ *   class importing only `dart:` never touches package resolution, so the
+ *   approximation does not reach it.
+ *
+ * Skipping every class with a `package:` import instead was rejected: one
+ * unrelated git or path dependency would disable the compile check for
+ * nearly the whole deployment, and invalid custom code would land unopposed.
+ * Verifying with a disclosed approximation keeps the check on the code that
+ * ships while saying plainly what it could not reproduce.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>, approximate: string[]}}
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
@@ -216,7 +219,6 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     sdkOverrides,
     availablePackages,
     unrepresentable,
-    unrepresentableOverrides,
   } = buildAnalysisManifest(projectPubspecYaml);
 
   const manifest = {
@@ -229,6 +231,16 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const sources = [];
   const skipped = [];
 
+  // The scratch manifest omits every unrepresentable package, so any class
+  // that does not import one directly is checked against a reduced graph.
+  // Disclosing that per package - rather than skipping those classes or
+  // silently trusting the scratch - keeps the check running and the human
+  // told what it could not reproduce.
+  const approximate = unrepresentable.map(
+    (name) =>
+      `Your project declares ${name} from a source that cannot be reproduced outside it, so the pre-deploy compile check runs against a scratch package graph that omits ${name}. Classes that do not import ${name} directly are still checked, but against that reduced graph, so their transitive package resolution may differ from your project's and the check is approximate for them.`,
+  );
+
   for (const entry of classes) {
     const { className, content } = entry;
 
@@ -239,9 +251,8 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     // unverified.
     const importedPackages = extractPackageImports(content);
 
-    // Scoped to this class's own imports. A dependency the project declares
-    // from a source the manifest cannot express is only a problem for a class
-    // that actually imports it.
+    // A direct import of a dependency the manifest cannot express is this
+    // class's own problem, and the reason names it as such.
     const unresolvablePackages = importedPackages.filter((name) =>
       unrepresentable.includes(name),
     );
@@ -250,40 +261,6 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
       skipped.push({
         className,
         reason: `${className} was not compiled before deploying: it imports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`,
-      });
-      continue;
-    }
-
-    // An entry the manifest cannot express poisons the whole resolution
-    // graph, not just classes that name it. A git/path/hosted dependency's
-    // own pubspec still constrains every package it shares with the ones a
-    // class imports, and a dependency_overrides entry rewrites resolution for
-    // every dependent - so dropping either can make the scratch package
-    // resolve different versions than the project, and a clean analysis then
-    // approves code the project cannot build. Which packages drift is only
-    // recorded in pubspec.lock, which a deploy never sees, so any class that
-    // resolves packages at all is reported instead of compiled. `dart:`-only
-    // classes need no package resolution and are unaffected.
-    if (
-      unrepresentable.length > 0 &&
-      extractImportUris(content).some((uri) => uri.startsWith("package:"))
-    ) {
-      const depNames = unrepresentable.filter(
-        (name) => !unrepresentableOverrides.includes(name),
-      );
-      const described = [
-        depNames.length > 0
-          ? `your project's pubspec.yaml declares ${depNames.join(", ")} from a source that cannot be reproduced outside it`
-          : null,
-        unrepresentableOverrides.length > 0
-          ? `your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it`
-          : null,
-      ]
-        .filter(Boolean)
-        .join(", and ");
-      skipped.push({
-        className,
-        reason: `${className} was not compiled before deploying: ${described}, and an entry like that can change what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`,
       });
       continue;
     }
@@ -307,5 +284,5 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     });
   }
 
-  return { manifest, sources, skipped };
+  return { manifest, sources, skipped, approximate };
 }

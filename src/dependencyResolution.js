@@ -106,8 +106,8 @@ export async function planDependencyChanges(
     // hosted-without-version) carry no comparable version.
     const effectiveConstraint = existing.isScalar
       ? existing.constraint
-      : existing.sourceKey === "version"
-        ? existing.sourceValue
+      : existing.sourceKey === null
+        ? existing.version
         : null;
 
     // Checked before the constraint itself: a block-form entry has no scalar

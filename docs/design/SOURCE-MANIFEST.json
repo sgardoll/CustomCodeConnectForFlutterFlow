@@ -1,0 +1,68 @@
+{
+  "schema": "ccc.design-source-manifest.v1",
+  "generatedFor": "STU-371",
+  "baseBranch": "codex/redesign-plan",
+  "baseCommit": "d1dc19cda9ac6fe2fea3f583ae0ff98633938343",
+  "handoffRoot": "/Users/home/Projects/Custom-Code-Connect-redesign",
+  "algorithm": "SHA-256",
+  "files": [
+    {
+      "path": "DESIGN-HANDOFF.md",
+      "sha256": "5cda15e325585a06c5b6eac8addc5c750794b7821c30f7a3234c93db3c02942b",
+      "role": "handoff contract"
+    },
+    {
+      "path": "DESIGN-MANIFEST.json",
+      "sha256": "e3bfb1ab99145c3a86f09c71fb57553be7856e7094ca634d9348120212942073",
+      "role": "machine-readable manifest"
+    },
+    {
+      "path": "index.html",
+      "sha256": "38ac87205d0a47f0f5436302807222f35df5c7b74e0f2b679fc9653d40e27864",
+      "role": "launcher / overview (not a production route)"
+    },
+    {
+      "path": "custom-code-connect-hero.html",
+      "sha256": "548e628fe94f2b5e647cb4849fbc3200b43dcead60ea53c076f0085aca8917dc",
+      "role": "primary app surface / hero"
+    },
+    {
+      "path": "journey-connect.html",
+      "sha256": "3178b555ed4427e78c0f43ff64847f06c4c9d992fc8c5929ff9c85273c4e3007",
+      "role": "supplementary workflow guidance"
+    },
+    {
+      "path": "account-admin.html",
+      "sha256": "330d58da72bdb786a3877f4354299ddad48a575e35a0910640aaf7afe966304c",
+      "role": "account product surface"
+    },
+    {
+      "path": "monetisation.html",
+      "sha256": "e58fa3ce40666d33ef3653974a48a989c3a53ca61c49bf652b2ae2b6c1845e46",
+      "role": "plans / monetisation product surface"
+    },
+    {
+      "path": "fonts/Delight-VF.ttf",
+      "sha256": "c034c57b430cc5e394eb6d1a88655c694a98c8f32ee888255f41964f58c19075",
+      "role": "display / body variable font"
+    },
+    {
+      "path": "assets/flutterflow-icon.svg",
+      "sha256": "b3d33379c329ac9aff23d80c002103a149625aa8cc0a850451915d1289fc6a98",
+      "role": "brand icon asset"
+    }
+  ],
+  "excludedFromProductionRoutes": [
+    "custom-code-connect-hero-1.html",
+    "custom-code-connect-hero-before-calm-v2.html",
+    "custom-code-connect-hero-before-expansion-v2.html",
+    "custom-code-connect-hero-before-lens-v2.html",
+    "custom-code-connect-hero-before-walkthrough-v2.html",
+    "custom-code-connect-hero-before-webgl-v2.html",
+    "custom-code-connect-logo-outro-before-direction-v2.html",
+    "custom-code-connect-logo-outro-magnetic.html",
+    "custom-code-connect-logo-outro.html",
+    "custom-code-connect-walkthrough.html",
+    "MILESTONE-PLAN.html"
+  ]
+}
