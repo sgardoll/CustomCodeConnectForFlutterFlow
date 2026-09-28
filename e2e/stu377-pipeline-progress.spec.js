@@ -835,6 +835,46 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
   });
 
+  test("desktop: keyboard focus follows the prompt-then-workflow order", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["architect"] });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+    await expect(page.locator(".pipeline-view")).toBeVisible();
+
+    // The recap is the left column on desktop, so it leads the DOM and the
+    // tab order: Edit prompt is reached before the active stage button, and
+    // focus never travels from the right column back to the left.
+    await page.evaluate(() => document.activeElement?.blur());
+    const focusOrder = await tabFocusOrder(page, ["pipeline-edit-prompt", "pdot-1"]);
+    expect(focusOrder).toContain("pipeline-edit-prompt");
+    expect(focusOrder).toContain("pdot-1");
+    expect(focusOrder.indexOf("pipeline-edit-prompt")).toBeLessThan(
+      focusOrder.indexOf("pdot-1"),
+    );
+
+    // The document order backs the focus order, and it matches the screen.
+    const regions = await page.evaluate(() => {
+      const view = document.querySelector(".pipeline-view");
+      const recap = document.querySelector(".pipeline-prompt-recap");
+      return {
+        recapBeforeView: Boolean(
+          recap.compareDocumentPosition(view) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+        recapX: Math.round(recap.getBoundingClientRect().x),
+        viewX: Math.round(view.getBoundingClientRect().x),
+      };
+    });
+    expect(regions.recapBeforeView).toBe(true);
+    expect(regions.recapX).toBeLessThan(regions.viewX);
+
+    pipeline.release("architect");
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
+  });
+
   test("stacked: a failure's actions stay ahead of the recap in DOM and focus order", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openHome(page);

@@ -1724,11 +1724,13 @@
          Canonical source: custom-code-connect-hero.html .walkthrough-layout /
          .pipeline-view. Desktop is the mock's two-column panel: the submitted
          prompt is the left sidebar, and the stage view is a left-aligned block
-         centred in the main column. The authored mark is the only glyph. */
+         centred in the main column. The authored mark is the only glyph.
+         Grid auto-placement paints the regions in DOM order; app.js keeps that
+         order equal to the displayed order at every breakpoint so sequential
+         focus never travels backwards across the panel. */
       .pipeline-progress {
         display: none;
         grid-template-columns: 310px minmax(0, 1fr);
-        grid-template-areas: "recap view";
         height: 100%;
         overflow-y: auto;
         text-align: left;
@@ -1737,7 +1739,6 @@
         display: grid;
       }
       .pipeline-prompt-recap {
-        grid-area: recap;
         display: flex;
         flex-direction: column;
         min-width: 0;
@@ -1780,7 +1781,6 @@
         border-color: var(--fg);
       }
       .pipeline-view {
-        grid-area: view;
         display: grid;
         align-content: center;
         min-width: 0;
@@ -1980,12 +1980,11 @@
       }
 
       /* Stacked: the workflow leads, the prompt follows beneath it (mock).
-         The DOM already orders the workflow first, so the displayed order and
-         the focus order stay the same at this breakpoint. */
+         The DOM is reordered to match at this width, so the displayed order
+         and the focus order stay the same here too. */
       @media (max-width: 920px) {
         .pipeline-progress {
           grid-template-columns: minmax(0, 1fr);
-          grid-template-areas: "view" "recap";
         }
         .pipeline-view {
           align-content: start;
@@ -3471,9 +3470,11 @@
             <!-- Pipeline holding window (canonical: custom-code-connect-hero.html
                  .walkthrough-layout / .pipeline-view) -->
             <div id="pipeline-progress" class="pipeline-progress">
-              <!-- The workflow is the panel's main column and comes first in
-                   the DOM so focus follows the stacked order at ≤920px;
-                   desktop grid areas place the prompt back on the left. -->
+              <!-- Region order follows the breakpoint: the workflow leads
+                   when the panel is stacked (<=920px), the prompt sidebar
+                   leads on desktop. initPipelinePanelOrder keeps the DOM in
+                   the displayed order so sequential focus matches the
+                   screen at every width. -->
               <div class="pipeline-view">
                 <!-- Decorative authored two-piece mark loop (STU-390); never
                      gates completion - progress depends only on backend events. -->

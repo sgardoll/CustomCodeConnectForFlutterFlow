@@ -6639,6 +6639,10 @@ function showToast(message, type = 'info') {
 document.addEventListener("DOMContentLoaded", async () => {
   initializeModalShells();
 
+  // The holding window's regions display in a different order per breakpoint;
+  // reorder them in the DOM so focus never travels against the screen.
+  initPipelinePanelOrder();
+
   // Initialize highlight.js
   hljs.configure({
     tabReplace: "  ",
@@ -7650,6 +7654,35 @@ function invalidatePipelineRun() {
 
 function pipelineStageButton(step) {
   return document.getElementById(`pdot-${step}`);
+}
+
+/**
+ * Keep the holding window's DOM order equal to its displayed order so
+ * sequential focus never travels backwards across the panel. The two regions
+ * lead at different widths: the prompt recap is the desktop panel's left
+ * sidebar, while the workflow leads the stacked (<=920px) layout. Focus
+ * follows the DOM, so the recap is moved ahead of the view on wide screens
+ * and back after it on narrow ones; grid auto-placement then paints the
+ * regions in the same order it reads them.
+ */
+const pipelinePanelStacked = window.matchMedia("(max-width: 920px)");
+
+function syncPipelinePanelOrder() {
+  const progress = document.getElementById("pipeline-progress");
+  const view = progress?.querySelector(":scope > .pipeline-view");
+  const recap = progress?.querySelector(":scope > .pipeline-prompt-recap");
+  if (!view || !recap) return;
+  const wantRecapAfterView = pipelinePanelStacked.matches;
+  const recapAfterView =
+    (view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING) !==
+    0;
+  if (recapAfterView === wantRecapAfterView) return;
+  progress.insertBefore(recap, wantRecapAfterView ? view.nextSibling : view);
+}
+
+function initPipelinePanelOrder() {
+  syncPipelinePanelOrder();
+  pipelinePanelStacked.addEventListener("change", syncPipelinePanelOrder);
 }
 
 /**
