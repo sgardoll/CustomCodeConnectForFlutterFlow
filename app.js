@@ -497,8 +497,11 @@ function updatePromptImageAvailability() {
   const select = document.getElementById("code-generator-model")
   const supports = modelSupportsImages(select?.value)
   section.classList.toggle("hidden", !supports)
-  // Non-vision models have no way to consume images: drop any already attached.
-  if (!supports && promptImages.length) {
+  // Non-vision models have no way to consume images: drop any already
+  // attached. A run already in flight snapshotted its attachments — dropping
+  // them now would abort uploads the run's frozen slice still expects to
+  // commit, silently stripping the images it was started with.
+  if (!supports && promptImages.length && !pipelineState.isRunning) {
     // Abort uploads still in flight so they release the send gate now.
     pendingImageUploads.slice().forEach(discardImageUpload)
     promptImages = []
