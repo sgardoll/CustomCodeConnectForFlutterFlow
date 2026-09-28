@@ -356,6 +356,43 @@ class ConditionallyPrivate {}
   assert.match(plan.skipped[0].reason, /private_thing/);
 });
 
+test("a git-forked SDK package is unrepresentable for a class that imports it", () => {
+  // The name list in the extractor says flutter_localizations is always an
+  // SDK package, but this project forks it from git - the pubspec source, not
+  // the name, decides. Filtering the name out here would send the class to
+  // the analyzer without the package and its missing-URI error would refuse
+  // the deploy instead of reporting the class unverified.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    git:
+      url: https://example.invalid/flutter_localizations_fork.git
+  background_downloader: ^8.5.0
+`;
+  const usesFork = `import 'package:flutter_localizations/flutter_localizations.dart';
+
+class LocalizesThings {}
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.deepEqual(manifest.unrepresentable, ["flutter_localizations"]);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "LocalizesThings", content: usesFork }],
+    pubspec,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /it imports flutter_localizations/);
+});
+
 test("an SDK dependency declared inline reproduces instead of breaking the manifest", () => {
   // `flutter_web_plugins: {sdk: flutter}` is the same declaration as the
   // block form; treated as a scalar it would be forwarded as a constraint

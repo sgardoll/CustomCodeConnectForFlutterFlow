@@ -1,5 +1,8 @@
 // Flutter SDK packages FlutterFlow's default pubspec.yaml always provides.
-// Importing these needs no dependency entry.
+// Dependency discovery filters these out: emitting `flutter:` as a hosted
+// version constraint would resolve the wrong source. Verification callers
+// must NOT filter them - a project can declare the same name from git (a
+// fork), and then the source decides what it is, not the name.
 const FLUTTER_SDK_PACKAGES = new Set([
   "flutter",
   "flutter_test",
@@ -99,7 +102,21 @@ export function extractImportUris(code = "") {
   return uris;
 }
 
-export function extractPackageImports(code = "") {
+/**
+ * Returns the package names a class's `package:` URIs belong to.
+ *
+ * `options.includeSdkPackages` exists because the two callers need different
+ * answers: dependency discovery leaves SDK-provided names out (they need no
+ * version constraint), while verification must see them - `flutter` is not
+ * always SDK-sourced, and a git fork under the same name is exactly the kind
+ * of dependency the gate exists to catch.
+ *
+ * @param {string} code - Dart source
+ * @param {{includeSdkPackages?: boolean}} [options]
+ * @returns {string[]} Package names, deduplicated
+ */
+export function extractPackageImports(code = "", options = {}) {
+  const { includeSdkPackages = false } = options;
   const names = [];
   const seen = new Set();
   // `export 'package:x/x.dart'` pulls the package in exactly as `import` does,
@@ -114,7 +131,8 @@ export function extractPackageImports(code = "") {
     let match;
     while ((match = packageUriPattern.exec(directive[0])) !== null) {
       const name = match[1];
-      if (FLUTTER_SDK_PACKAGES.has(name) || seen.has(name)) continue;
+      if (!includeSdkPackages && FLUTTER_SDK_PACKAGES.has(name)) continue;
+      if (seen.has(name)) continue;
       seen.add(name);
       names.push(name);
     }
