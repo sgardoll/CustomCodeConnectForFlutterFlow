@@ -104,20 +104,22 @@ async function clickInsideWalkthrough(page, selector) {
   await target.click();
 }
 
-// Reopen the tutorial from the nav. On a cold start the deferred app.js module
-// may not have wired openWalkthroughModal yet, so a click can land while the
-// handler is undefined and silently navigate to #tutorial instead of opening
-// the modal — wait for the wire-up (state) before clicking, then wait for the
-// open animation to finish. The startup usage decision is deliberately NOT
-// awaited: with the app fix a passive exhausted resolution no longer closes an
-// open tour, so the click may land before or after the decision — the race
-// itself is exercised, and the tour survives either order.
+// Reopen the tutorial. STU-445 removed the header's Tutorial entry "for now",
+// so a returning-user reopen goes through the app's own modal function. On a
+// cold start the deferred app.js module may not have wired openWalkthroughModal
+// yet — wait for the wire-up first. The startup usage pass is awaited only so
+// usage state settles: an exhausted allowance is suppressed while a dialog is
+// open (updateUsageDisplay gates on !hasActiveModal()), so it can no longer
+// close a walkthrough opened mid-flight. Then wait for the open animation.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
     { timeout: 8000 },
   );
-  await page.click("#wt-reopen");
+  await page.waitForFunction(() => Boolean(localStorage.getItem("ccc_usage")), {
+    timeout: 8000,
+  });
+  await page.evaluate(() => window.openWalkthroughModal());
   await waitForWalkthroughOpen(page);
 }
 
@@ -183,7 +185,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
   });
 
-  test("a returning user reopens the tutorial from the Tutorial entry", async ({ page }) => {
+  test("a returning user can reopen the tutorial", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem("hasSeenWalkthrough", "true");
     });
@@ -298,7 +300,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     // STU-384 renders from the real fetch outcome, not from stored bytes.
     await clickInsideWalkthrough(page, ".wt-gotit-btn");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#account-view")).toBeVisible();
     await expect(page.locator("#acct-ff-status")).toContainText("API key rejected");
   });
@@ -316,7 +318,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
     // Open the settings editor from the account connection card — NOT onboarding.
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#account-view")).toBeVisible();
     await page
       .locator(".acct-connection button", { hasText: "Configure" })

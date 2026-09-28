@@ -210,7 +210,7 @@
         font-family: "Delight", "DM Sans", sans-serif;
         width: 100%;
         box-sizing: border-box;
-        padding: 18px 20px !important;
+        padding: 18px 20px;
         transition: all 0.2s ease;
       }
       textarea:focus {
@@ -2669,50 +2669,25 @@
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        background: var(--bg);
-        border-bottom: 1px solid var(--border);
         z-index: 100;
       }
       @media (min-width: 921px) {
-        .topbar { padding: 0 40px; border-bottom: 0; }
+        .topbar { padding: 0 40px; }
       }
 
       .brand {
         display: flex;
         align-items: center;
-        gap: 12px;
         color: var(--fg);
         text-decoration: none;
-        font-size: 16px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
         flex-shrink: 0;
       }
       .brand-mark {
-        width: 32px;
-        height: 32px;
+        display: block;
+        width: 44px;
+        height: 44px;
         color: var(--fg);
         flex-shrink: 0;
-      }
-      .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
-      .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.01em; }
-      .topnav {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .nav-link {
-        padding: 8px 14px;
-        border-radius: var(--radius-nav);
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 500;
-        text-decoration: none;
-        transition: color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
-      }
-      .nav-link:hover, .nav-link[aria-current="page"] {
-        color: var(--fg);
-        background: var(--fill-hover);
       }
       .topbar-account {
         display: flex;
@@ -2761,22 +2736,8 @@
         font-weight: 600;
         cursor: pointer;
       }
-      /* Below the inline-nav breakpoint the nav wraps to its own topbar row
-         with touch-sized targets, so every surface stays reachable instead
-         of being hidden. */
-      @media (max-width: 679px) {
-        :root { --topbar-h: 100px; }
-        .topbar { flex-wrap: wrap; align-content: center; row-gap: 2px; padding: 10px 12px; }
-        .topnav { order: 3; width: 100%; gap: 4px; }
-        .topnav .nav-link {
-          flex: 1 1 0;
-          min-height: 44px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-      }
-
+      /* The header holds only the logo and the account controls, so it keeps
+         its single 64px row at every width. */
       .viewport {
         position: relative;
         top: var(--topbar-h);
@@ -2851,6 +2812,10 @@
         margin: 0;
         border: 0;
         outline: 0;
+        /* The page's generic textarea focus ring (a blue offset box) must not
+           paint inside the composer; the composer's own orange border and
+           :focus-within ring carry the focus state. */
+        box-shadow: none;
         background: transparent;
         resize: none;
         font: inherit;
@@ -3337,24 +3302,17 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
+    <link rel="stylesheet" href="/src/htmlFidelity.css" />
   </head>
   <body>
+  <div class="shell-frame"><div class="shell-stage" id="shell-stage">
   <header class="topbar" role="banner">
     <a class="brand" href="#home" aria-label="Custom Code Connect — Home">
-      <svg class="brand-mark" viewBox="0 0 44 44" fill="none" aria-hidden="true" focusable="false">
-        <rect width="44" height="44" rx="10" fill="currentColor"/>
-        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)"/>
-        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)" transform="rotate(180 22 22)"/>
+      <svg class="brand-mark" viewBox="0 0 246 44" width="246" height="44" fill="none" aria-hidden="true" focusable="false">
+        <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" fill="currentColor"/>
+        <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" fill="currentColor" transform="rotate(180 22 22)"/>
       </svg>
-      <span class="wordmark"><span>FlutterFlow</span>Custom Code Connect</span>
     </a>
-
-    <nav class="topnav" aria-label="Main">
-      <a href="#home" class="nav-link" data-view="home" aria-current="page">Home</a>
-      <a href="#account" class="nav-link" data-view="account">Account</a>
-      <a href="#plans" class="nav-link" data-view="plans">Plans</a>
-      <a href="#tutorial" class="nav-link" id="wt-reopen" aria-haspopup="dialog" onclick="openWalkthroughModal(); return false;">Tutorial</a>
-    </nav>
 
     <div class="topbar-account">
       <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Runs remaining this month" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
@@ -3363,20 +3321,21 @@
         </svg>
         <span id="topbar-credits-count">—</span>
       </button>
-      <span class="topbar-plan" id="topbar-plan" aria-label="Current plan">Free</span>
+      <button class="topbar-plan" id="topbar-plan" type="button" aria-label="Current plan — view plans" onclick="switchView('plans')">Free</button>
       <button class="topbar-avatar" id="topbar-avatar" type="button" aria-label="Open account" onclick="switchView('account')">?</button>
     </div>
   </header>
 
   <main class="viewport" id="viewport">
     <section id="home-view" class="view view-home is-active" aria-label="Home" role="region" tabindex="-1" data-view="home">
-      <div class="hero" id="hero">
         <div class="hero-field" aria-hidden="true">
           <canvas class="fx-grid" id="fx-grid" aria-hidden="true" tabindex="-1"></canvas>
           <div class="fx-mask fx-mask-top"></div>
           <div class="fx-mask fx-mask-bottom"></div>
           <div class="fx-mask fx-mask-hero"></div>
+          <div class="glow"></div>
         </div>
+      <div class="hero" id="hero">
         <h1 class="headline reveal">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
         <p class="sub reveal">Custom widgets and actions, expertly crafted, fully reviewed and ready to deploy to your project in one click.</p>
 
@@ -3419,7 +3378,7 @@
           <button class="chip" type="button" data-prompt="A signature pad that exports a transparent PNG">Signature pad</button>
         </div>
 
-        <div class="hero-settings reveal" id="hero-settings">
+        <div class="hero-settings" id="hero-settings" hidden>
           <div id="code-options-content" style="display:contents">
             <label class="sr-only" for="code-generator-model">Code generation model</label>
             <select id="code-generator-model" onchange="updateModelInfo(this.value)">
@@ -3439,8 +3398,13 @@
 
       <div class="generation-stage" id="generation-stage" aria-label="Generation results" inert hidden>
 <div class="main-stage" id="main-stage-container">
+          <aside class="pipeline-prompt-recap">
+            <p class="pipeline-prompt-kicker">Your prompt</p>
+            <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
+            <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
+          </aside>
           <!-- Ready / Paywall states -->
-          <div class="main-stage-body" id="main-stage" style="flex:1;display:flex;flex-direction:column;">
+          <div class="main-stage-body" id="main-stage">
 
             <div id="ready-state" class="hidden flex flex-col items-center justify-center" style="padding:80px 0;flex:1;">
               <div class="ready-icon">
@@ -3496,7 +3460,7 @@
                 </div>
                 <div class="progress-meta">
                   <span id="progress-elapsed">0s</span>
-                  <span id="progress-stage-count">Step 1 of 3</span>
+                  <button id="progress-stage-count" type="button" aria-label="Inspect pipeline stages" aria-expanded="false" aria-controls="pipeline-stage-nav" onclick="togglePipelineStageNavigation()">Step 1 of 3</button>
                 </div>
                 <div class="progress-steps-dots" id="pipeline-stage-nav">
                   <button class="progress-stage" type="button" id="pdot-1" data-step="1" data-state="pending" disabled onclick="selectPipelineStage(1)">
@@ -3521,13 +3485,6 @@
                   <div class="pipeline-failure-actions" id="pipeline-failure-actions"></div>
                 </div>
               </div>
-              <!-- The submitted prompt is the panel's left sidebar on desktop,
-                   closed by Edit prompt at its bottom-left, as in the mock. -->
-              <aside class="pipeline-prompt-recap">
-                <p class="pipeline-prompt-kicker">Your prompt</p>
-                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
-                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
-              </aside>
             </div>
 
             <!-- Split-Panel Results View -->
@@ -3608,7 +3565,7 @@
 
               <div class="results-action-bar" aria-label="Generation actions">
                 <button id="btn-deploy-to-ff" data-deploy-start class="btn-header-action btn-deploy-results hidden" onclick="initiateCommitToFlutterFlow()">
-                  <img class="flutterflow-deploy-icon" src="https://flutterflow.io/favicon.ico" alt="" />
+                  <img class="flutterflow-deploy-icon" src="/assets/flutterflow-icon.svg" alt="" />
                   Deploy to FlutterFlow
                 </button>
                 <div class="results-action results-action-wide">
@@ -3659,15 +3616,15 @@
             </div>
 
             <!-- Hidden legacy elements for backward compat -->
-            <div id="step1-content" class="hidden">
+            <div id="step1-content" class="hidden" hidden>
               <div id="step1-loading" class="hidden"></div>
               <div id="step1-result" class="hidden"><pre id="step1-output" class="code-font text-gray-300"></pre></div>
             </div>
-            <div id="step2-content" class="hidden">
+            <div id="step2-content" class="hidden" hidden>
               <div id="step2-loading" class="hidden"></div>
               <div id="step2-result" class="hidden"><pre id="step2-output" class="code-font text-gray-300"></pre></div>
             </div>
-            <div id="step3-content" class="hidden">
+            <div id="step3-content" class="hidden" hidden>
               <div id="step3-loading" class="hidden"></div>
               <div id="step3-result" class="hidden"><div id="step3-output" class="text-sm text-gray-700"></div></div>
             </div>
@@ -3885,6 +3842,7 @@
       </div>
     </section>
   </main>
+  </div></div>
 
     <!-- Usage / Billing Modal -->
     <div id="credits-modal" class="modal-overlay" data-modal-dismissible="true" data-modal-close-handler="closeCreditsModal" onclick="closeCreditsModal(event)">
@@ -4021,6 +3979,7 @@
               <span class="text-sm text-gray-700">API keys &amp; connection</span>
               <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             </button>
+            <button type="button" class="settings-link" onclick="closeComposerSettings(); openWalkthroughModal()">Watch tutorial</button>
           </div>
         </div>
         <div class="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end" style="flex-shrink:0;">

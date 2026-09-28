@@ -66,7 +66,7 @@ async function seedSession(page, email = EMAIL) {
 }
 
 async function openAccount(page) {
-  await page.locator('a.nav-link[data-view="account"]').click();
+  await page.locator("#topbar-avatar").click();
   await expect(page.locator("#account-view")).toBeVisible();
   await expect(page.locator("#auth-signedin")).toBeVisible();
 }

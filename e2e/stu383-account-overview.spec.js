@@ -73,7 +73,7 @@ async function seedSession(page, email = "metered@example.com") {
 }
 
 async function openAccount(page) {
-  await page.locator('a.nav-link[data-view="account"]').click();
+  await page.locator("#topbar-avatar").click();
   await expect(page.locator("#account-view")).toBeVisible();
 }
 
@@ -243,7 +243,7 @@ test.describe("STU-383 account overview", () => {
     });
 
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#acct-left-count")).toHaveText("…");
     await expect(page.locator("#acct-plan-tier")).toHaveText("Checking…");
 

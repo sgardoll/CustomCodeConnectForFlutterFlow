@@ -152,6 +152,8 @@ test.describe("Generation progress binds to real stage events", () => {
     // Stages that actually ran are reachable, semantic buttons.
     await expect(stage(page, 1)).toHaveJSProperty("tagName", "BUTTON");
     await expect(stage(page, 1)).toBeEnabled();
+    // Canonical Step N of 3 is the compact disclosure for stage inspection.
+    await page.locator('#progress-stage-count').click();
     await stage(page, 1).click();
     await expect(stage(page, 1)).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#progress-title-text")).toContainText("Prompt understood");
@@ -284,7 +286,9 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.locator('#composer-settings-model').selectOption('anthropic/claude-opus-5');
+    await page.locator('#composer-settings-modal').getByRole('button', { name:'Done',exact:true }).click();
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);
@@ -335,7 +339,9 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.locator('#composer-settings-model').selectOption('anthropic/claude-opus-5');
+    await page.locator('#composer-settings-modal').getByRole('button', { name:'Done',exact:true }).click();
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);
@@ -691,7 +697,7 @@ test.describe("Holding window matches the canonical pipeline view", () => {
       const fg = getComputedStyle(tokenProbe).color;
       tokenProbe.remove();
       const description = document.querySelector("#progress-description-text");
-      const columns = style("#pipeline-progress")?.gridTemplateColumns ?? "";
+      const columns = style("#main-stage-container")?.gridTemplateColumns ?? "";
       return {
         columns,
         columnCount: trackCount(columns),
@@ -808,7 +814,7 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     // active stage button must be reached before the recap's Edit prompt:
     // the workflow is what is displayed first at this width, and CSS order
     // must not make focus jump backward against the screen.
-    await page.evaluate(() => document.activeElement?.blur());
+    await page.locator('#progress-stage-count').focus();
     const focusOrder = await tabFocusOrder(page, ["pdot-1", "pipeline-edit-prompt"]);
     expect(focusOrder).toContain("pdot-1");
     expect(focusOrder).toContain("pipeline-edit-prompt");
@@ -848,7 +854,13 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     // The recap is the left column on desktop, so it leads the DOM and the
     // tab order: Edit prompt is reached before the active stage button, and
     // focus never travels from the right column back to the left.
-    await page.evaluate(() => document.activeElement?.blur());
+    // Anchor the walk on a known element rather than blurring: blur() does not
+    // move Chromium's sequential-focus-navigation starting point, so the sweep
+    // would resume wherever focus last was and wrap around before reaching the
+    // recap. The avatar is the last tabbable ahead of the panel, so the walk
+    // enters at the recap -- mirroring the stacked test's #progress-stage-count
+    // anchor, which is likewise the tabbable just before the first one it wants.
+    await page.locator("#topbar-avatar").focus();
     const focusOrder = await tabFocusOrder(page, ["pipeline-edit-prompt", "pdot-1"]);
     expect(focusOrder).toContain("pipeline-edit-prompt");
     expect(focusOrder).toContain("pdot-1");
@@ -898,6 +910,10 @@ test.describe("Holding window matches the canonical pipeline view", () => {
 
     // Desktop -> stacked: the recap moves behind the view and reparenting must
     // not drop the focus its Edit prompt was holding.
+    // Wait for the composer -> pipeline morph: until .pipeline-view is visible
+    // the Edit prompt is still 0x0, so focus() lands on nothing and the send
+    // button simply blurs to BODY.
+    await expect(page.locator(".pipeline-view")).toBeVisible();
     await page.locator("#pipeline-edit-prompt").focus();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect
