@@ -501,6 +501,23 @@ test.describe("Recoverable failure states", () => {
     const first = await frozenWidth();
     await page.waitForTimeout(900);
     expect(await frozenWidth()).toBe(first);
+
+    // Resizing the track keeps the frozen proportion: the fill's share of
+    // the track survives a narrower viewport instead of a stale pixel count.
+    const geometry = () =>
+      page.evaluate(() => {
+        const fill = document.getElementById("pipeline-progress-fill");
+        const track = fill?.parentElement;
+        if (!fill || !track) return null;
+        const trackWidth = track.getBoundingClientRect().width;
+        return { trackWidth, share: fill.getBoundingClientRect().width / trackWidth };
+      });
+    const before = await geometry();
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.waitForTimeout(150);
+    const after = await geometry();
+    expect(after.trackWidth).toBeLessThan(before.trackWidth);
+    expect(Math.abs(after.share - before.share)).toBeLessThan(0.01);
   });
 });
 
