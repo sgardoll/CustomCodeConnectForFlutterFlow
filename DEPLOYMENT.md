@@ -97,10 +97,15 @@ reported rather than silently dropped:
   package would resolve different code, and a check against the wrong version
   reports a result that does not describe what ships.
 
-The second case is decided **per class**, from that class's own imports. A
-`git:` dependency stops only the classes that import it; classes that do not are
-still compiled. Deciding it once for the whole project meant one such entry left
-an entire deploy uncompiled.
+The second case poisons the whole resolution graph, so it is decided **at the
+graph level**. A git or path dependency's own pubspec still constrains every
+package it shares with a class's imports - even ones the class never names -
+and only the project's `pubspec.lock`, which is never uploaded, records which
+versions actually resolved. A check that cannot reproduce the graph cannot
+distinguish "clean" from "clean under different code", so any class importing
+a `package:` URI is reported unverified. A class using only `dart:` imports
+resolves nothing through pub and is still compiled, and a class naming the
+unreproducible entry directly gets a reason that says so.
 
 **Which packages the Flutter SDK supplies is read from the project's own
 pubspec** - a dependency written in block form under `sdk:` is an SDK package by

@@ -347,6 +347,36 @@ class RegistersPlugin {}
   assert.deepEqual(plan.skipped, []);
 });
 
+test("an SDK package declared as a multiline flow mapping still verifies classes", () => {
+  // `{` alone on the dependency's own line used to read as an unclosed -
+  // unreadable - mapping, so the SDK package classified unrepresentable and
+  // every package-importing class was skipped over a reproducible source.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {
+    sdk: flutter
+  }
+  background_downloader: ^8.0.0
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.deepEqual(manifest.sdkPackages, ["flutter", "flutter_web_plugins"]);
+  assert.deepEqual(manifest.unrepresentable, []);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test("a conditional import of the unreproducible dependency is skipped, not refused", () => {
   // `if (...)` names a second URI the code needs when the condition holds; a
   // scan that reads only the first URI would send the class to the runner

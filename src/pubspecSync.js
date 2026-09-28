@@ -180,38 +180,15 @@ function parseFlowSourceDirective(value) {
   const text = String(value || "").trim();
   if (!text.startsWith("{")) return null;
 
-  // Find the closing brace, skipping nested mappings and quoted text.
-  let quote = null;
-  let depth = 0;
-  let end = -1;
-  for (let i = 0; i < text.length; i += 1) {
-    const char = text[i];
-    if (quote) {
-      if (char === quote) quote = null;
-      continue;
-    }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "{") depth += 1;
-    else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        end = i;
-        break;
-      }
-      if (depth < 0) return { key: null, value: null };
-    }
-  }
+  const end = findFlowMappingEnd(text);
   if (end === -1) return { key: null, value: null };
 
   // Split the members on top-level commas only - a comma inside a nested map
   // or a quote belongs to the member, not the map.
   const inner = text.slice(1, end);
   const segments = [];
-  quote = null;
-  depth = 0;
+  let quote = null;
+  let depth = 0;
   let start = 0;
   for (let i = 0; i < inner.length; i += 1) {
     const char = inner[i];
@@ -251,6 +228,69 @@ function parseFlowSourceDirective(value) {
 }
 
 /**
+ * Finds the `}` closing the `{` at the start of the text, skipping nested
+ * mappings and quoted text.
+ *
+ * @param {string} text - Text starting with `{`
+ * @returns {number} Index of the closing brace, or -1 when unclosed
+ */
+function findFlowMappingEnd(text) {
+  let quote = null;
+  let depth = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return i;
+      if (depth < 0) return -1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Reassembles a flow mapping that wraps members onto following lines.
+ *
+ * YAML allows the same `{...}` members on subsequent lines - `name: {`, then
+ * `sdk: flutter`, then `}` - and only the dependency's own line reaches
+ * parseFlowSourceDirective, so a lone `{` reads as an unclosed, hence
+ * unreadable, mapping and classifies the entry unrepresentable. Lines are
+ * pulled in only while the map is still open - a map that closes but is
+ * unreadable (`{sdk flutter}`) gets no more lines, so the dependencies after
+ * it are still read as themselves - and a map that never closes stays
+ * unreadable, which is the right answer for it anyway.
+ *
+ * @param {string[]} lines - All lines of the pubspec
+ * @param {number} startIndex - Index of the dependency's own line
+ * @param {number} endIndex - Index of the line that ends the block
+ * @param {string} value - The text after `name:` on the dependency's own line
+ * @returns {{text: string, lastIndex: number}} The joined flow text and the
+ *   last line index consumed
+ */
+function collectFlowMappingText(lines, startIndex, endIndex, value) {
+  let text = value;
+  let i = startIndex;
+  while (
+    text.trimStart().startsWith("{") &&
+    findFlowMappingEnd(text) === -1 &&
+    i + 1 < endIndex
+  ) {
+    i += 1;
+    text += "\n" + lines[i];
+  }
+  return { text, lastIndex: i };
+}
+
+/**
  * Reads every package declared under `dependencies:` with its constraint.
  *
  * A dependency written in block form (`sdk:`, `git:`, `path:`, or a nested
@@ -282,8 +322,11 @@ export function parseExistingDependencies(yamlContent) {
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
     // An inline `{sdk: flutter}`-style mapping is not a constraint, so it is
-    // read for its own source keys like a block entry is.
-    const flowSource = parseFlowSourceDirective(value);
+    // read for its own source keys like a block entry is. Its members may
+    // wrap onto following lines, which collectFlowMappingText reassembles.
+    const flow = collectFlowMappingText(lines, i, block.endIndex, value);
+    const flowSource = parseFlowSourceDirective(flow.text);
+    i = flow.lastIndex;
     const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever
@@ -343,7 +386,9 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    const flowSource = parseFlowSourceDirective(value);
+    const flow = collectFlowMappingText(lines, i, block.endIndex, value);
+    const flowSource = parseFlowSourceDirective(flow.text);
+    i = flow.lastIndex;
     const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever

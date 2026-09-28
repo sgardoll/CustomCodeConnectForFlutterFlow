@@ -287,6 +287,28 @@ test("a flow mapping that cannot be read is unrepresentable, not a constraint", 
   assert.equal(declared.get("broken_thing").sourceKey, null);
 });
 
+test("a flow mapping spanning lines is still read as a source", () => {
+  // YAML lets the same `{...}` members wrap onto following lines. Only the
+  // dependency's own line used to reach the reader, so the opening `{` alone
+  // looked unclosed and the entry classified unrepresentable.
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {
+    sdk: flutter
+  }
+  intl: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+  // Lines the wrapped map consumed must not reappear as dependencies.
+  assert.equal(declared.get("sdk"), undefined);
+  assert.equal(declared.get("intl").constraint, "^0.20.3");
+  assert.equal(declared.get("intl").isScalar, true);
+});
+
 test("reads a source from dependency_overrides too", () => {
   const overrides = parseDependencyBlock(
     `dependency_overrides:
