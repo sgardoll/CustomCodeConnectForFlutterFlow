@@ -222,3 +222,29 @@ test("still detects a real import on the line after a comment mentioning a diffe
 
   assert.deepEqual(extractPackageImports(code), ["geolocator"]);
 });
+
+test("a multiline string quoting an import is not a dependency", () => {
+  const code = [
+    "final example = '''",
+    "import 'package:nonexistent_demo/demo.dart';",
+    "''';",
+    "import 'package:geolocator/geolocator.dart';",
+    "class Plain {}",
+  ].join("\n");
+
+  // The triple-quoted string holds display text: without consuming it whole
+  // the scanner would invent a `nonexistent_demo` dependency and add it to
+  // the project's pubspec, breaking `pub get` after deploy.
+  assert.deepEqual(extractPackageImports(code), ["geolocator"]);
+});
+
+test("a raw multiline double-quoted string is consumed whole too", () => {
+  const code = [
+    'final example = r"""',
+    "export 'package:ghost_pkg/ghost.dart';",
+    '""";',
+    "class Plain {}",
+  ].join("\n");
+
+  assert.deepEqual(extractPackageImports(code), []);
+});
