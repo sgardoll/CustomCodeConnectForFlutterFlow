@@ -324,6 +324,7 @@ export function parseExistingDependencies(yamlContent) {
     // An inline `{sdk: flutter}`-style mapping is not a constraint, so it is
     // read for its own source keys like a block entry is. Its members may
     // wrap onto following lines, which collectFlowMappingText reassembles.
+    const nameIndex = i;
     const flow = collectFlowMappingText(lines, i, block.endIndex, value);
     const flowSource = parseFlowSourceDirective(flow.text);
     i = flow.lastIndex;
@@ -334,12 +335,12 @@ export function parseExistingDependencies(yamlContent) {
     const directive = isScalar
       ? null
       : (flowSource ??
-        readSourceDirective(lines, i, block.endIndex, block.childIndent.length));
+        readSourceDirective(lines, nameIndex, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,
       comment,
-      lineIndex: i,
+      lineIndex: nameIndex,
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,
@@ -386,6 +387,7 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
+    const nameIndex = i;
     const flow = collectFlowMappingText(lines, i, block.endIndex, value);
     const flowSource = parseFlowSourceDirective(flow.text);
     i = flow.lastIndex;
@@ -396,12 +398,12 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const directive = isScalar
       ? null
       : (flowSource ??
-        readSourceDirective(lines, i, block.endIndex, block.childIndent.length));
+        readSourceDirective(lines, nameIndex, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,
       comment,
-      lineIndex: i,
+      lineIndex: nameIndex,
       isScalar,
       sourceKey: directive ? directive.key : null,
       sourceValue: directive ? directive.value : null,

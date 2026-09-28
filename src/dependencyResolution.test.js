@@ -99,6 +99,26 @@ dependencies:
   assert.match(merged.yaml, /block_pinned:\n    version: \^0\.20\.0  # deliberate cap/);
 });
 
+test("rule 2: a multiline {version:} mapping is raised in place", async () => {
+  // The name line must anchor the entry: recording the flow map's closing
+  // line as lineIndex would leave rewriteVersionMember scanning from `}` and
+  // never finding the member.
+  const pubspec = `name: my_app
+dependencies:
+  flutter:
+    sdk: flutter
+  intl: {
+    version: '>=0.19.0 <0.20.0'
+  }
+`;
+  const plan = await planDependencyChanges(pubspec, { intl: "0.20.0" });
+
+  assert.deepEqual(plan.overrides, { intl: "^0.20.0" });
+
+  const merged = applyDependencyOverrides(pubspec, plan.overrides);
+  assert.match(merged.yaml, /intl: \{\n    version: \^0\.20\.0\n  \}/);
+});
+
 test("rule 2: a {version: x} pin satisfying the floor is kept", async () => {
   const pubspec = `name: my_app
 dependencies:
