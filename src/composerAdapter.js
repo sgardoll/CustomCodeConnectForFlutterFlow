@@ -293,6 +293,17 @@ export function initComposer({ onSubmit }) {
     heroDemoTimer = setTimeout(typeNext, HERO_DEMO_HOLD_MS);
   }
 
+  // A live flip to reduced motion must end the demo, not just keep it from
+  // starting: cancel the timer and land the field on the complete shipped
+  // prompt with the caret retired — the same end state as a finished demo.
+  // Text the user has taken over (heroDemoTyping already false) is untouched.
+  function onReducedMotionChange() {
+    if (!reduceMotion.matches || !heroDemoTyping) return;
+    field.value = shippedPrompt;
+    mirrorTyped();
+    cancelHeroDemo();
+  }
+
   // --- Chip fill (prototype fillChip, lines 1816-1829) ---
   // The prompt types itself in behind the demo caret, the chip keeps a settled
   // selected state, and focus lands at the end of the prompt.
@@ -456,6 +467,17 @@ export function initComposer({ onSubmit }) {
     cancelHeroDemo();
   });
 
+  // The reduced-motion preference can change while the page is open; the
+  // listener is registered exactly once here (never per demo start) and is
+  // removed by dispose, so a torn-down composer stops reacting to it.
+  reduceMotion.addEventListener("change", onReducedMotionChange);
+
+  function dispose() {
+    reduceMotion.removeEventListener("change", onReducedMotionChange);
+  }
+
+  window.addEventListener("pagehide", dispose);
+
   // Initial state mirrors the shipped example prompt; the send control
   // reflects it. The shipped default value stays exactly as authored.
   mirrorTyped();
@@ -472,5 +494,7 @@ export function initComposer({ onSubmit }) {
       attachmentsPending = Boolean(pending);
       syncSend();
     },
+    // Removes the reduced-motion listener; also runs on pagehide.
+    dispose,
   };
 }

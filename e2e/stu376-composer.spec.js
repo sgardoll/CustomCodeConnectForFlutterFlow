@@ -410,6 +410,58 @@ test.describe("STU-445 hero composer behaviour", () => {
     await expect(page.locator("#hero-send")).toBeEnabled();
   });
 
+  test("a live reduced-motion flip mid-demo stops the typing and restores the prompt", async ({
+    page,
+  }) => {
+    // Watch from navigation commit so the demo cannot finish before the flip.
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo while it is still early: a short prefix is in the field
+    // and the caret class is on. The remaining typing then needs well over a
+    // second, so a demo that ignores the flip cannot reach the full prompt
+    // inside the assertion's timeout below.
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length / 5
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // Flip the preference mid-demo: the reduced-motion listener must end the
+    // demo right here — cancel its timer, land the complete shipped prompt and
+    // retire the caret — exactly like a demo that finished typing.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+
+    const field = page.locator("#pipeline-input");
+    const composer = page.locator("#composer");
+
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT, { timeout: 1000 });
+    await expect(composer).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+
+    // The caret is retired, not merely hidden: the ::after that blinks only
+    // exists while the composer carries the demo class.
+    const caretAnimation = await page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector("#composer .ghost .typed"), "::after")
+          .animationName,
+    );
+    expect(caretAnimation).toBe("none");
+
+    // Typing really stopped: the prompt holds steady for several frames.
+    await page.waitForTimeout(300);
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(composer).not.toHaveClass(/is-demo-typing/);
+  });
+
   test("clicking the prompt input shows only the composer's orange focus outline", async ({
     page,
   }) => {
