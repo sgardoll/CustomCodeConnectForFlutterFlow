@@ -7677,7 +7677,12 @@ function syncPipelinePanelOrder() {
     (view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING) !==
     0;
   if (recapAfterView === wantRecapAfterView) return;
+  // Reparenting blurs a focused descendant; carry it across the move.
+  const focused = document.activeElement;
   progress.insertBefore(recap, wantRecapAfterView ? view.nextSibling : view);
+  if (focused instanceof HTMLElement && recap.contains(focused)) {
+    focused.focus({ preventScroll: true });
+  }
 }
 
 function initPipelinePanelOrder() {

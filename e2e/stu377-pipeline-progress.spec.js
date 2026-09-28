@@ -875,6 +875,46 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
   });
 
+  test("resizing across the breakpoint keeps focus inside the moved recap", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["architect"] });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+
+    const order = () =>
+      page.evaluate(() => {
+        const view = document.querySelector(".pipeline-view");
+        const recap = document.querySelector(".pipeline-prompt-recap");
+        return {
+          focusedId: document.activeElement?.id ?? "",
+          recapAfterView: Boolean(
+            view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING,
+          ),
+        };
+      });
+
+    // Desktop -> stacked: the recap moves behind the view and reparenting must
+    // not drop the focus its Edit prompt was holding.
+    await page.locator("#pipeline-edit-prompt").focus();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(order, { message: "stacked order: view leads, focus retained" })
+      .toEqual({ focusedId: "pipeline-edit-prompt", recapAfterView: true });
+
+    // Stacked -> desktop: the recap moves back ahead of the view, still with
+    // focus intact.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect
+      .poll(order, { message: "desktop order: recap leads, focus retained" })
+      .toEqual({ focusedId: "pipeline-edit-prompt", recapAfterView: false });
+
+    pipeline.release("architect");
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
+  });
+
   test("stacked: a failure's actions stay ahead of the recap in DOM and focus order", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openHome(page);
