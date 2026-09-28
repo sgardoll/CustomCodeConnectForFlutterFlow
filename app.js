@@ -6682,6 +6682,10 @@ function showToast(message, type = 'info') {
 document.addEventListener("DOMContentLoaded", async () => {
   initializeModalShells();
 
+  // The holding window's regions display in a different order per breakpoint;
+  // reorder them in the DOM so focus never travels against the screen.
+  initPipelinePanelOrder();
+
   // Initialize highlight.js
   hljs.configure({
     tabReplace: "  ",
@@ -7715,6 +7719,53 @@ function pipelineStageButton(step) {
 }
 
 /**
+ * Keep the holding window's DOM order equal to its displayed order so
+ * sequential focus never travels backwards across the panel. The two regions
+ * lead at different widths: the prompt recap is the desktop panel's left
+ * sidebar, while the workflow leads the stacked (<=920px) layout. Focus
+ * follows the DOM, so the recap is moved ahead of the view on wide screens
+ * and back after it on narrow ones; grid auto-placement then paints the
+ * regions in the same order it reads them.
+ */
+const pipelinePanelStacked = window.matchMedia("(max-width: 920px)");
+
+function syncPipelinePanelOrder() {
+  const progress = document.getElementById("pipeline-progress");
+  const view = progress?.querySelector(":scope > .pipeline-view");
+  const recap = progress?.querySelector(":scope > .pipeline-prompt-recap");
+  if (!view || !recap) return;
+  const wantRecapAfterView = pipelinePanelStacked.matches;
+  const recapAfterView =
+    (view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING) !==
+    0;
+  if (recapAfterView === wantRecapAfterView) return;
+  // Reparenting blurs a focused descendant; carry it across the move.
+  const focused = document.activeElement;
+  progress.insertBefore(recap, wantRecapAfterView ? view.nextSibling : view);
+  if (focused instanceof HTMLElement && recap.contains(focused)) {
+    focused.focus({ preventScroll: true });
+  }
+}
+
+function initPipelinePanelOrder() {
+  syncPipelinePanelOrder();
+  pipelinePanelStacked.addEventListener("change", syncPipelinePanelOrder);
+}
+
+/**
+ * The supporting line under the stage title, taken verbatim from the canonical
+ * pipeline view's stage copy (custom-code-connect-hero.html stageCopy).
+ */
+function pipelineStageDescription(step) {
+  const descriptions = {
+    1: "Turning your idea into a clear FlutterFlow specification.",
+    2: "Building the Dart source, widget parameters and animation.",
+    3: "Checking the generated code and preparing the file review.",
+  };
+  return descriptions[step] || "";
+}
+
+/**
  * Busy feedback on the control that started the run, and - just as important -
  * a usable control again when the run terminates, however it terminated.
  * The redesigned shell submits from the composer's send button; the legacy id
@@ -7784,6 +7835,7 @@ function renderPipelineTrack() {
  */
 function renderPipelineStatus(step, { done = false } = {}) {
   const titleEl = document.getElementById("progress-title-text");
+  const descriptionEl = document.getElementById("progress-description-text");
   const substepEl = document.getElementById("progress-substep-text");
   const state = pipelineStageStates[step];
   const finished = done || state === "done";
@@ -7792,6 +7844,9 @@ function renderPipelineStatus(step, { done = false } = {}) {
       ? PIPELINE_STAGE_DONE_TITLES[step]
       : PIPELINE_STAGE_TITLES[step];
   }
+  // The visible supporting line follows the mock; the step/stage/state line
+  // stays in the live region for assistive technology.
+  if (descriptionEl) descriptionEl.textContent = pipelineStageDescription(step);
   if (substepEl) {
     const suffix = finished ? " \u2014 complete" : state === "failed" ? " \u2014 stopped" : "";
     substepEl.textContent = `Step ${step} of 3 \u2014 ${PIPELINE_STAGE_LABELS[step]}${suffix}`;
