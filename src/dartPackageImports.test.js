@@ -162,6 +162,21 @@ test("a paren inside a condition's comparison string is not syntax", () => {
   assert.deepEqual(extractPackageImports(code), ["base", "alternate"]);
 });
 
+test("a directive inside a Dart string literal is display text, not an import", () => {
+  // The quoted `export`/`import` below only exist as string content - treating
+  // them as directives would add `ghost`/`phantom` to the pubspec.
+  const code =
+    "class Doc extends StatelessWidget {\n" +
+    '  final example = "export \'package:ghost/ghost.dart\';";\n' +
+    "  final sample = \"import 'package:phantom/x.dart';\";\n" +
+    '  final raw = r"export \'package:raw_ghost/r.dart\';";\n' +
+    "}\n" +
+    "import 'package:real/real.dart';\n";
+
+  assert.deepEqual(extractImportUris(code), ["package:real/real.dart"]);
+  assert.deepEqual(extractPackageImports(code), ["real"]);
+});
+
 test("a comparison literal inside `if (...)` is not a URI", () => {
   // `== 'true'` compares a config variable with a string; the literal is not
   // a file, and reading it as one would skip an otherwise verifiable class.

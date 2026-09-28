@@ -83,6 +83,27 @@ function stripComments(code) {
 const DIRECTIVE_PATTERN =
   /\b(?:import|export)\s+(?=r?['"])(?:'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
 
+// A directive keyword inside a *Dart string* is display text, not a
+// directive - `final doc = "export 'package:ghost/ghost.dart';"` must not
+// create a `ghost` dependency. The scan therefore steps over every ordinary
+// string literal whole: at any position only one alternative can match, so a
+// quoted `export` is consumed as string content and its keyword never starts
+// a directive. A raw `r"..."` literal needs no alternative of its own - `r`
+// matches nothing, and the quote after it opens the string alternative, whose
+// escape-aware body ends at the same quote a raw literal would.
+const STRING_PATTERN = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"/.source;
+const SCAN_PATTERN = new RegExp(`${DIRECTIVE_PATTERN.source}|${STRING_PATTERN}`, "g");
+
+function* directiveMatches(code) {
+  const stripped = stripComments(code);
+  let match;
+  while ((match = SCAN_PATTERN.exec(stripped)) !== null) {
+    // A string-literal match starts with a quote; only keyword matches yield.
+    if (!/^(?:import|export)\s/.test(match[0])) continue;
+    yield match[0];
+  }
+}
+
 /**
  * Yields the contents of every quoted literal in a directive that names code -
  * the primary URI and the alternative after each `if (...)` clause.
@@ -142,11 +163,9 @@ function* directiveUriLiterals(text) {
 export function extractImportUris(code = "") {
   const uris = [];
   const seen = new Set();
-  const stripped = stripComments(code);
-  let directive;
 
-  while ((directive = DIRECTIVE_PATTERN.exec(stripped)) !== null) {
-    for (const uri of directiveUriLiterals(directive[0])) {
+  for (const directive of directiveMatches(code)) {
+    for (const uri of directiveUriLiterals(directive)) {
       if (seen.has(uri)) continue;
       seen.add(uri);
       uris.push(uri);
@@ -176,11 +195,9 @@ export function extractPackageImports(code = "") {
   // and an `if (...)` clause's alternative URI does the same when its
   // condition holds, so every package URI in a directive names a dependency.
   const packageUriPattern = /^package:([a-zA-Z0-9_]+)\//;
-  const stripped = stripComments(code);
-  let directive;
 
-  while ((directive = DIRECTIVE_PATTERN.exec(stripped)) !== null) {
-    for (const uri of directiveUriLiterals(directive[0])) {
+  for (const directive of directiveMatches(code)) {
+    for (const uri of directiveUriLiterals(directive)) {
       const match = packageUriPattern.exec(uri);
       if (!match) continue;
       const name = match[1];
