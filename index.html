@@ -1728,6 +1728,7 @@
       .pipeline-progress {
         display: none;
         grid-template-columns: 310px minmax(0, 1fr);
+        grid-template-areas: "recap view";
         height: 100%;
         overflow-y: auto;
         text-align: left;
@@ -1736,6 +1737,7 @@
         display: grid;
       }
       .pipeline-prompt-recap {
+        grid-area: recap;
         display: flex;
         flex-direction: column;
         min-width: 0;
@@ -1778,6 +1780,7 @@
         border-color: var(--fg);
       }
       .pipeline-view {
+        grid-area: view;
         display: grid;
         align-content: center;
         min-width: 0;
@@ -1976,11 +1979,15 @@
         background: transparent;
       }
 
-      /* Stacked: the workflow leads, the prompt follows beneath it (mock). */
+      /* Stacked: the workflow leads, the prompt follows beneath it (mock).
+         The DOM already orders the workflow first, so the displayed order and
+         the focus order stay the same at this breakpoint. */
       @media (max-width: 920px) {
-        .pipeline-progress { grid-template-columns: minmax(0, 1fr); }
+        .pipeline-progress {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-areas: "view" "recap";
+        }
         .pipeline-view {
-          order: 1;
           align-content: start;
           min-height: 300px;
           padding: 34px 24px;
@@ -1988,7 +1995,6 @@
         .pipeline-view h3 { font-size: 25px; }
         .pipeline-progress .pipeline-glyph.logo-loop { margin-bottom: 16px; }
         .pipeline-prompt-recap {
-          order: 2;
           padding: 22px;
           border-right: 0;
           border-top: 1px solid var(--border);
@@ -3465,13 +3471,9 @@
             <!-- Pipeline holding window (canonical: custom-code-connect-hero.html
                  .walkthrough-layout / .pipeline-view) -->
             <div id="pipeline-progress" class="pipeline-progress">
-              <!-- The submitted prompt is the panel's left sidebar, closed by
-                   Edit prompt at its bottom-left, as in the mock. -->
-              <aside class="pipeline-prompt-recap">
-                <p class="pipeline-prompt-kicker">Your prompt</p>
-                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
-                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
-              </aside>
+              <!-- The workflow is the panel's main column and comes first in
+                   the DOM so focus follows the stacked order at ≤920px;
+                   desktop grid areas place the prompt back on the left. -->
               <div class="pipeline-view">
                 <!-- Decorative authored two-piece mark loop (STU-390); never
                      gates completion - progress depends only on backend events. -->
@@ -3518,6 +3520,13 @@
                   <div class="pipeline-failure-actions" id="pipeline-failure-actions"></div>
                 </div>
               </div>
+              <!-- The submitted prompt is the panel's left sidebar on desktop,
+                   closed by Edit prompt at its bottom-left, as in the mock. -->
+              <aside class="pipeline-prompt-recap">
+                <p class="pipeline-prompt-kicker">Your prompt</p>
+                <p class="pipeline-prompt-text" id="pipeline-submitted-prompt"></p>
+                <button class="pipeline-prompt-edit" type="button" id="pipeline-edit-prompt" onclick="editPipelinePrompt()">Edit prompt</button>
+              </aside>
             </div>
 
             <!-- Split-Panel Results View -->

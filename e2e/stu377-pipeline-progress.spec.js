@@ -80,6 +80,21 @@ async function openHome(page, overrides = {}) {
 const stage = (page, step) => page.locator(`#pdot-${step}`);
 const failure = (page) => page.locator("#pipeline-failure");
 
+/**
+ * Tab forward from wherever focus currently is, recording the id of each
+ * focused element, until every wanted id has been seen or `limit` presses
+ * have been spent. Elements without an id (and focus that leaves the page)
+ * record an empty string, so callers assert containment, not equality.
+ */
+async function tabFocusOrder(page, wanted, limit = 60) {
+  const seen = [];
+  for (let i = 0; i < limit && !wanted.every((id) => seen.includes(id)); i += 1) {
+    await page.keyboard.press("Tab");
+    seen.push(await page.evaluate(() => document.activeElement?.id ?? ""));
+  }
+  return seen;
+}
+
 test.describe("Generation progress binds to real stage events", () => {
   test("walks Architect to Generator to Review and never completes a stage early", async ({ page }) => {
     await openHome(page);
@@ -777,5 +792,92 @@ test.describe("Holding window matches the canonical pipeline view", () => {
 
     pipeline.release("architect");
     await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
+  });
+
+  test("stacked: keyboard focus follows the workflow-then-prompt order", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, { hold: ["architect"] });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+    await expect(page.locator(".pipeline-view")).toBeVisible();
+
+    // Walk the page with Tab until both panel regions have been focused. The
+    // active stage button must be reached before the recap's Edit prompt:
+    // the workflow is what is displayed first at this width, and CSS order
+    // must not make focus jump backward against the screen.
+    await page.evaluate(() => document.activeElement?.blur());
+    const focusOrder = await tabFocusOrder(page, ["pdot-1", "pipeline-edit-prompt"]);
+    expect(focusOrder).toContain("pdot-1");
+    expect(focusOrder).toContain("pipeline-edit-prompt");
+    expect(focusOrder.indexOf("pdot-1")).toBeLessThan(
+      focusOrder.indexOf("pipeline-edit-prompt"),
+    );
+
+    // The document order backs the focus order, and it matches the screen.
+    const regions = await page.evaluate(() => {
+      const view = document.querySelector(".pipeline-view");
+      const recap = document.querySelector(".pipeline-prompt-recap");
+      return {
+        viewBeforeRecap: Boolean(
+          view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+        viewY: Math.round(view.getBoundingClientRect().y),
+        recapY: Math.round(recap.getBoundingClientRect().y),
+      };
+    });
+    expect(regions.viewBeforeRecap).toBe(true);
+    expect(regions.viewY).toBeLessThan(regions.recapY);
+
+    pipeline.release("architect");
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "done");
+  });
+
+  test("stacked: a failure's actions stay ahead of the recap in DOM and focus order", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, {
+      hold: ["architect"],
+      responses: { architect: providerError },
+    });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+
+    pipeline.release("architect");
+    await expect(failure(page)).toBeVisible();
+    await expect(failure(page).locator('button[data-action="edit"]')).toBeVisible();
+
+    // Every failure action lives in the workflow region, which still precedes
+    // the recap in the document and on screen.
+    const regions = await page.evaluate(() => {
+      const view = document.querySelector(".pipeline-view");
+      const recap = document.querySelector(".pipeline-prompt-recap");
+      const edit = document.getElementById("pipeline-edit-prompt");
+      const actions = [...document.querySelectorAll("#pipeline-failure-actions button")];
+      return {
+        viewBeforeRecap: Boolean(
+          view.compareDocumentPosition(recap) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+        actionsBeforeRecapEdit: actions.every((action) =>
+          Boolean(action.compareDocumentPosition(edit) & Node.DOCUMENT_POSITION_FOLLOWING),
+        ),
+        viewY: Math.round(view.getBoundingClientRect().y),
+        recapY: Math.round(recap.getBoundingClientRect().y),
+      };
+    });
+    expect(regions.viewBeforeRecap).toBe(true);
+    expect(regions.actionsBeforeRecapEdit).toBe(true);
+    expect(regions.viewY).toBeLessThan(regions.recapY);
+
+    // Termination focuses a permitted action; tabbing on reaches the recap's
+    // Edit prompt without jumping back up the page.
+    const focusedAction = await page.evaluate(() => document.activeElement?.dataset?.action);
+    expect(["retry", "edit", "upgrade"]).toContain(focusedAction);
+    const afterActions = await tabFocusOrder(page, ["pipeline-edit-prompt"], 4);
+    expect(afterActions).toContain("pipeline-edit-prompt");
   });
 });
