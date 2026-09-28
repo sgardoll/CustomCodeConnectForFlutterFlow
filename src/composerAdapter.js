@@ -346,7 +346,13 @@ export function initComposer({ onSubmit }) {
   // first typed character lands, has nothing to complete. Both stop the demo
   // on the frozen prefix and mark it demo-owned: send stays disabled and
   // Enter stays inert until a real input event hands the text to the user.
-  function finishHeroDemo() {
+  // A pointer takeover means "edit what I clicked": after the restore the
+  // complete prompt is plain field content, so ownership is released and the
+  // first edit trims it character by character. Keyboard-only takeovers
+  // (focus, a keypress before any click) keep the text demo-owned instead —
+  // typing mid-demo means "write a new prompt", so the first beforeinput
+  // still clears the example rather than joining it.
+  function finishHeroDemo(releaseOwned = false) {
     if (!heroDemoTyping) return;
     // The demo's streamed suggestion is demo-owned too: a takeover drops the
     // ghost along with the writer, whatever branch below it takes.
@@ -359,6 +365,7 @@ export function initComposer({ onSubmit }) {
     field.value = shippedPrompt;
     mirrorTyped();
     heroDemoFrozen = false;
+    if (releaseOwned) heroDemoOwned = false;
     cancelHeroDemo();
   }
 
@@ -554,14 +561,16 @@ export function initComposer({ onSubmit }) {
   // The user taking the field back ends the chip's settled state. A running
   // hero demo completes instead of freezing mid-type, so Generate after a
   // bare click, focus or keypress submits the whole example — the same end
-  // state as a demo that finished on its own.
+  // state as a demo that finished on its own. A pointerdown also releases
+  // demo ownership: the user clicked to edit, so the restored prompt is
+  // theirs to trim.
   field.addEventListener("pointerdown", () => {
-    finishHeroDemo();
+    finishHeroDemo(true);
     cancelChipTyping();
     clearChipSelection();
   });
 
-  field.addEventListener("focus", finishHeroDemo);
+  field.addEventListener("focus", () => finishHeroDemo());
 
   // The reduced-motion preference can change while the page is open; the
   // listener lives for the document's lifetime — including a trip through the
@@ -590,8 +599,21 @@ export function initComposer({ onSubmit }) {
   }
 
   function cancelTyping() {
-    cancelHeroDemo();
-    cancelChipTyping();
+    // A system cancellation — switching surfaces or the tab hiding — is not a
+    // user takeover: land each demo's end state so a half-typed prefix can
+    // never sit submittable in the field when the user returns.
+    if (heroDemoTyping) {
+      field.value = shippedPrompt;
+      mirrorTyped();
+      clearSuggestion();
+      heroDemoOwned = false;
+      cancelHeroDemo();
+    }
+    if (chipTyping) {
+      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
+      mirrorTyped();
+      cancelChipTyping();
+    }
     clearTimeout(debounceTimer);
   }
 

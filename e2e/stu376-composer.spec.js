@@ -524,6 +524,111 @@ test.describe("STU-445 hero composer behaviour", () => {
     await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
   });
 
+  test("a mid-demo click hands the prompt over — Backspace trims it", async ({ page }) => {
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo mid-type: a real prefix is in the field and the rest of
+    // the prompt is still seconds away.
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // A pointer takeover means "edit what I clicked": the restore lands the
+    // complete prompt as the field's own text, so a later Backspace trims a
+    // single character instead of clearing the demo-owned example.
+    const field = page.locator("#pipeline-input");
+    await field.click();
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await field.press("End");
+    await field.press("Backspace");
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT.slice(0, -1));
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+  });
+
+  test("leaving Home mid-demo settles the prompt — never a submittable prefix", async ({
+    page,
+  }) => {
+    const prompts = [];
+    await page.route(ENDPOINTS.pipeline, async (route) => {
+      const body = route.request().postDataJSON();
+      if (body && body.step === "architect") prompts.push(body.prompt);
+      await route.fulfill(oneArtifact());
+    });
+
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo mid-type: a real prefix is in the field and the rest of
+    // the prompt is still seconds away, so a frozen prefix would fail below.
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // Switching surfaces is a system cancellation, not a user takeover: the
+    // demo settles on the complete shipped prompt, so a returning Generate
+    // can never carry whatever prefix the timer reached.
+    await page.evaluate(() => window.switchView("account"));
+    await page.evaluate(() => window.switchView("home"));
+    const field = page.locator("#pipeline-input");
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+
+    await page.locator("#hero-send").click();
+    await expect
+      .poll(() => prompts.length, { timeout: 30000 })
+      .toBe(1);
+    expect(prompts[0]).toContain(COMPOSER_DEFAULT_PROMPT);
+  });
+
+  test("leaving Home during the demo hold settles the prompt too", async ({ page }) => {
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo inside its hold: the typing class is on but the first
+    // character has not landed yet.
+    await page.waitForFunction(
+      () => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value === ""
+        );
+      },
+      undefined,
+      { timeout: 8000 },
+    );
+
+    await page.evaluate(() => window.switchView("account"));
+    await page.evaluate(() => window.switchView("home"));
+    await expect(page.locator("#pipeline-input")).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+  });
+
   test("a live reduced-motion flip mid-demo stops the typing and restores the prompt", async ({
     page,
   }) => {
