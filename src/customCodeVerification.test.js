@@ -119,17 +119,215 @@ test("a dependency from a git or path source is reported unrepresentable", () =>
   assert.deepEqual(manifest.unrepresentable, ["private_thing"]);
 });
 
-test("nothing is verified when package resolution cannot be matched exactly", () => {
+test("a git dependency stops every class, since it can alter resolution anywhere in the graph", () => {
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
     PROJECT_PUBSPEC,
   );
 
-  // Compiling against different versions than the project resolves would report
-  // a result that does not describe the code that ships.
+  // The project declares `private_thing` from git, which the scratch manifest
+  // cannot express. Even a class that never imports it can reach it
+  // transitively - a git source sharing a pub.dev name resolves different code
+  // for any package that depends on it - and the resolved graph is not
+  // available to prove otherwise, so the class is skipped rather than checked
+  // against a resolution the project would not produce.
   assert.deepEqual(plan.sources, []);
   assert.equal(plan.skipped.length, 1);
   assert.match(plan.skipped[0].reason, /private_thing/);
+});
+
+test("a class that resolves no packages is still verified when a source is unreproducible", () => {
+  const dartOnly = `import 'dart:async';
+
+class UsesOnlyDartSdk {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "UsesOnlyDartSdk", content: dartOnly }],
+    PROJECT_PUBSPEC,
+  );
+
+  // Nothing in the class reaches pub resolution, so the git dependency cannot
+  // change what it compiles against.
+  assert.deepEqual(
+    plan.sources.map((entry) => entry.fileName),
+    ["uses_only_dart_sdk.dart"],
+  );
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a class that imports the unreproducible dependency is skipped, and named as the reason", () => {
+  const importsPrivateThing = `import 'package:private_thing/private_thing.dart';
+
+class UsesPrivateThing {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [
+      { className: "UsesPrivateThing", content: importsPrivateThing },
+      { className: "BackgroundDownloaderService", content: SELF_CONTAINED },
+    ],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 2);
+  const importer = plan.skipped.find(
+    (entry) => entry.className === "UsesPrivateThing",
+  );
+  // The reason names this class's own usage, not only the project's whole
+  // dependency set, so it says what to do about this class.
+  assert.match(importer.reason, /imports or exports private_thing/);
+});
+
+test("a class that only exports an unreproducible package is skipped, not sent to a failing pub get", () => {
+  const exportsPrivateThing = `export 'package:private_thing/private_thing.dart';
+
+class ReexportsPrivateThing {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "ReexportsPrivateThing", content: exportsPrivateThing }],
+    PROJECT_PUBSPEC,
+  );
+
+  // An export makes the class depend on the package exactly as an import
+  // does. Missing that, the class used to enter `sources`, `pub get` failed
+  // on the undeclared package, and every selected class lost its compile.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /imports or exports private_thing/);
+});
+
+test("an override from an unreproducible source skips a class that never names it", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  widget_lib: ^2.0.0
+
+dependency_overrides:
+  intl:
+    git:
+      url: https://example.invalid/intl.git
+`;
+  const usesWidgetLib = `import 'package:widget_lib/widget_lib.dart';
+
+class UsesWidgetLib {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "UsesWidgetLib", content: usesWidgetLib }],
+    pubspec,
+  );
+
+  // The git override can change which intl widget_lib resolves to, so a clean
+  // compile against the public package would not describe the project.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /intl/);
+});
+
+test("a hosted dependency with its version written first is unrepresentable, not a pub.dev constraint", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  private_ui:
+    version: ^1.0.0
+    hosted:
+      url: https://example.invalid
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  assert.deepEqual(manifest.unrepresentable, ["private_ui"]);
+  assert.equal("private_ui" in manifest.dependencies, false);
+});
+
+test("an SDK package no list has heard of is reproduced from its pubspec source", () => {
+  // The regression: flutter_web_plugins is a genuine Flutter SDK package that
+  // the hand-kept list omitted, so every project declaring it - which is every
+  // web-enabled project with a plugin - read as unreproducible and the deploy
+  // was refused for a package most of its classes never imported.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  background_downloader: ^8.5.0
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  assert.equal(manifest.sdkPackages.includes("flutter_web_plugins"), true);
+  assert.deepEqual(manifest.unrepresentable, []);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a class importing a package the project declares as an SDK package is not missing it", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+`;
+  const usesWebPlugins = `import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+
+class RegistersPlugin {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "RegistersPlugin", content: usesWebPlugins }],
+    pubspec,
+  );
+
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a block-form entry written as a bare version is read as a constraint", () => {
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  intl:
+    version: ^0.20.3
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  assert.equal(manifest.dependencies.intl, "^0.20.3");
+  assert.deepEqual(manifest.unrepresentable, []);
+  assert.deepEqual(manifest.sdkPackages, ["flutter"]);
 });
 
 test("plans a real compile for a class whose imports all resolve", () => {

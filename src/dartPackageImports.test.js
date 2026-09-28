@@ -52,6 +52,13 @@ test("returns an empty list for code with no package imports", () => {
   assert.deepEqual(extractPackageImports("Future<void> doThing() async {}"), []);
 });
 
+test("counts a package re-exported by the code as a dependency", () => {
+  assert.deepEqual(
+    extractPackageImports("export 'package:http/http.dart' show Client;"),
+    ["http"],
+  );
+});
+
 test("ignores an import mentioned only in a line comment", () => {
   const code = [
     "// import 'package:torch_light/torch_light.dart';",

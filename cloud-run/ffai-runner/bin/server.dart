@@ -19,15 +19,13 @@ final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
 // unrepresentable rather than merely discouraged.
 final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
 
-// The packages the Flutter SDK supplies, i.e. the only valid `sdk: flutter`
-// entries besides `flutter` itself.
-const allowedSdkPackages = <String>{
-  'flutter',
-  'flutter_test',
-  'flutter_driver',
-  'flutter_localizations',
-  'integration_test',
-};
+// Which packages the Flutter SDK supplies is not decided here. A caller names
+// the packages its project declares as `sdk: flutter`, and this runner emits
+// them as `name: {sdk: flutter}` - a value it writes itself, never one a caller
+// sent. There was an allowlist of SDK package names here, and it refused good
+// deploys: the client classified a package correctly by its pubspec source, and
+// the runner rejected it for not appearing on a list that had gone stale.
+// `_packageNamePattern` is what actually keeps a key from carrying YAML.
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -538,8 +536,13 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
   return result;
 }
 
-/// Reads the SDK-supplied package names. Restricted to the packages the Flutter
-/// SDK actually provides, so a caller cannot request an arbitrary `sdk:` value.
+/// Reads the SDK-supplied package names a caller's project declares.
+///
+/// Validated as package names rather than against a list of the packages the
+/// Flutter SDK happens to ship: a name the SDK does not provide fails
+/// `pub get` with an honest error, whereas a list refuses correct deploys the
+/// moment it falls behind the SDK. The pattern is the load-bearing check - each
+/// name becomes a key in the generated pubspec.
 List<String> _normalizeSdkPackages(Object? value) {
   if (value == null) return const <String>[];
   if (value is! List) {
@@ -549,8 +552,8 @@ List<String> _normalizeSdkPackages(Object? value) {
   final result = <String>[];
   for (final raw in value) {
     final name = '$raw';
-    if (!allowedSdkPackages.contains(name)) {
-      throw FormatException('Unsupported SDK package: $name.');
+    if (!_packageNamePattern.hasMatch(name)) {
+      throw FormatException('Invalid SDK package name: $name.');
     }
     if (!result.contains(name)) result.add(name);
   }
