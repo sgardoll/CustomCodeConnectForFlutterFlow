@@ -1,4 +1,5 @@
 import { test, expect, devices } from "@playwright/test";
+import { applyDefaultRoutes } from "./fixtures/apiFixtures.js";
 
 const DESKTOP = { width: 1440, height: 900 };
 
@@ -37,6 +38,7 @@ function collectFxGridWarnings(page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await applyDefaultRoutes(page);
   await page.addInitScript(() => {
     localStorage.setItem("hasSeenWalkthrough", "true");
   });
@@ -211,7 +213,10 @@ test("effect does not impede typing or page scrolling", async ({ page }) => {
   await input.fill(longPrompt);
   await expect(input).toHaveValue(longPrompt);
 
-  // The page must remain vertically scrollable while the effect is active.
+  // The authored 390×844 hero fits the viewport; long input must scroll inside
+  // its textarea. At short viewport heights the page itself must scroll too.
+  expect(await input.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await page.setViewportSize({ width:390,height:500 });
   const canScroll = await page.evaluate(() => {
     const root = document.documentElement;
     return root.scrollHeight > root.clientHeight;

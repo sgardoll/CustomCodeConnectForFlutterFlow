@@ -9,6 +9,7 @@ import {
   magicLinkAliasRejected,
   magicLinkSendFailure,
   magicLinkVerifyFailure,
+  ok,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
 
@@ -103,6 +104,63 @@ test.describe("Magic-link sign-in", () => {
     await expect(submit).toBeEnabled();
     // The address is preserved so the user can see what was rejected.
     await expect(input).toHaveValue("user+tag@gmail.com");
+  });
+
+  test("an HTTP-success response with an unexpected error code is surfaced as an error", async ({ page }) => {
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: guestIdentity(),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+      // HTTP 200, but the body carries an error code that is not the
+      // specifically handled plus-alias rejection: the send did not happen.
+      [ENDPOINTS.authSendMagicLink]: ok({
+        code: "SEND_FAILED",
+        message: "We could not send the link right now.",
+      }),
+    });
+
+    await page.goto("/#account");
+    await page.locator("#auth-signedout button", { hasText: "Sign In" }).click();
+
+    const input = page.locator("#signin-email-input");
+    const submit = page.locator("#signin-submit-btn");
+    await input.fill("person@example.com");
+    await submit.click();
+
+    // The error is styled as an error, the address is kept for retry, and the
+    // control never claims the link was sent.
+    await expect(page.locator("#signin-message")).toContainText(
+      "could not send the link",
+    );
+    await expect(page.locator("#signin-message")).toHaveClass(/signin-message-error/);
+    await expect(input).toHaveValue("person@example.com");
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(submit).toHaveText("Send Sign-in Link");
+  });
+
+  test("an HTTP-success response that declares success:false is surfaced as an error", async ({ page }) => {
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: guestIdentity(),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+      // HTTP 200 with an explicit failure and no code: this must never read as
+      // "Sent!" or clear the address.
+      [ENDPOINTS.authSendMagicLink]: ok({ success: false }),
+    });
+
+    await page.goto("/#account");
+    await page.locator("#auth-signedout button", { hasText: "Sign In" }).click();
+
+    const input = page.locator("#signin-email-input");
+    const submit = page.locator("#signin-submit-btn");
+    await input.fill("person@example.com");
+    await submit.click();
+
+    await expect(page.locator("#signin-message")).toContainText(
+      "Something went wrong",
+    );
+    await expect(page.locator("#signin-message")).toHaveClass(/signin-message-error/);
+    await expect(input).toHaveValue("person@example.com");
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(submit).toHaveText("Send Sign-in Link");
   });
 
   test("recovers from a failed send, and retry succeeds", async ({ page }) => {

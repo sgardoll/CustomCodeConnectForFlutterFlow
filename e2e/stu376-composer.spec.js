@@ -50,7 +50,7 @@ test.beforeEach(async ({ page }) => {
   page.consoleFailures = [];
   page.on("console", (msg) => {
     if (msg.type() === "error") {
-      page.consoleFailures.push(msg.text());
+      page.consoleFailures.push(`${msg.text()} (${msg.location().url})`);
     }
   });
   await applyDefaultRoutes(page, {
@@ -74,6 +74,7 @@ for (const { name, width, height } of viewports) {
     });
 
     test("ships the example prompt without an active suggestion", async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: "reduce" });
       await page.goto("/");
 
       const field = page.locator("#pipeline-input");
@@ -384,7 +385,8 @@ test.describe("STU-445 hero composer behaviour", () => {
 
     const samples = await page.evaluate(async (expected) => {
       const seen = [];
-      const deadline = Date.now() + 8000;
+      // Canonical HTML: 5200ms hold followed by 73ms per character.
+      const deadline = Date.now() + 12000;
       while (Date.now() < deadline) {
         const composer = document.getElementById("composer");
         const typed = document.querySelector(".ghost .typed");
@@ -580,7 +582,7 @@ test.describe("STU-445 hero composer behaviour", () => {
     await page.goto("/");
     const field = page.locator("#pipeline-input");
     const composer = page.locator("#composer");
-    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await field.fill(COMPOSER_DEFAULT_PROMPT);
     await field.click();
 
     const fieldStyles = await field.evaluate((el) => {

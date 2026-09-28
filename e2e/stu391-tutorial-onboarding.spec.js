@@ -107,17 +107,18 @@ async function clickInsideWalkthrough(page, selector) {
 // Reopen the tutorial. STU-445 removed the header's Tutorial entry "for now",
 // so a returning-user reopen goes through the app's own modal function. On a
 // cold start the deferred app.js module may not have wired openWalkthroughModal
-// yet, so call it only once the wire-up lands, then wait for the open
-// animation to finish. The startup usage decision is deliberately NOT
-// awaited: a passive exhausted resolution no longer closes an open tour
-// (updateUsageDisplay defers the paywall while a dialog is open), so the
-// reopen may land before or after the decision — the tour survives either
-// order.
+// yet — wait for the wire-up first. The startup usage pass is awaited only so
+// usage state settles: an exhausted allowance is suppressed while a dialog is
+// open (updateUsageDisplay gates on !hasActiveModal()), so it can no longer
+// close a walkthrough opened mid-flight. Then wait for the open animation.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
     { timeout: 8000 },
   );
+  await page.waitForFunction(() => Boolean(localStorage.getItem("ccc_usage")), {
+    timeout: 8000,
+  });
   await page.evaluate(() => window.openWalkthroughModal());
   await waitForWalkthroughOpen(page);
 }

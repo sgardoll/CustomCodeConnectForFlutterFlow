@@ -9,6 +9,7 @@ import {
   sampleProjectList,
   stagingProjectList,
   emptyProjectList,
+  projectExport,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
 
@@ -24,6 +25,7 @@ import {
  * key material (raw or masked) is rendered into a status label.
  */
 const KEY = "ff-secret-token-abc123";
+const NEW_KEY = "ff-secret-token-xyz789";
 const PROJ = "proj-abc-123";
 const EMAIL = "metered@example.com";
 const STAGING_LIST = "https://api.flutterflow.io/v2-staging/listProjects";
@@ -108,6 +110,40 @@ async function saveKeyThroughModal(page, { key, project } = {}) {
   // walkthrough inside a 1s timeout; wait it out, then clear the overlay once.
   await page.waitForTimeout(1300);
   await dismissOpenModals(page);
+}
+
+// Gate the production projects endpoint: the next request can be held pending
+// and released on demand, so a test can let a stale response land only after
+// the endpoint changed. Every other production request answers immediately;
+// the held request answers with `heldResponse` on release.
+async function gateProductionListProjects(page, heldResponse = sampleProjectList) {
+  let holdNext = false;
+  let releaseHeld = null;
+  let markHeld = null;
+  const held = new Promise((resolve) => {
+    markHeld = resolve;
+  });
+
+  await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+    if (!holdNext) {
+      await route.fulfill(sampleProjectList());
+      return;
+    }
+    holdNext = false;
+    markHeld();
+    await new Promise((resolve) => {
+      releaseHeld = resolve;
+    });
+    await route.fulfill(heldResponse());
+  });
+
+  return {
+    holdNext: () => {
+      holdNext = true;
+    },
+    waitForHeld: () => held,
+    release: () => releaseHeld(),
+  };
 }
 
 test.describe("STU-384 account connection", () => {
@@ -272,6 +308,365 @@ test.describe("STU-384 account connection", () => {
     ).toHaveCount(0);
   });
 
+  test("a late project fetch from the previous endpoint cannot overwrite the new endpoint's list", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    const gate = await gateProductionListProjects(page);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its production re-fetch is held in flight.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+
+    // Switch to staging while the production response is still pending, so the
+    // staging list is what the dropdown must show.
+    await page
+      .locator("#api-keys-modal summary", { hasText: "Advanced" })
+      .click();
+    await page
+      .locator("#flutterflow-endpoint-select")
+      .selectOption("https://api.flutterflow.io/v2-staging/");
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+
+    // Release the stale production response: it must be discarded, not allowed
+    // to replace the staging list the new endpoint already returned.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-abc-123"]`),
+    ).toHaveCount(0);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+  });
+
+  test("a late connection check from the previous endpoint cannot overwrite the new endpoint's status", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    // The held check resolves with an empty list: a stale "no-projects"
+    // outcome is visibly different from staging's "connected".
+    const gate = await gateProductionListProjects(page, emptyProjectList);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+
+    // Start a production connection check and keep its response pending.
+    gate.holdNext();
+    await page.evaluate(() => {
+      window.validateFlutterFlowConnection();
+    });
+    await gate.waitForHeld();
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Checking connection…",
+    );
+
+    // Switch to staging while the check is still pending; staging's re-fetch
+    // settles the card to connected.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await page
+      .locator("#api-keys-modal summary", { hasText: "Advanced" })
+      .click();
+    await page
+      .locator("#flutterflow-endpoint-select")
+      .selectOption("https://api.flutterflow.io/v2-staging/");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Release the stale check with a different outcome: it must not overwrite
+    // the staging status or resurrect a target project.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+  });
+
+  test("a connection check started while a dropdown fetch is pending must not strand the dropdown", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    const gate = await gateProductionListProjects(page);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its dropdown re-fetch is held in flight, so the
+    // dropdown shows the loading option while the response is pending.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+    await expect(page.locator("#flutterflow-projects-select")).toContainText(
+      "Loading projects...",
+    );
+
+    // Start a connection check for the same key and endpoint while the fetch
+    // is still pending. It answers immediately (the gate holds one request);
+    // the held fetch is the only response still outstanding.
+    await page.evaluate(() => window.validateFlutterFlowConnection());
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Release the fetch. It belongs to the current key and endpoint, so its
+    // response must still populate the dropdown — the check must not have
+    // superseded it. If it did, the dropdown would be stranded on
+    // "Loading projects..." forever.
+    const fetchSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await fetchSettled;
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#flutterflow-projects-select")).not.toContainText(
+      "Loading projects...",
+    );
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a late project fetch from the previous key cannot overwrite the new key's list", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    // Only the held OLD-key request answers with this list, so a stale
+    // response landing after the key was replaced is unmistakable.
+    const staleKeyList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-old-key-111", project: { name: "Old Key Project" } },
+          ],
+        }),
+      });
+    const gate = await gateProductionListProjects(page, staleKeyList);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its fetch with the saved key is held in flight.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+
+    // Replace the key while the old key's fetch is still pending. The blur
+    // fetch for the new key answers immediately, so the dropdown now shows
+    // the list that belongs to the key being saved.
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // Release the stale old-key response: it must be discarded, not allowed
+    // to replace the new key's list or regress its connection status.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(
+        '#flutterflow-projects-select option[value="proj-old-key-111"]',
+      ),
+    ).toHaveCount(0);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+  });
+
+  test("replacing the key without choosing a project clears the old target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor and replace the key. The dropdown re-selects the
+    // stored project when its list loads, but that is not a choice.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await expect(page.locator("#flutterflow-projects-select")).toHaveValue(PROJ);
+
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // The old key's target is gone: nothing a later deploy reads can silently
+    // point at it.
+    const storedAfter = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow_project_id"),
+    );
+    expect(storedAfter).toBeNull();
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a project chosen from the old key's list cannot become the replaced key's target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: the dropdown shows the OLD key's list.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await expect(
+      page.locator('#flutterflow-projects-select option[value="proj-def-456"]'),
+    ).toHaveCount(1);
+
+    // Choose a project from the old key's list before replacing the key. The
+    // choice was produced by the old key's completed fetch, so it must not be
+    // persisted as the new key's deploy target.
+    await page.locator("#flutterflow-projects-select").selectOption("proj-def-456");
+
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // No target survives the key replacement: the old-key choice is not the
+    // new key's target, and no later read can point at it.
+    const storedAfter = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow_project_id"),
+    );
+    expect(storedAfter).toBeNull();
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // The editor requires a fresh selection: the list loaded for the new key,
+    // but nothing is selected from it.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#flutterflow-projects-select")).toHaveValue("");
+    await page.evaluate(() => window.closeApiKeysModal());
+
+    // The deploy dialog likewise preselects nothing: a target may only come
+    // from the list its own completed fetch produced for the current key.
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(page.locator("#confirm-project-select")).toHaveValue("");
+  });
+
+  test("a stored target the current key's completed list omits is not deployable", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    // Establish a stored, confirmed target.
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+
+    // The key's project list changes: a later completed response for the same
+    // key no longer lists the stored target.
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-def-456", project: { name: "Test Project Beta" } },
+          ],
+        }),
+      }),
+    });
+
+    // The real deploy dialog's completed fetch does not list the stored
+    // target, so it must not be preselected...
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(
+      page.locator('#confirm-project-select option[value="proj-def-456"]'),
+    ).toHaveCount(1);
+    await expect(page.locator("#confirm-project-select")).toHaveValue("");
+
+    // ...and confirming must fail before any push: the stored target lost its
+    // confirmation with the completed list, so no deploy may target it.
+    await page.evaluate(() => window.confirmCommitToFlutterFlow());
+    const terminal = page.locator("#commit-terminal-modal");
+    await expect(terminal).toBeVisible();
+    await expect(terminal).toContainText("not confirmed");
+    await expect(terminal).not.toContainText(PROJ);
+  });
+
   test("removing the key flips the connection card back to not-configured", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, signedInContext());
@@ -312,6 +707,467 @@ test.describe("STU-384 account connection", () => {
     await expect(page.locator("#acct-ff-status")).not.toContainText("••••");
   });
 
+  test("a previewed key's leftover choice cannot erase the stored target on save", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // The preview key answers with a distinct list: its only project is
+    // unmistakably the preview key's, never the configured key's. listProjects
+    // carries the key in its Authorization header, so the route can tell the
+    // two requests apart.
+    const previewList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-prev-999", project: { name: "Preview Only" } },
+          ],
+        }),
+      });
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      const auth = route.request().headers()["authorization"] || "";
+      await route.fulfill(auth.includes(NEW_KEY) ? previewList() : sampleProjectList());
+    });
+
+    // Re-open the editor and preview a different key without saving it: the
+    // blur fetch fills the dropdown with the preview key's list, and picking
+    // from it binds that choice to the preview key — not the configured one.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await expect(
+      page.locator('#flutterflow-projects-select option[value="proj-prev-999"]'),
+    ).toHaveCount(1);
+    await page
+      .locator("#flutterflow-projects-select")
+      .selectOption("proj-prev-999");
+
+    // Clear the key input and save: the configured key stays the stored one,
+    // so the dropdown's preview choice is not a selection for it. The stored
+    // target must survive instead of being cleared with the preview.
+    await input.fill("");
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    const storedAfter = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow_project_id"),
+    );
+    expect(storedAfter).not.toBeNull();
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // The deploy dialog must still offer the stored project: its completed
+    // fetch re-confirms the target the preview almost erased.
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await expect(page.locator("#confirm-project-select")).toHaveValue(PROJ);
+  });
+
+  test("a late dropdown fetch cannot overwrite a newer failed connection check", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // From here the next projects request (the editor's dropdown fetch) is
+    // held pending; the connection check issued behind it answers 401.
+    let releaseHeld;
+    let markHeld;
+    const held = new Promise((resolve) => {
+      markHeld = resolve;
+    });
+    let heldUsed = false;
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      if (!heldUsed) {
+        heldUsed = true;
+        markHeld();
+        await new Promise((resolve) => {
+          releaseHeld = resolve;
+        });
+        await route.fulfill(sampleProjectList());
+        return;
+      }
+      await route.fulfill(err(401, { error: "unauthorized" }));
+    });
+
+    // Open the editor: its dropdown fetch is the held request.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await held;
+
+    // The connection check issues behind the held fetch and settles first:
+    // its 401 is the newest shared outcome.
+    await page.evaluate(() => window.validateFlutterFlowConnection());
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "API key rejected (401/403) — re-enter your key",
+    );
+
+    // Release the older fetch. Its options still populate the dropdown (its
+    // own surface), but its connection outcome is stale: it must not flip the
+    // card back to connected or re-confirm the stored target over the 401.
+    const fetchSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    releaseHeld();
+    await fetchSettled;
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "API key rejected (401/403) — re-enter your key",
+    );
+    await expect(page.locator("#acct-ff-status")).not.toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a direct commit issued while the post-reload list is pending still deploys the saved project", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Reload with the startup check held pending: storage has the saved key +
+    // project but the process-local confirmation binding is still empty.
+    const gate = await gateProductionListProjects(page);
+    gate.holdNext();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await gate.waitForHeld();
+
+    // A direct commit must not refuse the saved target merely because the
+    // binding is unpopulated: it verifies the stored project against the
+    // current key's real list and proceeds. The proof is the deploy reaching
+    // the remote pipeline — exportCode is the first call past the target
+    // gate, and a refused target never produces it. The fixtures' fake
+    // project source fails the later pubspec merge; that downstream error is
+    // fine, as long as it is not the target-gate refusal.
+    const exported = page.waitForRequest(ENDPOINTS.flutterFlowExportCode);
+    const result = await page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    await exported;
+    expect(result.error || "").not.toMatch(/no confirmed|not confirmed/i);
+    gate.release();
+  });
+
+  test("a stale deploy verification cannot revive a target a newer response removed", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // A list that omits the stored project: the startup check and the later
+    // superseding check both answer with it, while the held deploy
+    // verification answers with the full list.
+    const omittingList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-def-456", project: { name: "Beta Only" } },
+          ],
+        }),
+      });
+    let releaseVerify;
+    let markVerify;
+    const verifyHeld = new Promise((resolve) => {
+      markVerify = resolve;
+    });
+    let seen = 0;
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      seen += 1;
+      if (seen === 2) {
+        markVerify();
+        await new Promise((resolve) => {
+          releaseVerify = resolve;
+        });
+        await route.fulfill(sampleProjectList());
+        return;
+      }
+      await route.fulfill(omittingList());
+    });
+
+    // Reload: the process-local binding starts empty, and the startup check
+    // (request 1) does not re-confirm the omitted stored target.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+
+    // A direct commit issues its own verification (request 2) and waits.
+    const commitPromise = page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    await verifyHeld;
+
+    // A newer check (request 3) settles first with a list that omits the
+    // stored target — the newest applied outcome.
+    await page.evaluate(() => window.validateFlutterFlowConnection());
+
+    // The older verification now lands with a list that still contains the
+    // project. It must not revive the target the newer outcome refused.
+    releaseVerify();
+    const result = await commitPromise;
+    expect(result.error || "").toMatch(/no confirmed|not confirmed/i);
+  });
+
+  test("a project-scoped key without list permission keeps its stored deploy target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    // Establish a stored target while the key can list projects.
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // The key becomes scoped to its single project: every listProjects call
+    // now answers 403, but the key can still reach the project itself.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      await route.fulfill(err(403, { error: "forbidden" }));
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+
+    // A direct commit must not refuse the saved target for lack of a list:
+    // the scoped denial cannot disprove it, so the deploy proceeds and the
+    // push itself decides reachability.
+    const exported = page.waitForRequest(ENDPOINTS.flutterFlowExportCode);
+    const result = await page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    await exported;
+    expect(result.error || "").not.toMatch(/no confirmed|not confirmed/i);
+  });
+
+  test("an old endpoint's response cannot fill the deploy dialog", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Hold the deploy dialog's production fetch so the endpoint can change
+    // while it is in flight.
+    const gate = await gateProductionListProjects(page);
+    gate.holdNext();
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await gate.waitForHeld();
+
+    // Switch to staging while the production response is pending.
+    await page.evaluate(() =>
+      window.setFlutterFlowEndpoint("https://api.flutterflow.io/v2-staging/"),
+    );
+
+    // Release the stale production response: its options belong to the old
+    // endpoint, so the dialog must repopulate from the new endpoint instead
+    // of offering undeployable production projects.
+    const fetchSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await fetchSettled;
+
+    await expect(
+      page.locator('#confirm-project-select option[value="proj-stg-789"]'),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#confirm-project-select option[value="${PROJ}"]`),
+    ).toHaveCount(0);
+  });
+
+  test("a deploy-dialog fetch cannot strand the connection card on checking", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Hold the startup check (first request after reload). The deploy
+    // dialog's fetch settles first and must not claim the connection outcome
+    // — it writes no account status, so doing so would leave the older check
+    // unable to settle the card.
+    let releaseCheck;
+    let markCheck;
+    const checkHeld = new Promise((resolve) => {
+      markCheck = resolve;
+    });
+    let seen = 0;
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      seen += 1;
+      if (seen === 1) {
+        markCheck();
+        await new Promise((resolve) => {
+          releaseCheck = resolve;
+        });
+      }
+      await route.fulfill(sampleProjectList());
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await checkHeld;
+
+    // The dialog's fetch (request 2) resolves while the check is pending.
+    const modalSettled = page.waitForResponse(
+      ENDPOINTS.flutterFlowListProjects,
+    );
+    await page.evaluate(() => window.__CCC_OPEN_COMMIT_CONFIRM__());
+    await modalSettled;
+
+    // The older check now lands: its status must still reach the card.
+    releaseCheck();
+    await page.evaluate(() => window.closeCommitConfirmModal());
+    await openAccount(page);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a preview key's failure cannot mark the saved account rejected", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    // Requests for the unsaved preview key are denied; the saved key keeps
+    // answering normally.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      const auth = route.request().headers()["authorization"] || "";
+      await route.fulfill(
+        auth.includes(NEW_KEY) ? err(401, { error: "unauthorized" }) : sampleProjectList(),
+      );
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Preview a different key without saving: its blur fetch is denied, but
+    // the outcome describes the preview key — not the saved account — so the
+    // card must stay connected.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    const previewSettled = page.waitForResponse(
+      ENDPOINTS.flutterFlowListProjects,
+    );
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await previewSettled;
+    await page.waitForTimeout(150);
+
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+  });
+
+  test("a key saved mid-deploy cannot pair the old key with a new target", async ({ page }) => {
+    await seedSession(page);
+    const newKeyList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-b-789", project: { name: "New Key Project" } },
+          ],
+        }),
+      });
+    await applyDefaultRoutes(page, signedInContext());
+    // The replacement key answers with its own project's list.
+    await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+      const auth = route.request().headers()["authorization"] || "";
+      await route.fulfill(
+        auth.includes(NEW_KEY) ? newKeyList() : sampleProjectList(),
+      );
+    });
+    let exportCalls = 0;
+    await page.route(ENDPOINTS.flutterFlowExportCode, async (route) => {
+      exportCalls += 1;
+      await route.fulfill(projectExport());
+    });
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Capture the old stored key's ciphertext, then replace the credential
+    // pair through the app's real save path (input blur fires the preview
+    // fetch, the select change binds the new project to the new key, and
+    // saveApiKeys persists both — the deploy progress overlay would block a
+    // UI save, so the app's own handlers are driven directly).
+    const oldCipher = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow"),
+    );
+    await page.evaluate((key) => {
+      const input = document.getElementById("flutterflow-api-key-input");
+      input.value = key;
+      input.dispatchEvent(new FocusEvent("blur"));
+    }, NEW_KEY);
+    await page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    await page.evaluate((project) => {
+      const select = document.getElementById("flutterflow-projects-select");
+      select.value = project;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }, "proj-b-789");
+    await page.evaluate(() => window.saveApiKeys());
+
+    // Model the save landing mid-deploy: the deploy's first credential read
+    // still returns the pre-save ciphertext (the captured key), while every
+    // later read — the target lookup's own reads — sees the saved pair.
+    await page.evaluate((cipher) => {
+      const orig = localStorage.getItem.bind(localStorage);
+      let reads = 0;
+      localStorage.getItem = (k) =>
+        k === "ccc_api_key_flutterflow" && ++reads === 1 ? cipher : orig(k);
+    }, oldCipher);
+
+    // The deploy must refuse: its captured key belongs to a different
+    // credential identity than the saved target now confirms — pushing
+    // would pair the old key with the new key's project.
+    const result = await page.evaluate(() =>
+      window.commitToFlutterFlow(
+        "class TestWidget extends StatelessWidget {}",
+        "test_widget.dart",
+      ),
+    );
+    expect(result.error || "").toMatch(/no confirmed|not confirmed/i);
+    expect(exportCalls).toBe(0);
+  });
+
   test("signed-out entry can still save the key without a connection card", async ({ page }) => {
     // No session seeded: the account view shows the signed-out prompt.
     await applyDefaultRoutes(page, {
@@ -325,7 +1181,8 @@ test.describe("STU-384 account connection", () => {
 
     // The canonical editor stays reachable from the home settings entry point.
     await page.locator("header.topbar .brand").click();
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#api-keys-modal")).toBeVisible();
     await page.locator("#flutterflow-api-key-input").fill(KEY);
     await page.locator("#api-keys-modal .bg-blue-500").click();
@@ -333,7 +1190,8 @@ test.describe("STU-384 account connection", () => {
 
     // Reload reads the saved key from the same storage (one value).
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#flutterflow-api-key-input")).toHaveAttribute(
       "placeholder",
       /Key saved/,

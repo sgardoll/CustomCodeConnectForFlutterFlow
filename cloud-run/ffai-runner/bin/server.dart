@@ -586,9 +586,6 @@ List<String> _normalizeSdkPackages(Object? value, String field) {
   if (value.length > maxDependenciesPerRequest) {
     throw FormatException('Too many entries in verification.$field.');
   }
-  if (value.length > maxDependenciesPerRequest) {
-    throw const FormatException('Too many entries in verification.sdkPackages.');
-  }
 
   final result = <String>{};
   for (final raw in value) {

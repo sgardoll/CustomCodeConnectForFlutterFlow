@@ -30,6 +30,7 @@ import {
   isDeleteAccountSupported,
   DELETE_ACCOUNT_MESSAGE,
 } from "./accountAccess.js";
+import { MAGIC_LINK_SUCCESS_CODE } from "./authMagicLink.js";
 
 // Minimal in-memory Storage stand-in so the logic is hermetically testable with
 // no browser, network, clock dependency, or host-timezone coupling.
@@ -99,7 +100,10 @@ test("criterion 1: sign out clears the session but never scrubs identity or usag
 test("criterion 2: a successful reauth reports pending then sent with the actual response", async () => {
   const states = [];
   const send = createSendLinkController({
-    sendLink: async () => ({ code: "sent", message: "Check your email" }),
+    sendLink: async () => ({
+      code: MAGIC_LINK_SUCCESS_CODE,
+      message: "Check your email",
+    }),
     getEmail: () => "a@b.com",
     onState: (state) => states.push(state),
   });
@@ -108,7 +112,56 @@ test("criterion 2: a successful reauth reports pending then sent with the actual
   assert.equal(result.status, "sent");
   assert.equal(result.data.message, "Check your email");
   assert.equal(states[states.length - 1].status, "sent");
-  assert.equal(states[states.length - 1].data.code, "sent");
+  assert.equal(states[states.length - 1].data.code, MAGIC_LINK_SUCCESS_CODE);
+});
+
+test("criterion 2: a resolved 200 that reports a send failure is an error, never 'sent'", async () => {
+  const states = [];
+  const send = createSendLinkController({
+    sendLink: async () => ({
+      code: "SEND_FAILED",
+      message: "We could not send the link right now.",
+    }),
+    getEmail: () => "a@b.com",
+    onState: (state) => states.push(state),
+  });
+  const result = await send();
+  assert.equal(states[0].status, "pending");
+  assert.equal(result.status, "error");
+  // The server's own message is preserved so the row can say why.
+  assert.equal(result.error.message, "We could not send the link right now.");
+  assert.equal(states[states.length - 1].status, "error");
+  // A resolved HTTP request is not proof of a sent link: no state may claim it.
+  assert.ok(
+    !states.some((state) => state.status === "sent"),
+    "a failed send must never render as sent",
+  );
+});
+
+test("criterion 2: a resolved 200 with success:false is an error even without a code", async () => {
+  const states = [];
+  const send = createSendLinkController({
+    sendLink: async () => ({ success: false, error: "Mail delivery failed" }),
+    getEmail: () => "a@b.com",
+    onState: (state) => states.push(state),
+  });
+  const result = await send();
+  assert.equal(result.status, "error");
+  assert.equal(result.error.message, "Mail delivery failed");
+  assert.equal(states[states.length - 1].status, "error");
+});
+
+test("criterion 2: a genuine success body still reports sent", async () => {
+  const states = [];
+  const send = createSendLinkController({
+    sendLink: async () => ({ success: true, message: "Magic link sent" }),
+    getEmail: () => "a@b.com",
+    onState: (state) => states.push(state),
+  });
+  const result = await send();
+  assert.equal(result.status, "sent");
+  assert.equal(result.data.message, "Magic link sent");
+  assert.equal(states[states.length - 1].status, "sent");
 });
 
 test("criterion 2: a failed reauth surfaces the real failure, not a canned success", async () => {
@@ -151,7 +204,7 @@ test("criterion 2: a duplicate reauth while one is in flight is refused and send
   } finally {
     // Always settle the in-flight request so a failing assertion cannot strand
     // a forever-pending promise and cancel the sibling tests.
-    release({ code: "sent" });
+    release({ code: MAGIC_LINK_SUCCESS_CODE });
   }
   firstResult = await first;
   assert.equal(firstResult.status, "sent");
@@ -163,7 +216,7 @@ test("criterion 2: after a settle the controller accepts the next send", async (
   const send = createSendLinkController({
     sendLink: async () => {
       sendLinkCalls += 1;
-      return { code: "sent" };
+      return { code: MAGIC_LINK_SUCCESS_CODE };
     },
     getEmail: () => "a@b.com",
     onState: () => {},

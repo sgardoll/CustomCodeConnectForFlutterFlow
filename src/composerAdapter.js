@@ -36,10 +36,10 @@ export const SUGGESTION_MIN_CHARS = 6;
 /**
  * STU-445 hero demo: the composer holds for a beat with the blinking orange
  * caret, then types the shipped example prompt in behind it. The per-character
- * pace keeps the whole pass well under the 5s an asserting caller will wait.
+ * pace comes from the authored HTML, independent of test assertion timeouts.
  */
-const HERO_DEMO_HOLD_MS = 600;
-const HERO_DEMO_TYPE_MS = 45;
+const HERO_DEMO_HOLD_MS = 5200;
+const HERO_DEMO_TYPE_MS = 73;
 
 // The hero demo's media-query listener is tracked per composer element so a
 // repeat initComposer on the same DOM replaces the previous instance's
@@ -275,6 +275,8 @@ export function initComposer({ onSubmit }) {
       heroDemoTimer = null;
     }
     composer.classList.remove("is-demo-typing");
+    composer.classList.remove("is-demo-streaming");
+    field.placeholder = "Describe the widget or action you need";
     syncSend();
   }
 
@@ -287,6 +289,7 @@ export function initComposer({ onSubmit }) {
     if (hash && hash !== "home") return;
     heroDemoTyping = true;
     heroDemoOwned = true;
+    field.placeholder = "";
     field.value = "";
     mirrorTyped();
     syncSend();
@@ -298,11 +301,30 @@ export function initComposer({ onSubmit }) {
       field.value = shippedPrompt.slice(0, index);
       mirrorTyped();
       if (index >= shippedPrompt.length) {
-        // The prompt is fully written: retire the caret and hand the field
-        // back exactly as the markup shipped it — as the field's own
-        // content, editable in place like the shipped default.
-        heroDemoOwned = false;
-        cancelHeroDemo();
+        // The prompt is fully written: retire the typing caret and let the
+        // demo stream its follow-on suggestion, then hand the field back
+        // exactly as the markup shipped it — as the field's own content,
+        // editable in place like the shipped default.
+        composer.classList.remove("is-demo-typing");
+        heroDemoTimer = setTimeout(() => {
+          const suffix = session.resolve(field.value);
+          if (!suffix) { heroDemoOwned = false; cancelHeroDemo(); return; }
+          showSuggestionUi(suffix);
+          composer.classList.add("is-demo-streaming");
+          suggest.textContent = "";
+          const words = suffix.split(/(?=\s)/).filter(Boolean);
+          let word = 0;
+          const stream = () => {
+            if (!heroDemoTyping) return;
+            const span = document.createElement("span");
+            span.textContent = words[word++];
+            suggest.appendChild(span);
+            span.animate?.([{ opacity:0 }, { opacity:1 }], { duration:240, easing:"cubic-bezier(0.4,0,0.2,1)" });
+            if (word < words.length) heroDemoTimer = setTimeout(stream, 130);
+            else { heroDemoOwned = false; cancelHeroDemo(); }
+          };
+          stream();
+        }, 1000);
       } else {
         syncSend();
         heroDemoTimer = setTimeout(typeNext, HERO_DEMO_TYPE_MS);
@@ -326,6 +348,9 @@ export function initComposer({ onSubmit }) {
   // Enter stays inert until a real input event hands the text to the user.
   function finishHeroDemo() {
     if (!heroDemoTyping) return;
+    // The demo's streamed suggestion is demo-owned too: a takeover drops the
+    // ghost along with the writer, whatever branch below it takes.
+    clearSuggestion();
     if (!field.value.length || field.selectionStart !== field.selectionEnd) {
       heroDemoFrozen = true;
       cancelHeroDemo();
@@ -343,11 +368,17 @@ export function initComposer({ onSubmit }) {
   // Not a user takeover, so an in-flight selection doesn't veto the restore.
   function onReducedMotionChange() {
     if (!reduceMotion.matches) return;
-    if (!heroDemoTyping) return;
-    field.value = shippedPrompt;
-    mirrorTyped();
-    heroDemoOwned = false;
-    cancelHeroDemo();
+    if (heroDemoTyping) {
+      field.value = shippedPrompt;
+      clearSuggestion();
+      heroDemoOwned = false;
+      cancelHeroDemo();
+    }
+    if (chipTyping) {
+      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
+      mirrorTyped();
+      cancelChipTyping();
+    }
   }
 
   // --- Chip fill (prototype fillChip, lines 1816-1829) ---
@@ -552,9 +583,20 @@ export function initComposer({ onSubmit }) {
   });
 
   function dispose() {
+    cancelTyping();
     reduceMotion.removeEventListener("change", onReducedMotionChange);
     demoMotionRegistrations.delete(composer);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
   }
+
+  function cancelTyping() {
+    cancelHeroDemo();
+    cancelChipTyping();
+    clearTimeout(debounceTimer);
+  }
+
+  function onVisibilityChange() { if (document.hidden) cancelTyping(); }
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
   // Initial state mirrors the shipped example prompt; the send control
   // reflects it. The shipped default value stays exactly as authored.
@@ -574,5 +616,6 @@ export function initComposer({ onSubmit }) {
     },
     // Removes the reduced-motion listener; for a genuine composer teardown.
     dispose,
+    cancelTyping,
   };
 }

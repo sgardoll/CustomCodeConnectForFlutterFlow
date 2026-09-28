@@ -199,14 +199,35 @@ function parseFlowSourceDirective(value) {
   if (end === -1) return { key: null, value: null, version: null };
 
   // Split the members on top-level commas only - a comma inside a nested map
-  // or a quote belongs to the member, not the map.
+  // or a quote belongs to the member, not the map. Comments are excised
+  // first: a `#` preceded by whitespace runs to end of line (a wrapped map
+  // can carry comments between members), and its text is neither a member
+  // nor structure - left in place it would read as an unreadable member.
   const inner = text.slice(1, end);
+  let cleaned = "";
+  {
+    let quote = null;
+    for (let i = 0; i < inner.length; i += 1) {
+      const char = inner[i];
+      if (quote) {
+        cleaned += char;
+        if (char === quote) quote = null;
+        continue;
+      }
+      if (char === "#" && (i === 0 || /\s/.test(inner[i - 1]))) {
+        while (i < inner.length && inner[i] !== "\n") i += 1;
+        continue;
+      }
+      if (char === "'" || char === '"') quote = char;
+      cleaned += char;
+    }
+  }
   const segments = [];
   let quote = null;
   let depth = 0;
   let start = 0;
-  for (let i = 0; i < inner.length; i += 1) {
-    const char = inner[i];
+  for (let i = 0; i < cleaned.length; i += 1) {
+    const char = cleaned[i];
     if (quote) {
       if (char === quote) quote = null;
       continue;
@@ -218,11 +239,11 @@ function parseFlowSourceDirective(value) {
     if (char === "{" || char === "[") depth += 1;
     else if (char === "}" || char === "]") depth -= 1;
     else if (char === "," && depth === 0) {
-      segments.push(inner.slice(start, i));
+      segments.push(cleaned.slice(start, i));
       start = i + 1;
     }
   }
-  segments.push(inner.slice(start));
+  segments.push(cleaned.slice(start));
 
   let version = null;
   for (const segment of segments) {
@@ -253,6 +274,13 @@ function findFlowMappingEnd(text) {
     const char = text[i];
     if (quote) {
       if (char === quote) quote = null;
+      continue;
+    }
+    // A `#` preceded by whitespace starts a YAML comment that runs to end of
+    // line - a `}` inside it is text, not structure, so a comment like
+    // `# close } later` must not end the map before its members are read.
+    if (char === "#" && (i === 0 || /\s/.test(text[i - 1]))) {
+      while (i < text.length && text[i] !== "\n") i += 1;
       continue;
     }
     if (char === "'" || char === '"') {

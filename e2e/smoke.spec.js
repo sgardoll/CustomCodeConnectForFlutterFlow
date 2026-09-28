@@ -43,6 +43,9 @@ test.describe("Redesigned hero landing and composer", () => {
   });
 
   test("shows the hero landing and the composer", async ({ page }) => {
+    // Reduced motion presents the completed example immediately; normal
+    // motion is verified against the source's 5200ms hold + 73ms characters.
+    await page.emulateMedia({ reducedMotion: "reduce" });
     await applyDefaultRoutes(page, {
       [ENDPOINTS.identity]: guestIdentity(),
       [ENDPOINTS.getSubscription]: freeSubscription(),
