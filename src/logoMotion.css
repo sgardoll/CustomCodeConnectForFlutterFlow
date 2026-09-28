@@ -9,10 +9,10 @@
   position: relative;
   width: 100%;
   height: 88px;
-  margin: 0 0 12px;
+  margin: 0 0 24px;
   overflow: hidden;
   pointer-events: none;
-  color: var(--fg);
+  color: var(--muted);
 }
 
 .loop-mark,
@@ -72,7 +72,7 @@
 @media (max-width: 920px) {
   .pipeline-glyph.logo-loop {
     height: 66px;
-    margin-bottom: 8px;
+    margin-bottom: 16px;
   }
   .loop-mark {
     width: 40px;

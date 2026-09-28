@@ -36,10 +36,10 @@ export const SUGGESTION_MIN_CHARS = 6;
 /**
  * STU-445 hero demo: the composer holds for a beat with the blinking orange
  * caret, then types the shipped example prompt in behind it. The per-character
- * pace keeps the whole pass well under the 5s an asserting caller will wait.
+ * pace comes from the authored HTML, independent of test assertion timeouts.
  */
-const HERO_DEMO_HOLD_MS = 600;
-const HERO_DEMO_TYPE_MS = 45;
+const HERO_DEMO_HOLD_MS = 5200;
+const HERO_DEMO_TYPE_MS = 73;
 
 /** A prompt can only submit when it has non-whitespace text and the pipeline is idle. */
 export function canSubmit(value, isBusy) {
@@ -260,6 +260,8 @@ export function initComposer({ onSubmit }) {
       heroDemoTimer = null;
     }
     composer.classList.remove("is-demo-typing");
+    composer.classList.remove("is-demo-streaming");
+    field.placeholder = "Describe the widget or action you need";
     syncSend();
   }
 
@@ -271,6 +273,7 @@ export function initComposer({ onSubmit }) {
     const hash = window.location.hash.replace(/^#/, "");
     if (hash && hash !== "home") return;
     heroDemoTyping = true;
+    field.placeholder = "";
     field.value = "";
     mirrorTyped();
     syncSend();
@@ -284,7 +287,26 @@ export function initComposer({ onSubmit }) {
       if (index >= shippedPrompt.length) {
         // The prompt is fully written: retire the caret and hand the field
         // back exactly as the markup shipped it.
-        cancelHeroDemo();
+        composer.classList.remove("is-demo-typing");
+        heroDemoTimer = setTimeout(() => {
+          const suffix = session.resolve(field.value);
+          if (!suffix) { cancelHeroDemo(); return; }
+          showSuggestionUi(suffix);
+          composer.classList.add("is-demo-streaming");
+          suggest.textContent = "";
+          const words = suffix.split(/(?=\s)/).filter(Boolean);
+          let word = 0;
+          const stream = () => {
+            if (!heroDemoTyping) return;
+            const span = document.createElement("span");
+            span.textContent = words[word++];
+            suggest.appendChild(span);
+            span.animate?.([{ opacity:0 }, { opacity:1 }], { duration:240, easing:"cubic-bezier(0.4,0,0.2,1)" });
+            if (word < words.length) heroDemoTimer = setTimeout(stream, 130);
+            else cancelHeroDemo();
+          };
+          stream();
+        }, 1000);
       } else {
         syncSend();
         heroDemoTimer = setTimeout(typeNext, HERO_DEMO_TYPE_MS);
@@ -298,10 +320,17 @@ export function initComposer({ onSubmit }) {
   // prompt with the caret retired — the same end state as a finished demo.
   // Text the user has taken over (heroDemoTyping already false) is untouched.
   function onReducedMotionChange() {
-    if (!reduceMotion.matches || !heroDemoTyping) return;
-    field.value = shippedPrompt;
-    mirrorTyped();
-    cancelHeroDemo();
+    if (!reduceMotion.matches) return;
+    if (heroDemoTyping) {
+      field.value = shippedPrompt;
+      clearSuggestion();
+      cancelHeroDemo();
+    }
+    if (chipTyping) {
+      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
+      mirrorTyped();
+      cancelChipTyping();
+    }
   }
 
   // --- Chip fill (prototype fillChip, lines 1816-1829) ---
@@ -473,8 +502,20 @@ export function initComposer({ onSubmit }) {
   reduceMotion.addEventListener("change", onReducedMotionChange);
 
   function dispose() {
+    cancelTyping();
     reduceMotion.removeEventListener("change", onReducedMotionChange);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("pagehide", dispose);
   }
+
+  function cancelTyping() {
+    cancelHeroDemo();
+    cancelChipTyping();
+    clearTimeout(debounceTimer);
+  }
+
+  function onVisibilityChange() { if (document.hidden) cancelTyping(); }
+  document.addEventListener("visibilitychange", onVisibilityChange);
 
   window.addEventListener("pagehide", dispose);
 
@@ -496,5 +537,6 @@ export function initComposer({ onSubmit }) {
     },
     // Removes the reduced-motion listener; also runs on pagehide.
     dispose,
+    cancelTyping,
   };
 }

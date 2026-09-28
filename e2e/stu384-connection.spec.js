@@ -325,7 +325,8 @@ test.describe("STU-384 account connection", () => {
 
     // The canonical editor stays reachable from the home settings entry point.
     await page.locator("header.topbar .brand").click();
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#api-keys-modal")).toBeVisible();
     await page.locator("#flutterflow-api-key-input").fill(KEY);
     await page.locator("#api-keys-modal .bg-blue-500").click();
@@ -333,7 +334,8 @@ test.describe("STU-384 account connection", () => {
 
     // Reload reads the saved key from the same storage (one value).
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.getByRole('button', { name:'API keys & connection', exact:true }).click();
     await expect(page.locator("#flutterflow-api-key-input")).toHaveAttribute(
       "placeholder",
       /Key saved/,

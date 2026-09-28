@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
+import { applyDefaultRoutes } from "./fixtures/apiFixtures.js";
 
 test.beforeEach(async ({ page }) => {
+  await applyDefaultRoutes(page);
   await page.addInitScript(() => {
     localStorage.setItem("hasSeenWalkthrough", "true");
   });

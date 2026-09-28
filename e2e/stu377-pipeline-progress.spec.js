@@ -152,6 +152,8 @@ test.describe("Generation progress binds to real stage events", () => {
     // Stages that actually ran are reachable, semantic buttons.
     await expect(stage(page, 1)).toHaveJSProperty("tagName", "BUTTON");
     await expect(stage(page, 1)).toBeEnabled();
+    // Canonical Step N of 3 is the compact disclosure for stage inspection.
+    await page.locator('#progress-stage-count').click();
     await stage(page, 1).click();
     await expect(stage(page, 1)).toHaveAttribute("aria-pressed", "true");
     await expect(page.locator("#progress-title-text")).toContainText("Prompt understood");
@@ -284,7 +286,9 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.locator('#composer-settings-model').selectOption('anthropic/claude-opus-5');
+    await page.locator('#composer-settings-modal').getByRole('button', { name:'Done',exact:true }).click();
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);
@@ -335,7 +339,9 @@ test.describe("Recoverable failure states", () => {
       );
     });
     await openHome(page, { [ENDPOINTS.getSubscription]: professionalSubscription() });
-    await page.locator("#code-generator-model").selectOption("anthropic/claude-opus-5");
+    await page.getByRole('button', { name:'Generation settings', exact:true }).click();
+    await page.locator('#composer-settings-model').selectOption('anthropic/claude-opus-5');
+    await page.locator('#composer-settings-modal').getByRole('button', { name:'Done',exact:true }).click();
     let generatorCalls = 0;
     await page.route(ENDPOINTS.pipeline, async (route) => {
       const step = stepOf(route);
@@ -691,7 +697,7 @@ test.describe("Holding window matches the canonical pipeline view", () => {
       const fg = getComputedStyle(tokenProbe).color;
       tokenProbe.remove();
       const description = document.querySelector("#progress-description-text");
-      const columns = style("#pipeline-progress")?.gridTemplateColumns ?? "";
+      const columns = style("#main-stage-container")?.gridTemplateColumns ?? "";
       return {
         columns,
         columnCount: trackCount(columns),
@@ -808,7 +814,7 @@ test.describe("Holding window matches the canonical pipeline view", () => {
     // active stage button must be reached before the recap's Edit prompt:
     // the workflow is what is displayed first at this width, and CSS order
     // must not make focus jump backward against the screen.
-    await page.evaluate(() => document.activeElement?.blur());
+    await page.locator('#progress-stage-count').focus();
     const focusOrder = await tabFocusOrder(page, ["pdot-1", "pipeline-edit-prompt"]);
     expect(focusOrder).toContain("pdot-1");
     expect(focusOrder).toContain("pipeline-edit-prompt");
