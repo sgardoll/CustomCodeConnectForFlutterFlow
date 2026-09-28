@@ -150,7 +150,7 @@ test("navigation away stops rendering and returning does not accumulate raf loop
   const runningAtStart = await page.evaluate(() => window.__heroField?.isRunning());
   expect(runningAtStart, "field should be running on the home view").toBe(true);
 
-  await page.click('a[data-view="account"]');
+  await page.click("#topbar-avatar");
   await expect(page.locator("#account-view")).toBeVisible();
   await page.waitForTimeout(300);
 
@@ -170,7 +170,7 @@ test("navigation away stops rendering and returning does not accumulate raf loop
   });
   expect(rafCountAway, "no new animation frames should be requested while home is hidden").toBe(0);
 
-  await page.click('a[data-view="home"]');
+  await page.click("header.topbar .brand");
   await expect(page.locator("#home-view")).toBeVisible();
   await page.waitForTimeout(300);
 

@@ -33,6 +33,14 @@ export const LOCAL_SUGGESTIONS = [
 export const SUGGESTION_DEBOUNCE_MS = 220;
 export const SUGGESTION_MIN_CHARS = 6;
 
+/**
+ * STU-445 hero demo: the composer holds for a beat with the blinking orange
+ * caret, then types the shipped example prompt in behind it. The per-character
+ * pace keeps the whole pass well under the 5s an asserting caller will wait.
+ */
+const HERO_DEMO_HOLD_MS = 600;
+const HERO_DEMO_TYPE_MS = 45;
+
 /** A prompt can only submit when it has non-whitespace text and the pipeline is idle. */
 export function canSubmit(value, isBusy) {
   return Boolean(value && value.trim()) && !isBusy;
@@ -122,15 +130,25 @@ export function initComposer({ onSubmit }) {
   let composing = false; // IME composition: suggestions must not fight it
   let submitting = false; // duplicate-submission guard
   let chipTyping = false; // a chip still typing its prompt owns the field
+  let heroDemoTyping = false; // the opening demo still typing the shipped prompt
   let attachmentsPending = false; // image uploads in flight own the run's attachments
   let debounceTimer = null;
   let chipTimer = null;
+  let heroDemoTimer = null;
+  // The prompt the hero demo types in: whatever the markup shipped. Captured
+  // before the demo clears the field so the demo can never invent its own copy.
+  const shippedPrompt = field.value;
+
+  function isBusy() {
+    return submitting || chipTyping || heroDemoTyping || attachmentsPending;
+  }
 
   // Prototype sync(): the send control follows the prompt and the pipeline.
-  // Chip typing and in-flight attachment uploads count as busy: a submit must
-  // never carry a half-typed prompt or run without a just-attached image.
+  // Chip typing, the hero demo and in-flight attachment uploads count as busy:
+  // a submit must never carry a half-typed prompt or run without a
+  // just-attached image.
   function syncSend() {
-    send.disabled = !canSubmit(field.value, submitting || chipTyping || attachmentsPending);
+    send.disabled = !canSubmit(field.value, isBusy());
   }
 
   function mirrorTyped() {
@@ -218,7 +236,7 @@ export function initComposer({ onSubmit }) {
   }
 
   async function doSubmit() {
-    if (!canSubmit(field.value, submitting || chipTyping || attachmentsPending)) return;
+    if (!canSubmit(field.value, isBusy())) return;
     clearSuggestion();
     setBusy(true);
     try {
@@ -226,6 +244,53 @@ export function initComposer({ onSubmit }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  // --- Hero demo typing (STU-445) ---
+  // The prototype's hero opens on an empty composer: the shipped example
+  // prompt types itself in behind the blinking orange caret, then the field
+  // holds the prompt. Any real interaction takes the field over, and the demo
+  // never overwrites text the user owns.
+
+  function cancelHeroDemo() {
+    if (!heroDemoTyping) return;
+    heroDemoTyping = false;
+    if (heroDemoTimer) {
+      clearTimeout(heroDemoTimer);
+      heroDemoTimer = null;
+    }
+    composer.classList.remove("is-demo-typing");
+    syncSend();
+  }
+
+  function startHeroDemo() {
+    if (reduceMotion.matches) return;
+    if (!shippedPrompt.trim()) return;
+    // Only the home surface owns the hero composer: a deep link straight to
+    // Account or Plans must not type behind the hidden view.
+    const hash = window.location.hash.replace(/^#/, "");
+    if (hash && hash !== "home") return;
+    heroDemoTyping = true;
+    field.value = "";
+    mirrorTyped();
+    syncSend();
+    composer.classList.add("is-demo-typing");
+    let index = 0;
+    const typeNext = () => {
+      if (!heroDemoTyping) return;
+      index += 1;
+      field.value = shippedPrompt.slice(0, index);
+      mirrorTyped();
+      if (index >= shippedPrompt.length) {
+        // The prompt is fully written: retire the caret and hand the field
+        // back exactly as the markup shipped it.
+        cancelHeroDemo();
+      } else {
+        syncSend();
+        heroDemoTimer = setTimeout(typeNext, HERO_DEMO_TYPE_MS);
+      }
+    };
+    heroDemoTimer = setTimeout(typeNext, HERO_DEMO_HOLD_MS);
   }
 
   // --- Chip fill (prototype fillChip, lines 1816-1829) ---
@@ -260,6 +325,7 @@ export function initComposer({ onSubmit }) {
 
   function fillChip(chip) {
     const text = chip.dataset.prompt || "";
+    cancelHeroDemo();
     cancelChipTyping();
     // A suggestion timer pending from earlier typing must not resolve against
     // the half-typed chip text; programmatic fills emit no input events, so
@@ -309,10 +375,10 @@ export function initComposer({ onSubmit }) {
   // Tab accepts only an active suggestion and otherwise moves focus; Escape
   // dismisses; Enter submits unless Shift is held or an IME is composing.
   field.addEventListener("keydown", (event) => {
-    // Enter while a chip is mid-typing is not a submission and not a
-    // cancellation: the chip finishes writing its full prompt first.
+    // Enter while the hero demo or a chip is still typing is not a submission
+    // and not a cancellation: the writer finishes the full prompt first.
     if (
-      chipTyping &&
+      (heroDemoTyping || chipTyping) &&
       event.key === "Enter" &&
       !event.shiftKey &&
       !event.isComposing &&
@@ -321,6 +387,7 @@ export function initComposer({ onSubmit }) {
       event.preventDefault();
       return;
     }
+    cancelHeroDemo();
     cancelChipTyping();
     if (event.key === "Tab" && !event.shiftKey && session.active) {
       event.preventDefault();
@@ -342,6 +409,7 @@ export function initComposer({ onSubmit }) {
 
   // --- Input (prototype input handler, line 1800) ---
   field.addEventListener("input", () => {
+    cancelHeroDemo();
     cancelChipTyping();
     clearChipSelection();
     clearSuggestion();
@@ -376,16 +444,26 @@ export function initComposer({ onSubmit }) {
 
   send.addEventListener("click", doSubmit);
 
-  // The user taking the field back ends the chip's settled state.
+  // The user taking the field back ends the chip's settled state and stops a
+  // running hero demo, leaving whatever it had typed for the user to own.
   field.addEventListener("pointerdown", () => {
+    cancelHeroDemo();
     cancelChipTyping();
     clearChipSelection();
+  });
+
+  field.addEventListener("focus", () => {
+    cancelHeroDemo();
   });
 
   // Initial state mirrors the shipped example prompt; the send control
   // reflects it. The shipped default value stays exactly as authored.
   mirrorTyped();
   syncSend();
+
+  // STU-445: play the hero's opening typing demo once, after the initial
+  // state is honest, so the field never claims to be empty in the DOM.
+  startHeroDemo();
 
   return {
     // app.js marks attachment uploads as pending: submissions are held off

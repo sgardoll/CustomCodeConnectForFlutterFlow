@@ -364,3 +364,90 @@ test.describe("touch controls at mobile viewport", () => {
     expect(counts.review).toBe(1);
   });
 });
+
+/**
+ * STU-445 — the hero's opening typing demo and the composer's focus state.
+ * Both are visual behaviours, so the assertions read computed styles and the
+ * changing prompt text rather than the presence of elements.
+ */
+test.describe("STU-445 hero composer behaviour", () => {
+  test("the hero demo types the shipped prompt behind the orange caret", async ({ page }) => {
+    // Watch from navigation commit so a fast machine cannot finish the demo
+    // before the first sample.
+    await page.goto("/", { waitUntil: "commit" });
+
+    const samples = await page.evaluate(async (expected) => {
+      const seen = [];
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const composer = document.getElementById("composer");
+        const typed = document.querySelector(".ghost .typed");
+        const typing = composer?.classList.contains("is-demo-typing") ?? false;
+        // Start once the demo owns the field, then keep sampling through the
+        // final frame, where the full prompt lands and the class retires.
+        if (typed && (typing || seen.length > 0)) {
+          const text = typed.textContent || "";
+          if (seen[seen.length - 1] !== text) seen.push(text);
+          if (text === expected) break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 30));
+      }
+      return seen;
+    }, COMPOSER_DEFAULT_PROMPT);
+
+    // The visible text CHANGES over time: every sample is a strictly longer
+    // prefix of the shipped prompt — real typing, not a static element.
+    expect(samples.length).toBeGreaterThan(1);
+    for (let index = 1; index < samples.length; index += 1) {
+      expect(samples[index].length).toBeGreaterThan(samples[index - 1].length);
+      expect(samples[index].startsWith(samples[index - 1])).toBe(true);
+    }
+    expect(samples[samples.length - 1]).toBe(COMPOSER_DEFAULT_PROMPT);
+
+    // The demo retires cleanly: caret class off, prompt settled, send ready.
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#pipeline-input")).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+  });
+
+  test("clicking the prompt input shows only the composer's orange focus outline", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const field = page.locator("#pipeline-input");
+    const composer = page.locator("#composer");
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await field.click();
+
+    const fieldStyles = await field.evaluate((el) => {
+      const styles = getComputedStyle(el);
+      return {
+        boxShadow: styles.boxShadow,
+        outlineStyle: styles.outlineStyle,
+      };
+    });
+    // The offset light-blue box was the page's generic textarea focus shadow.
+    expect(fieldStyles.boxShadow).toBe("none");
+    expect(fieldStyles.outlineStyle).toBe("none");
+
+    const composerStyles = await composer.evaluate((el) => {
+      const styles = getComputedStyle(el);
+      return { borderColor: styles.borderColor, boxShadow: styles.boxShadow };
+    });
+    const accent = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--accent)";
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    // The surviving outline is the composer's own accent border and ring.
+    expect(composerStyles.borderColor).toBe(accent);
+    expect(composerStyles.boxShadow).not.toBe("none");
+    // Nothing paints the old blue (#3b82f6) ring any more.
+    expect(`${composerStyles.borderColor} ${composerStyles.boxShadow}`).not.toMatch(
+      /59,\s*130,\s*246/,
+    );
+  });
+});

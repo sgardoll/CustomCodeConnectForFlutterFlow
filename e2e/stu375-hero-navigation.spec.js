@@ -32,30 +32,83 @@ for (const { name, width, height } of viewports) {
   });
 }
 
-test("mobile topbar keeps Home, Account and Plans separately reachable", async ({ page }) => {
+test("mobile topbar keeps Home and Account reachable", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto("/");
 
-  for (const view of ["home", "account", "plans"]) {
-    const link = page.locator(`.topnav a[data-view="${view}"]`);
-    await expect(link).toBeVisible();
-    const box = await link.boundingBox();
-    expect(box.height, `${view} nav link should offer a 44px touch target`).toBeGreaterThanOrEqual(44);
-    expect(box.width, `${view} nav link should offer a 44px touch target`).toBeGreaterThanOrEqual(44);
-  }
+  const brand = page.locator("header.topbar .brand");
+  const avatar = page.locator("#topbar-avatar");
+  await expect(brand).toBeVisible();
+  await expect(avatar).toBeVisible();
 
-  await page.click('.topnav a[data-view="account"]');
+  // The logo is the surviving Home control and offers a 44px touch target.
+  const brandBox = await brand.boundingBox();
+  expect(brandBox.height, "logo should offer a 44px touch target").toBeGreaterThanOrEqual(44);
+  expect(brandBox.width, "logo should offer a 44px touch target").toBeGreaterThanOrEqual(44);
+
+  // Account stays reachable through the avatar; the logo returns Home.
+  await avatar.click();
   await expect(page.locator("#account-view")).toBeVisible();
 
-  await page.click('.topnav a[data-view="plans"]');
-  await expect(page.locator("#plans-view")).toBeVisible();
-  await expect(page.locator("#home-view")).toBeHidden();
+  await brand.click();
+  await expect(page.locator("#home-view")).toBeVisible();
 
   const hasOverflow = await page.evaluate(() => {
     const html = document.documentElement;
     return html.scrollWidth > html.clientWidth + 1;
   });
-  expect(hasOverflow, "mobile nav should not force horizontal scrolling").toBe(false);
+  expect(hasOverflow, "mobile header should not force horizontal scrolling").toBe(false);
+});
+
+test("header shows only the black ribbon mark — no box, no wordmark, no nav", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const topbar = page.locator("header.topbar");
+  await expect(topbar).toBeVisible();
+
+  // The four nav links and the Tutorial entry are gone from the header.
+  await expect(topbar.locator(".topnav")).toHaveCount(0);
+  await expect(topbar.locator("a.nav-link")).toHaveCount(0);
+  await expect(page.locator("#wt-reopen")).toHaveCount(0);
+
+  // The brand is the icon alone: one svg, no wordmark, no boxed rect.
+  const brand = topbar.locator(".brand");
+  await expect(brand).toBeVisible();
+  await expect(brand.locator("svg")).toHaveCount(1);
+  await expect(brand.locator(".wordmark")).toHaveCount(0);
+  await expect(brand.locator("rect")).toHaveCount(0);
+
+  // The mark is painted in the ink colour (black), not a surface-coloured
+  // glyph inside a box.
+  await expect(brand.locator("path").first()).toHaveAttribute("fill", "currentColor");
+  const markColor = await brand.locator("svg").evaluate((el) => getComputedStyle(el).color);
+  const ink = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    probe.style.color = "var(--fg)";
+    document.body.appendChild(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  expect(markColor).toBe(ink);
+
+  // The header paints no background of its own.
+  const background = await topbar.evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(["rgba(0, 0, 0, 0)", "transparent"]).toContain(background);
+});
+
+test("the avatar reaches Account and the logo returns Home", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  await page.click("#topbar-avatar");
+  await expect(page.locator("#account-view")).toBeVisible();
+  await expect(page.locator("#home-view")).toBeHidden();
+
+  await page.click("header.topbar .brand");
+  await expect(page.locator("#home-view")).toBeVisible();
+  await expect(page.locator("#account-view")).toBeHidden();
 });
 
 test("200% zoom keeps controls readable and on-screen", async ({ page }) => {
@@ -85,7 +138,7 @@ test("navigation switches surfaces and hidden surfaces are not focusable", async
   await page.goto("/");
   await expect(page.locator("#home-view")).toBeVisible();
 
-  await page.click('a[data-view="account"]');
+  await page.click("#topbar-avatar");
   await expect(page.locator("#account-view")).toBeVisible();
   await expect(page.locator("#home-view")).toBeHidden();
   await expect(page.locator("#plans-view")).toBeHidden();
@@ -98,7 +151,9 @@ test("navigation switches surfaces and hidden surfaces are not focusable", async
   });
   expect(hiddenFocusableHome).toBe(0);
 
-  await page.click('a[data-view="plans"]');
+  // Plans has no header entry after STU-445, so its deep link is the
+  // surviving navigation path.
+  await page.goto("/#plans");
   await expect(page.locator("#plans-view")).toBeVisible();
   await expect(page.locator("#account-view")).toBeHidden();
 
@@ -115,8 +170,8 @@ test("keyboard focus follows view navigation", async ({ page }) => {
   const focusedViewOnLoad = await page.evaluate(() => document.activeElement?.closest(".view")?.id ?? null);
   expect(focusedViewOnLoad).toBeNull();
 
-  // Keyboard activation of a nav link moves focus into the revealed surface.
-  await page.focus('a[data-view="account"]');
+  // Keyboard activation of the account control moves focus into the surface.
+  await page.focus("#topbar-avatar");
   await page.keyboard.press("Enter");
   await expect(page.locator("#account-view")).toBeVisible();
   await expect(page.locator("#account-view")).toBeFocused();
@@ -130,12 +185,15 @@ test("keyboard focus follows view navigation", async ({ page }) => {
   });
   expect(hiddenFocusableHome).toBe(0);
 
-  // Pointer navigation moves focus into the revealed surface too.
-  await page.click('a[data-view="plans"]');
-  await expect(page.locator("#plans-view")).toBeVisible();
-  await expect(page.locator("#plans-view")).toBeFocused();
+  // Pointer navigation moves focus into the revealed surface too: the logo
+  // returns Home from Account.
+  await page.click("header.topbar .brand");
+  await expect(page.locator("#home-view")).toBeVisible();
+  await expect(page.locator("#home-view")).toBeFocused();
 
   // Reloading a deep link restores the surface without stealing focus.
+  await page.goto("/#plans");
+  await expect(page.locator("#plans-view")).toBeVisible();
   await page.reload();
   await expect(page.locator("#plans-view")).toBeVisible();
   const focusedViewAfterReload = await page.evaluate(() => document.activeElement?.closest(".view")?.id ?? null);
@@ -145,7 +203,7 @@ test("keyboard focus follows view navigation", async ({ page }) => {
 test("back, forward and reload restore the current surface", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.click('a[data-view="account"]');
+  await page.click("#topbar-avatar");
   await expect(page.locator("#account-view")).toBeVisible();
 
   await page.goBack();

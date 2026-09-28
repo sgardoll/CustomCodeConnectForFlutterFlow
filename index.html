@@ -2649,50 +2649,25 @@
         align-items: center;
         justify-content: space-between;
         gap: 16px;
-        background: var(--bg);
-        border-bottom: 1px solid var(--border);
         z-index: 100;
       }
       @media (min-width: 921px) {
-        .topbar { padding: 0 40px; border-bottom: 0; }
+        .topbar { padding: 0 40px; }
       }
 
       .brand {
         display: flex;
         align-items: center;
-        gap: 12px;
         color: var(--fg);
         text-decoration: none;
-        font-size: 16px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
         flex-shrink: 0;
       }
       .brand-mark {
-        width: 32px;
-        height: 32px;
+        display: block;
+        width: 44px;
+        height: 44px;
         color: var(--fg);
         flex-shrink: 0;
-      }
-      .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
-      .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 11px; letter-spacing: 0.01em; }
-      .topnav {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-      .nav-link {
-        padding: 8px 14px;
-        border-radius: var(--radius-nav);
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 500;
-        text-decoration: none;
-        transition: color var(--t-fast) var(--ease), background-color var(--t-fast) var(--ease);
-      }
-      .nav-link:hover, .nav-link[aria-current="page"] {
-        color: var(--fg);
-        background: var(--fill-hover);
       }
       .topbar-account {
         display: flex;
@@ -2741,22 +2716,8 @@
         font-weight: 600;
         cursor: pointer;
       }
-      /* Below the inline-nav breakpoint the nav wraps to its own topbar row
-         with touch-sized targets, so every surface stays reachable instead
-         of being hidden. */
-      @media (max-width: 679px) {
-        :root { --topbar-h: 100px; }
-        .topbar { flex-wrap: wrap; align-content: center; row-gap: 2px; padding: 10px 12px; }
-        .topnav { order: 3; width: 100%; gap: 4px; }
-        .topnav .nav-link {
-          flex: 1 1 0;
-          min-height: 44px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-      }
-
+      /* The header holds only the logo and the account controls, so it keeps
+         its single 64px row at every width. */
       .viewport {
         position: relative;
         top: var(--topbar-h);
@@ -2831,6 +2792,10 @@
         margin: 0;
         border: 0;
         outline: 0;
+        /* The page's generic textarea focus ring (a blue offset box) must not
+           paint inside the composer; the composer's own orange border and
+           :focus-within ring carry the focus state. */
+        box-shadow: none;
         background: transparent;
         resize: none;
         font: inherit;
@@ -3322,19 +3287,10 @@
   <header class="topbar" role="banner">
     <a class="brand" href="#home" aria-label="Custom Code Connect — Home">
       <svg class="brand-mark" viewBox="0 0 44 44" fill="none" aria-hidden="true" focusable="false">
-        <rect width="44" height="44" rx="10" fill="currentColor"/>
-        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)"/>
-        <path d="M25 11H19C13.48 11 9 15.48 9 21S13.48 31 19 31H24V26H19A6 6 0 0 1 19 15H25V11Z" fill="var(--surface)" transform="rotate(180 22 22)"/>
+        <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" fill="currentColor"/>
+        <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" fill="currentColor" transform="rotate(180 22 22)"/>
       </svg>
-      <span class="wordmark"><span>FlutterFlow</span>Custom Code Connect</span>
     </a>
-
-    <nav class="topnav" aria-label="Main">
-      <a href="#home" class="nav-link" data-view="home" aria-current="page">Home</a>
-      <a href="#account" class="nav-link" data-view="account">Account</a>
-      <a href="#plans" class="nav-link" data-view="plans">Plans</a>
-      <a href="#tutorial" class="nav-link" id="wt-reopen" aria-haspopup="dialog" onclick="openWalkthroughModal(); return false;">Tutorial</a>
-    </nav>
 
     <div class="topbar-account">
       <button class="topbar-credits" id="topbar-credits" type="button" aria-label="Runs remaining this month" aria-haspopup="dialog" aria-controls="credits-modal" aria-expanded="false" onclick="openCreditsModal()">
