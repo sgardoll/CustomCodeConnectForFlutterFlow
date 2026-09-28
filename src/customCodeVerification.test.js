@@ -119,24 +119,31 @@ test("a dependency from a git or path source is reported unrepresentable", () =>
   assert.deepEqual(manifest.unrepresentable, ["private_thing"]);
 });
 
-test("a git dependency does not stop a class that never imports it", () => {
+test("a git dependency's unseen constraints skip every package-importing class", () => {
+  // The class never imports `private_thing`, but private_thing's own pubspec
+  // still constrains packages this class does import - and the scratch
+  // manifest cannot carry it, so resolved versions may differ from the
+  // project's and a clean analysis would not describe what ships. Only
+  // pubspec.lock records which packages drift, and a deploy never sees it.
+  const dartOnly = `import 'dart:async';
+
+class SchedulesWork {}
+`;
   const plan = planCustomCodeVerification(
-    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    [
+      { className: "BackgroundDownloaderService", content: SELF_CONTAINED },
+      { className: "SchedulesWork", content: dartOnly },
+    ],
     PROJECT_PUBSPEC,
   );
 
-  // The project declares `private_thing` from git, which cannot be reproduced
-  // outside it - but this class does not import it, so the scratch package
-  // resolves everything it does use to the versions the project will, and the
-  // check still describes the code that ships. Deciding this once for the whole
-  // project left every class uncompiled over a dependency it never touched.
   assert.deepEqual(plan.sources, [
-    {
-      fileName: "background_downloader_service.dart",
-      content: SELF_CONTAINED,
-    },
+    { fileName: "schedules_work.dart", content: dartOnly },
   ]);
-  assert.deepEqual(plan.skipped, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.equal(plan.skipped[0].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[0].reason, /private_thing/);
+  assert.match(plan.skipped[0].reason, /transitively/);
 });
 
 test("a class that imports the unreproducible dependency is skipped, and named as the reason", () => {
@@ -153,15 +160,14 @@ class UsesPrivateThing {}
     PROJECT_PUBSPEC,
   );
 
-  assert.deepEqual(
-    plan.sources.map((entry) => entry.fileName),
-    ["background_downloader_service.dart"],
-  );
-  assert.equal(plan.skipped.length, 1);
+  // The class that names the git dep gets the precise reason; the one that
+  // only shares its graph falls under the graph-poison reason instead.
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 2);
   assert.equal(plan.skipped[0].className, "UsesPrivateThing");
-  // The reason names this class's own import, not the project's whole
-  // dependency set, so it says what to do about this class.
   assert.match(plan.skipped[0].reason, /it imports private_thing/);
+  assert.equal(plan.skipped[1].className, "BackgroundDownloaderService");
+  assert.match(plan.skipped[1].reason, /transitively/);
 });
 
 test("a class that exports the unreproducible dependency is skipped, not refused", () => {
@@ -282,12 +288,17 @@ class SchedulesWork {}
 });
 
 test("a version-constraint override is carried and does not skip anything", () => {
-  // PROJECT_PUBSPEC overrides intl to 0.20.1 - a constraint the manifest can
-  // express - so resolution already matches the project's and every
-  // self-contained class verifies.
+  // The override rewrites intl to a constraint the manifest can express, so
+  // resolution already matches the project's and the class verifies - the
+  // graph-poison skip only applies to sources the manifest cannot carry.
+  const pubspec = `${REPRESENTABLE_PUBSPEC}
+dependency_overrides:
+  intl: 0.20.1
+`;
+
   const plan = planCustomCodeVerification(
     [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
-    PROJECT_PUBSPEC,
+    pubspec,
   );
 
   assert.equal(plan.sources.length, 1);

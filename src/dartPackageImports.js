@@ -67,9 +67,12 @@ function stripComments(code) {
 // file, and stopping at its `;` would lose the URI. String alternatives
 // consume `\x` escape pairs so an escaped quote does not end the literal
 // early - `'a\'b.dart'` is one URI, not `a\` followed by a stranded quote.
+// URI_PATTERN splits the two literals for the same reason in reverse: an
+// apostrophe inside a double-quoted URI (`"src/it's.dart"`) is a filename
+// char, not a delimiter - each alternative only forbids its own quote.
 const DIRECTIVE_PATTERN =
   /\b(?:import|export)\s+(?=['"])(?:'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|[^;'"])*;/g;
-const URI_PATTERN = /(['"])((?:\\.|[^'"\\\n])+)\1/g;
+const URI_PATTERN = /'((?:\\.|[^'\\\n])+)'|"((?:\\.|[^"\\\n])+)"/g;
 
 /**
  * Returns every URI the source imports or exports, in first-seen order.
@@ -92,7 +95,7 @@ export function extractImportUris(code = "") {
     URI_PATTERN.lastIndex = 0;
     let match;
     while ((match = URI_PATTERN.exec(directive[0])) !== null) {
-      const uri = match[2];
+      const uri = match[1] ?? match[2];
       if (seen.has(uri)) continue;
       seen.add(uri);
       uris.push(uri);

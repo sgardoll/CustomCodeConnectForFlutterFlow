@@ -183,28 +183,25 @@ function skipReason(className, unresolvableImports, missingPackages) {
  * `skipped` so the deploy can say plainly what it did not verify.
  *
  * A dependency that cannot be reproduced outside the project - a `git:` or
- * `path:` source - stops only a class that imports it. For that class the
- * scratch package would resolve different code from the project, and a check
- * against the wrong versions reports a result that does not describe what
- * ships, so it is left out of `sources` and named in `skipped`. A class that
- * does not import it resolves everything it uses to the same versions the
- * project will, so it is verified normally.
+ * `path:` source - still shapes the resolved graph even for classes that
+ * never import it, because its own pubspec's version constraints apply to
+ * every package it shares with them. A `dependency_overrides` entry is
+ * broader still: it rewrites resolution for every package depending on the
+ * overridden name, imported or not. Which packages an omitted entry would
+ * have constrained is only recorded in the project's pubspec.lock, which a
+ * deploy never sees, so no per-class rule can separate the reachable from
+ * the unreachable. An unreproducible entry therefore skips every class that
+ * imports a `package:` URI at all; a class using only `dart:` resolves
+ * nothing through pub and is still verified, and a class importing the entry
+ * by name gets a reason that says so.
  *
- * That scoping is the point. Deciding it once for the whole project meant a
- * single `git:` entry - or a package the SDK supplied but a hand-kept name list
- * had not heard of - left every class in the deploy uncompiled, including the
- * ones that never touched it.
- *
- * The exception is `dependency_overrides`. An override does not wait for a
- * class to import it: it rewrites what every package in the graph that
- * depends on the overridden name resolves to, so a class that imports a
- * perfectly ordinary pub.dev package can still compile against different code
- * than the project uses when the import reaches the overridden package
- * transitively. Which packages those are is only recorded in the project's
- * pubspec.lock, which a deploy never sees, so no per-class rule can separate
- * the reachable from the unreachable. An unreproducible override therefore
- * skips every class that imports a `package:` URI at all; a class using only
- * `dart:` resolves nothing through pub and is still verified.
+ * That breadth is the point of the change, not a retreat to the old
+ * project-wide skip: the misread that motivated it was classification, not
+ * scope. An SDK package no name list had heard of (`flutter_web_plugins`)
+ * used to read as unreproducible and leave every class uncompiled; now the
+ * source is read from the pubspec, so a genuinely unreproducible entry is
+ * rare - and when one exists, skipping is what keeps a clean analysis from
+ * approving code the project cannot build.
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
@@ -260,20 +257,36 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
       continue;
     }
 
-    // A git/path/hosted override poisons resolution for every package that
-    // transitively depends on the overridden name, and only pubspec.lock -
-    // which is never pushed - records which packages those are. Verified
-    // against the wrong transitive code, an analyzer pass would not describe
-    // what ships, so any class that resolves packages at all is reported
-    // instead of compiled. `dart:`-only classes need no package resolution
-    // and are unaffected.
+    // An entry the manifest cannot express poisons the whole resolution
+    // graph, not just classes that name it. A git/path/hosted dependency's
+    // own pubspec still constrains every package it shares with the ones a
+    // class imports, and a dependency_overrides entry rewrites resolution for
+    // every dependent - so dropping either can make the scratch package
+    // resolve different versions than the project, and a clean analysis then
+    // approves code the project cannot build. Which packages drift is only
+    // recorded in pubspec.lock, which a deploy never sees, so any class that
+    // resolves packages at all is reported instead of compiled. `dart:`-only
+    // classes need no package resolution and are unaffected.
     if (
-      unrepresentableOverrides.length > 0 &&
+      unrepresentable.length > 0 &&
       extractImportUris(content).some((uri) => uri.startsWith("package:"))
     ) {
+      const depNames = unrepresentable.filter(
+        (name) => !unrepresentableOverrides.includes(name),
+      );
+      const described = [
+        depNames.length > 0
+          ? `your project's pubspec.yaml declares ${depNames.join(", ")} from a source that cannot be reproduced outside it`
+          : null,
+        unrepresentableOverrides.length > 0
+          ? `your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it`
+          : null,
+      ]
+        .filter(Boolean)
+        .join(", and ");
       skipped.push({
         className,
-        reason: `${className} was not compiled before deploying: your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it, and an override changes what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`,
+        reason: `${className} was not compiled before deploying: ${described}, and an entry like that can change what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`,
       });
       continue;
     }

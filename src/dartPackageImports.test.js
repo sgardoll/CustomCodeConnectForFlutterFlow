@@ -126,6 +126,20 @@ test("an escaped quote inside a URI does not end the literal", () => {
   assert.deepEqual(extractPackageImports(code), ["private_thing"]);
 });
 
+test("the opposite quote inside a URI is a filename char, not a delimiter", () => {
+  // `"src/it's.dart"` is one URI - the apostrophe is legal inside a
+  // double-quoted string, and dropping it would lose the file entirely.
+  const code =
+    'import "src/it\'s.dart";\n' +
+    "import 'say \"hi\".dart';\n" +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "src/it's.dart",
+    'say "hi".dart',
+  ]);
+});
+
 test("a conditional URI in a comment is not a dependency", () => {
   const code = [
     "// import 'package:a/a.dart' if (dart.library.io) 'package:b/b.dart';",
