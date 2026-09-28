@@ -172,14 +172,11 @@ test.describe("the dialog stays wired to the generation request", () => {
 
     await page.locator("#hero-send").click();
     await expect(page.locator("#generation-stage")).toBeVisible({ timeout: 30000 });
-    // The stage is visible before the pipeline reaches its generator step, so
-    // observe the request itself instead of reading the capture array at an
-    // arbitrary moment: wait until the generator request lands, then assert
-    // exactly which model it carried.
+    // The stage is shown the moment the run starts — before the architect
+    // round trip, let alone the generator POST — so the capture has to be
+    // polled until the generator request actually lands.
     await expect
-      .poll(() => generatorModels, {
-        message: "the generator request should carry the dialog-selected model",
-      })
+      .poll(() => generatorModels, { timeout: 30000 })
       .toEqual(["anthropic/claude-opus-5"]);
   });
 

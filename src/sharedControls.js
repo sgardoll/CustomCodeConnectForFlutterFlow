@@ -43,13 +43,29 @@ function isDismissible(modal) {
 export function openModal(modalOrId, options = {}) {
   const modal = typeof modalOrId === "string" ? document.getElementById(modalOrId) : modalOrId;
   if (!modal) return false;
-  if (activeModal && activeModal !== modal) closeModal(activeModal, { restoreFocus: false, force: true });
 
-  returnTarget = options.trigger || document.activeElement;
+  const replacedModal = activeModal && activeModal !== modal ? activeModal : null;
+  const inheritedTarget = returnTarget;
+  if (replacedModal) closeModal(replacedModal, { restoreFocus: false, force: true });
+
+  if (activeModal !== modal) {
+    // First open: record where focus and page scrolling return to on close.
+    // A trigger inside a dialog being closed (or inside this modal on a
+    // programmatic reopen) would strand focus in hidden content, so chain
+    // back to the previous dialog's own return target instead.
+    let target = options.trigger || document.activeElement;
+    if (target && (replacedModal?.contains(target) || modal.contains(target))) {
+      target = inheritedTarget;
+    }
+    returnTarget = target;
+    savedOverflow = document.body.style.overflow;
+    setBackgroundInert(modal);
+    document.body.style.overflow = "hidden";
+  }
+  // Reopening the active dialog keeps the original captured state: a second
+  // capture would save the inertness and "hidden" overflow it just applied.
+
   activeModal = modal;
-  savedOverflow = document.body.style.overflow;
-  setBackgroundInert(modal);
-  document.body.style.overflow = "hidden";
   modal.classList.add("open");
   modal.setAttribute("aria-hidden", "false");
   const content = modal.querySelector(".modal-content");
@@ -73,6 +89,11 @@ export function closeModal(modalOrId, options = {}) {
   if (!modal || (!options.force && !isDismissible(modal))) return false;
   modal.classList.remove("open");
   modal.setAttribute("aria-hidden", "true");
+  if (modal !== activeModal) {
+    // A background dialog closing must not release the active dialog's
+    // focus trap, inert background, or saved page scroll.
+    return true;
+  }
   restoreBackground();
   document.body.style.overflow = savedOverflow;
   activeModal = null;
@@ -80,6 +101,10 @@ export function closeModal(modalOrId, options = {}) {
   returnTarget = null;
   if (options.restoreFocus !== false && target?.isConnected) target.focus({ preventScroll: true });
   return true;
+}
+
+export function hasActiveModal() {
+  return Boolean(activeModal);
 }
 
 export function setModalPending(modalOrId, pending, message = "Operation in progress") {

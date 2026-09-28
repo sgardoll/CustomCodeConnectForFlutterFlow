@@ -297,7 +297,7 @@ test.describe("STU-383 account overview", () => {
     };
     return {
       jwk: JSON.stringify(jwk),
-      apiKey: await encrypt("ff-live-key-123"),
+      flutterflowCiphertext: await encrypt("ff-live-key-123"),
       projectId: await encrypt("demo-proj-9f2a"),
     };
   }
@@ -305,9 +305,9 @@ test.describe("STU-383 account overview", () => {
   test("connection card renders the connected state from stored FlutterFlow credentials", async ({ page }) => {
     const creds = await makeStoredCredentials();
     await seedSession(page);
-    await page.addInitScript(({ jwk, apiKey, projectId }) => {
+    await page.addInitScript(({ jwk, flutterflowCiphertext, projectId }) => {
       sessionStorage.setItem("ccc_encryption_key", jwk);
-      localStorage.setItem("ccc_api_key_flutterflow", apiKey);
+      localStorage.setItem("ccc_api_key_flutterflow", flutterflowCiphertext);
       localStorage.setItem("ccc_api_key_flutterflow_project_id", projectId);
     }, creds);
     await applyDefaultRoutes(page, {
