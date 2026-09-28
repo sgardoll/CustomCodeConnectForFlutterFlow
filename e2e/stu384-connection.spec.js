@@ -63,7 +63,7 @@ async function seedSession(page, email = EMAIL) {
 
 async function openAccount(page) {
   await dismissOpenModals(page);
-  await page.locator('a.nav-link[data-view="account"]').click();
+  await page.locator("#topbar-avatar").click();
   await expect(page.locator("#account-view")).toBeVisible();
 }
 
@@ -319,12 +319,12 @@ test.describe("STU-384 account connection", () => {
     });
     await page.goto("/");
 
-    await page.locator('a.nav-link[data-view="account"]').click();
+    await page.locator("#topbar-avatar").click();
     await expect(page.locator("#auth-signedout")).toBeVisible();
     await expect(page.locator("#account-view #auth-signedin")).toBeHidden();
 
     // The canonical editor stays reachable from the home settings entry point.
-    await page.locator('a.nav-link[data-view="home"]').click();
+    await page.locator("header.topbar .brand").click();
     await page.locator('button.settings-link', { hasText: "Configure API Keys" }).click();
     await expect(page.locator("#api-keys-modal")).toBeVisible();
     await page.locator("#flutterflow-api-key-input").fill(KEY);

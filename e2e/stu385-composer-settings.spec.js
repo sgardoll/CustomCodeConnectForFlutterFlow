@@ -172,7 +172,15 @@ test.describe("the dialog stays wired to the generation request", () => {
 
     await page.locator("#hero-send").click();
     await expect(page.locator("#generation-stage")).toBeVisible({ timeout: 30000 });
-    expect(generatorModels).toEqual(["anthropic/claude-opus-5"]);
+    // The stage is visible before the pipeline reaches its generator step, so
+    // observe the request itself instead of reading the capture array at an
+    // arbitrary moment: wait until the generator request lands, then assert
+    // exactly which model it carried.
+    await expect
+      .poll(() => generatorModels, {
+        message: "the generator request should carry the dialog-selected model",
+      })
+      .toEqual(["anthropic/claude-opus-5"]);
   });
 
   test("switching models updates the image-capability generation option", async ({

@@ -9048,12 +9048,6 @@ function switchView(view, pushState = true, moveFocus = true) {
     if (stage && stage.classList.contains("visible")) setGenerationStageVisible(true);
   }
 
-  document.querySelectorAll(".nav-link[data-view]").forEach((link) => {
-    const active = link.dataset.view === view;
-    link.setAttribute("aria-current", active ? "page" : null);
-    if (!active) link.removeAttribute("aria-current");
-  });
-
   if (pushState) {
     const hash = view === "home" ? "" : `#${view}`;
     if (window.location.hash !== hash) window.history.pushState({ view }, "", hash || "#");
