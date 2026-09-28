@@ -103,12 +103,11 @@ test("treats an empty body as a failure", async () => {
 
 // --- STU-380: an explicit HTTP rejection is FAILED, never UNCONFIRMED --------
 // These drive the real stream handler (`readProvisionResponse`) against a true
-// Response object with a non-2xx status and no streamed "result" event — the
-// exact shape the deploy runner produces when it refuses the request before
-// doing any work (API key lacks write access, transient 5xx, …). The
-// mislabelling bug lived here: that shape was previously thrown as an
-// UnconfirmedDeployError, telling the user to reconcile in FlutterFlow when the
-// server had plainly refused the write.
+// Response object with a non-2xx status and no streamed "result" event. A 4xx
+// is the shape the deploy runner produces when it refuses the request before
+// doing any work (API key lacks write access, bad request, …): the write was
+// turned away, so it is FAILED. A 5xx is not a refusal — a gateway can fail
+// after forwarding the request to the runner — so it is UNCONFIRMED.
 
 function provisionAtStatus(chunks, status) {
   const body = new ReadableStream({
@@ -173,7 +172,7 @@ test("an explicit HTTP rejection (403) is a failure, not unconfirmed", async () 
   assert.notEqual(DeployOutcome.FAILED, DeployOutcome.UNCONFIRMED);
 });
 
-test("a 5xx server error with no streamed result is also FAILED, not unconfirmed", async () => {
+test("a 5xx server error with no streamed result is UNCONFIRMED — a gateway can fail after forwarding", async () => {
   const result = await readProvisionResponse(
     new Response(
       '{"event":"phase","phase":"connecting","message":"Connecting..."}\n',
@@ -181,10 +180,32 @@ test("a 5xx server error with no streamed result is also FAILED, not unconfirmed
     ),
   );
   assert.equal(result.httpRejected, true);
+  assert.equal(result.httpStatus, 502);
+  // A 502 can come from a gateway after the request reached the runner, which
+  // may be deploying classes already — so it cannot prove nothing was written.
   assert.equal(
     deployOutcomeOfStreamResult(result),
-    DeployOutcome.FAILED,
+    DeployOutcome.UNCONFIRMED,
   );
+
+  // Every 5xx shares that uncertainty: the server failed, but none of them
+  // proves the request was turned away before a write.
+  const unavailable = await readProvisionResponse(
+    new Response("", { status: 503 }),
+  );
+  assert.equal(
+    deployOutcomeOfStreamResult(unavailable),
+    DeployOutcome.UNCONFIRMED,
+  );
+});
+
+test("a 4xx with no streamed result stays a definitive refusal, not unconfirmed", async () => {
+  const result = await readProvisionResponse(
+    new Response("no", { status: 400 }),
+  );
+  // A 4xx is validation/auth — the request was turned away before any work.
+  assert.equal(result.httpRejected, true);
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.FAILED);
 });
 
 test("a dropped stream on an OK response stays UNCONFIRMED (outcome truly unknown)", async () => {

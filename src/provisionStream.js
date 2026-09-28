@@ -93,13 +93,12 @@ export async function readProvisionResponse(response, handlers = {}) {
   return {
     success: false,
     finalResultReceived: false,
-    // An explicit non-2xx HTTP response is a definitive server refusal, not an
-    // unknown outcome. The caller must render it as FAILED; only an ok response
-    // whose stream dropped before a result leaves the remote state genuinely
-    // unknown (UNCONFIRMED). This holds for the deploy runner: once streaming
-    // begins it emits every post-work failure as a `result` event under the
-    // already-sent 200 status, so a non-2xx can only arrive before the first
-    // remote write.
+    // An explicit non-2xx HTTP response. A 4xx proves the request was turned
+    // away before any work, so the caller renders it as FAILED. A 5xx proves
+    // no such thing: a gateway can answer 502/503/504 after forwarding the
+    // request to the runner, which may already be deploying (or may have
+    // deployed) classes — so a 5xx is UNCONFIRMED, exactly like an ok response
+    // whose stream dropped before a result.
     httpRejected: !response.ok,
     httpStatus: response.status,
     runnerPhase: lastPhase,
@@ -150,11 +149,13 @@ export function isPreWriteRunnerFailure(result) {
  * Maps a provisioning stream result to the single truthful terminal outcome.
  *
  * When the runner delivered a definitive result, the ordinary classifier
- * applies. When it did not (`finalResultReceived === false`), the two cases the
- * caller must never flatten are separated: an explicit HTTP rejection (403/5xx)
- * is a definitive refusal — the write did not happen — so it is FAILED, while an
- * ok response whose stream simply dropped (or a client wait expiry) leaves the
- * remote outcome unknown and is UNCONFIRMED.
+ * applies. When it did not (`finalResultReceived === false`), the cases the
+ * caller must never flatten are separated: a 4xx response is a definitive
+ * refusal — the request was turned away before any write — so it is FAILED,
+ * while a 5xx is not proof of anything. A gateway can return 502/503/504
+ * after forwarding the request to the runner, so classes may already be
+ * deploying; that outcome, an ok response whose stream simply dropped, and a
+ * client wait expiry all leave the remote outcome unknown (UNCONFIRMED).
  *
  * This is the decision `provisionMissingCodeFiles` uses in the real deploy
  * path, so a test of this function drives the same code that renders a 403
@@ -175,7 +176,15 @@ export function deployOutcomeOfStreamResult(result) {
       : outcome;
   }
   if (result?.httpRejected) {
-    return DeployOutcome.FAILED;
+    // Only a 4xx proves the write was refused before it began. A 5xx can come
+    // from a gateway after the request reached the runner, so it must stay
+    // UNCONFIRMED: reporting it as FAILED would tell the user nothing was
+    // written while the runner is still deploying.
+    return typeof result.httpStatus === "number" &&
+      result.httpStatus >= 400 &&
+      result.httpStatus < 500
+      ? DeployOutcome.FAILED
+      : DeployOutcome.UNCONFIRMED;
   }
   return DeployOutcome.UNCONFIRMED;
 }
