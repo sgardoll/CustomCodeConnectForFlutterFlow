@@ -18,6 +18,10 @@ import {
 
 const COMPOSER_DEFAULT_PROMPT = "A circular progress gauge with a gradient stroke";
 const GAUGE_COMPLETION = " and an animated percentage label";
+// Catching a demo window races the demo's real-time clock: the hold alone is
+// ~5s, and page init on a loaded worker adds seconds before the first poll.
+// The catch budget must cover both, not just the window being observed.
+const DEMO_CATCH_TIMEOUT_MS = 20000;
 const IMAGE_UPLOAD_ENDPOINT = `${ENDPOINTS.buildship}/service/runpipeline-image`;
 
 const viewports = [
@@ -444,7 +448,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // The takeover lands the complete shipped prompt — the same end state as
@@ -483,7 +487,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // The demo's text is demo-owned, not a draft: the first real edit clears
@@ -513,7 +517,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // Deleting into a demo-owned field removes the demo's text: the native
@@ -541,7 +545,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // A pointer takeover means "edit what I clicked": the restore lands the
@@ -583,7 +587,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // Switching surfaces is a system cancellation, not a user takeover: the
@@ -619,7 +623,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       undefined,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     await page.evaluate(() => window.switchView("account"));
@@ -651,7 +655,7 @@ test.describe("STU-445 hero composer behaviour", () => {
         );
       },
       COMPOSER_DEFAULT_PROMPT,
-      { timeout: 8000 },
+      { timeout: DEMO_CATCH_TIMEOUT_MS },
     );
 
     // Flip the preference mid-demo: the reduced-motion listener must end the
