@@ -161,6 +161,60 @@ test.describe("Generation progress binds to real stage events", () => {
     pipeline.release("review");
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
   });
+
+  test("the track eases through each stage's slice instead of jumping", async ({ page }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, {
+      hold: ["architect", "generator", "review"],
+    });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 1)).toHaveAttribute("data-state", "active");
+
+    // Sample the fill while stage 1 is held: it moves continuously inside
+    // the stage's third of the track, never claiming the slice is done.
+    const widths = await page.evaluate(async () => {
+      const seen = [];
+      const deadline = Date.now() + 2500;
+      const fill = document.getElementById("pipeline-progress-fill");
+      while (Date.now() < deadline) {
+        const value = parseFloat(fill.style.width) || 0;
+        if (seen[seen.length - 1] !== value) seen.push(value);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      return seen;
+    });
+    expect(widths.length).toBeGreaterThan(1);
+    for (let index = 1; index < widths.length; index += 1) {
+      expect(widths[index]).toBeGreaterThan(widths[index - 1]);
+    }
+    expect(widths[widths.length - 1]).toBeLessThan(100 / 3);
+
+    const trackWidth = () =>
+      page.evaluate(
+        () => parseFloat(document.getElementById("pipeline-progress-fill").style.width) || 0,
+      );
+
+    // Completing the stage lands the bar on its real boundary, and the next
+    // stage eases forward from there rather than snapping to the end.
+    pipeline.release("architect");
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+    await expect.poll(trackWidth).toBeGreaterThan(100 / 3 + 0.5);
+    // A held stage 2 keeps easing but never claims stage 3's slice.
+    await page.waitForTimeout(1200);
+    expect(await trackWidth()).toBeLessThan(200 / 3);
+
+    pipeline.release("generator");
+    await expect(stage(page, 3)).toHaveAttribute("data-state", "active");
+    await expect.poll(trackWidth).toBeGreaterThan((200 / 3) + 0.5);
+    // And stage 3 never claims the run finished ahead of its response.
+    await page.waitForTimeout(1200);
+    expect(await trackWidth()).toBeLessThan(100);
+
+    pipeline.release("review");
+    await expect(page.locator("#results-view")).toHaveClass(/visible/);
+  });
 });
 
 test.describe("Recoverable failure states", () => {
@@ -407,6 +461,64 @@ test.describe("Recoverable failure states", () => {
       { url: "https://img.example/ref.png" },
     ]);
   });
+
+  test("a failed stage freezes the fill mid-transition instead of letting it drift", async ({
+    page,
+  }) => {
+    await openHome(page);
+    const pipeline = await routePipelineStages(page, {
+      hold: ["generator"],
+      responses: { generator: providerError },
+    });
+
+    await page.locator("#pipeline-input").fill("A gauge widget");
+    await page.locator("#hero-send").click();
+    await expect(stage(page, 2)).toHaveAttribute("data-state", "active");
+
+    // Let the fill get moving inside stage 2's slice before the failure.
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () => parseFloat(document.getElementById("pipeline-progress-fill").style.width) || 0,
+        ),
+      )
+      .toBeGreaterThan(100 / 3 + 0.5);
+
+    // The 700ms width transition must not keep animating after the run dies:
+    // the fill is pinned at its rendered position and stops moving. The pin
+    // is a track percentage, so a later resize keeps the same proportion.
+    pipeline.release("generator");
+    await expect(failure(page)).toBeVisible();
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.getElementById("pipeline-progress-fill").style.width),
+      )
+      .toMatch(/%$/);
+    const frozenWidth = () =>
+      page.evaluate(
+        () => getComputedStyle(document.getElementById("pipeline-progress-fill")).width,
+      );
+    const first = await frozenWidth();
+    await page.waitForTimeout(900);
+    expect(await frozenWidth()).toBe(first);
+
+    // Resizing the track keeps the frozen proportion: the fill's share of
+    // the track survives a narrower viewport instead of a stale pixel count.
+    const geometry = () =>
+      page.evaluate(() => {
+        const fill = document.getElementById("pipeline-progress-fill");
+        const track = fill?.parentElement;
+        if (!fill || !track) return null;
+        const trackWidth = track.getBoundingClientRect().width;
+        return { trackWidth, share: fill.getBoundingClientRect().width / trackWidth };
+      });
+    const before = await geometry();
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.waitForTimeout(150);
+    const after = await geometry();
+    expect(after.trackWidth).toBeLessThan(before.trackWidth);
+    expect(Math.abs(after.share - before.share)).toBeLessThan(0.01);
+  });
 });
 
 test.describe("Stateful transitions stay isolated per run", () => {
@@ -496,6 +608,13 @@ test.describe("Stateful transitions stay isolated per run", () => {
     await expect(page.locator("#pipeline-progress")).toHaveClass(/visible/);
 
     refinement.release("generator");
+    // A stage-2 re-entry still finishes on 100%: the skipped Architect does
+    // not drag the completed run's bar back to two thirds.
+    await expect
+      .poll(async () =>
+        page.evaluate(() => document.getElementById("pipeline-progress-fill").style.width),
+      )
+      .toBe("100%");
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
     await expect(stage(page, 3)).toHaveAttribute("data-state", "done");
     await expect(stage(page, 1)).toHaveAttribute("data-state", "skipped");

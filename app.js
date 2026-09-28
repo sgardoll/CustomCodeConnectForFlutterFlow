@@ -8152,8 +8152,9 @@ window.closePricingModal = closePricingModal;
 // The three-stage view is bound to the real Architect -> Generator -> Review
 // events, so nothing here invents an outcome: the track advances only when a
 // stage actually reports, a stage that never ran is never drawn as completed,
-// and a failure never falls through to a result. The elapsed counter is the
-// only time-driven element, and it reports real elapsed time.
+// and a failure never falls through to a result. The run's one timer drives
+// both the elapsed counter (real time) and the fill's in-slice easing (an
+// estimate that never completes a stage ahead of its response).
 let pipelineElapsedTimer = null;
 let pipelineStartTime = null;
 // Every view update carries the run it belongs to (pipelineState.runId), so a
@@ -8161,6 +8162,9 @@ let pipelineStartTime = null;
 // instead of overwriting the newer run's state.
 let pipelineStageStates = { 1: "pending", 2: "pending", 3: "pending" };
 let pipelineActiveStage = 1;
+// When the active stage's slice of the track started easing; each stage
+// entry re-arms it.
+let pipelineStageStartedAt = null;
 let pipelineSelectedStage = null;
 
 const PIPELINE_STAGE_LABELS = {
@@ -8306,10 +8310,47 @@ function completedPipelineStageCount() {
 function renderPipelineTrack() {
   const fillEl = document.getElementById("pipeline-progress-fill");
   if (fillEl) {
-    fillEl.style.width = `${(completedPipelineStageCount() / 3) * 100}%`;
+    if (pipelineStageStates[pipelineActiveStage] === "failed") {
+      // Pin the fill where it visibly is. Read the rendered width BEFORE
+      // disabling the transition — disabling it first snaps the element to
+      // its pending target — and freeze as a track percentage so a later
+      // resize keeps the same proportion instead of a stale pixel count.
+      const rendered = getComputedStyle(fillEl).width;
+      const track = fillEl.parentElement;
+      const trackPx = track ? track.getBoundingClientRect().width : 0;
+      const renderedPx = parseFloat(rendered) || 0;
+      fillEl.style.transition = "none";
+      fillEl.style.width = trackPx ? `${(renderedPx / trackPx) * 100}%` : rendered;
+    } else {
+      fillEl.style.transition = "";
+      fillEl.style.width = `${pipelineTrackPercent()}%`;
+    }
   }
   const countEl = document.getElementById("progress-stage-count");
   if (countEl) countEl.textContent = `Step ${pipelineActiveStage} of 3`;
+}
+
+/**
+ * Each stage owns a third of the track. While a stage runs the fill eases
+ * asymptotically toward 95% of its slice, so a slow stage still looks alive
+ * without the bar ever claiming the stage finished ahead of its response.
+ * A finished stage sits on its own boundary — a stage-2 re-entry (refine,
+ * pasted errors) whose Review completes lands on 100%, not the count of
+ * stages that ran.
+ */
+function pipelineTrackPercent() {
+  const span = 100 / 3;
+  const state = pipelineStageStates[pipelineActiveStage];
+  if (state === "active" && pipelineStageStartedAt !== null) {
+    const elapsed = (Date.now() - pipelineStageStartedAt) / 1000;
+    return (
+      (pipelineActiveStage - 1) * span +
+      span * 0.95 * (1 - Math.exp(-elapsed / 12))
+    );
+  }
+  return state === "done"
+    ? (pipelineActiveStage / 3) * 100
+    : (completedPipelineStageCount() / 3) * 100;
 }
 
 /**
@@ -8482,6 +8523,7 @@ function showPipelineProgress(options = {}) {
 function updatePipelineProgressStep(step, runId) {
   if (!isCurrentPipelineRun(runId)) return;
   pipelineActiveStage = step;
+  pipelineStageStartedAt = Date.now();
   clearPipelineStageSelection();
 
   [1, 2, 3].forEach((candidate) => {
@@ -8632,6 +8674,8 @@ function startProgressTimer() {
     const elapsed = (Date.now() - pipelineStartTime) / 1000;
     const elapsedEl = document.getElementById("progress-elapsed");
     if (elapsedEl) elapsedEl.textContent = `${Math.floor(elapsed)}s`;
+    // The same tick drives the fill's in-slice easing.
+    renderPipelineTrack();
   }, 250);
 }
 
