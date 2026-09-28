@@ -138,6 +138,16 @@ test("Cloud Run builds the analysis manifest itself rather than running caller-s
     /dependency_overrides:/,
     "the project's overrides must be reproduced, or resolution differs",
   );
+  assert.match(
+    runnerSource,
+    /value\['sdkOverrides'\]/,
+    "sdk-sourced overrides must ride their own channel - merged into sdkPackages they land under dependencies: and duplicate a same-named scalar key",
+  );
+  assert.match(
+    runnerSource,
+    /for \(final name in sdkOverrides[\s\S]*?sdk: flutter/,
+    "an sdk: override must be emitted under dependency_overrides, preserving override precedence",
+  );
   // The previous wire format sent pubspec text. It must degrade to
   // "unavailable" rather than being executed, so a cached client neither keeps
   // the vulnerability open nor has its deploys rejected mid-rollout.

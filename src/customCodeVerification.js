@@ -111,29 +111,42 @@ function collect(declared, into, sdkPackages) {
  * @returns {{
  *   sdkConstraint: string,
  *   dependencies: Object<string, string>,
- *   overrides: Object<string, string>,
+ *   dependencyOverrides: Object<string, string>,
  *   sdkPackages: string[],
+ *   sdkOverrides: string[],
  *   availablePackages: Set<string>,
  *   unrepresentable: string[],
+ *   unrepresentableOverrides: string[],
  * }}
  */
 export function buildAnalysisManifest(projectPubspecYaml) {
   const sdkPackages = new Set();
+  const sdkOverrides = new Set();
   const dependencies = {};
-  const overrides = {};
+  const dependencyOverrides = {};
 
-  const unrepresentable = collect(
+  // The two blocks are kept apart: a direct dependency only reaches a class
+  // that names it, but a dependency_overrides entry rewrites resolution for
+  // every package in the graph that depends on the overridden name, so the
+  // consequences of dropping one are much wider than dropping the other. SDK
+  // entries are kept apart too: the runner emits sdkPackages under
+  // `dependencies:` and sdkOverrides under `dependency_overrides:`, and an
+  // `sdk:` override sharing a name with a scalar dependency must land in the
+  // second list or the generated pubspec declares the name twice.
+  const unrepresentableDependencies = collect(
     parseExistingDependencies(projectPubspecYaml),
     dependencies,
     sdkPackages,
   );
-  unrepresentable.push(
-    ...collect(
-      parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
-      overrides,
-      sdkPackages,
-    ),
+  const unrepresentableOverrides = collect(
+    parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
+    dependencyOverrides,
+    sdkOverrides,
   );
+  const unrepresentable = [
+    ...unrepresentableDependencies,
+    ...unrepresentableOverrides,
+  ];
 
   const availablePackages = new Set([
     ...Object.keys(dependencies),
@@ -145,10 +158,12 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   return {
     sdkConstraint: unquoteConstraint(sdk) || FALLBACK_SDK_CONSTRAINT,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages: [...sdkPackages].sort(),
+    sdkOverrides: [...sdkOverrides].sort(),
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   };
 }
 
@@ -199,13 +214,20 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
     sdkConstraint,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages,
+    sdkOverrides,
     availablePackages,
     unrepresentable,
   } = buildAnalysisManifest(projectPubspecYaml);
 
-  const manifest = { sdkConstraint, dependencies, overrides, sdkPackages };
+  const manifest = {
+    sdkConstraint,
+    dependencies,
+    dependencyOverrides,
+    sdkPackages,
+    sdkOverrides,
+  };
   const sources = [];
   const skipped = [];
 
@@ -222,6 +244,11 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
   for (const entry of classes) {
     const { className, content } = entry;
 
+    // SDK names must reach the unrepresentable check: a project can declare
+    // `flutter` or `flutter_localizations` from git or hosted, and a name
+    // filtered out here would slip past that check and reach the analyzer as
+    // a missing-URI error, refusing the deploy instead of reporting the class
+    // unverified.
     const importedPackages = extractPackageImports(content);
 
     // A direct import of a dependency the manifest cannot express is this

@@ -175,6 +175,26 @@ test("prefers artifact.fixedCode over artifact.code for deploy content", () => {
   assert.equal(plan.fileEntries[0].content, "class WidgetA extends StatelessWidget {}");
 });
 
+test("discovers dependencies from fixedCode, the content actually deployed", () => {
+  // A review fix can add an import the original code never had; scanning only
+  // `code` would deploy the import while omitting its package.
+  const plan = buildBundleDeployPlan({
+    artifacts: [
+      {
+        id: "widget-a",
+        artifactType: "CustomWidget",
+        artifactName: "WidgetA",
+        fileName: "widget_a.dart",
+        code: "class WidgetA extends StatelessWidget {}",
+        fixedCode:
+          "import 'package:http/http.dart';\nclass WidgetA extends StatelessWidget {}",
+      },
+    ],
+  });
+
+  assert.equal(plan.dependencies.http, "");
+});
+
 test("falls back to artifact.code when fixedCode is absent", () => {
   const plan = buildBundleDeployPlan({
     artifacts: [

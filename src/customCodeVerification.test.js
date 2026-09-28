@@ -91,7 +91,7 @@ test("the manifest carries the project's own constraints and SDK range", () => {
 test("the manifest carries dependency_overrides, which change resolved APIs", () => {
   const manifest = buildAnalysisManifest(PROJECT_PUBSPEC);
 
-  assert.deepEqual(manifest.overrides, { intl: "0.20.1" });
+  assert.deepEqual(manifest.dependencyOverrides, { intl: "0.20.1" });
 });
 
 test("the manifest is structured data, never pubspec.yaml text", () => {
@@ -368,7 +368,7 @@ test("plans a real compile for a class whose imports all resolve", () => {
     },
   ]);
   assert.deepEqual(plan.skipped, []);
-  assert.deepEqual(plan.manifest.overrides, {});
+  assert.deepEqual(plan.manifest.dependencyOverrides, {});
 });
 
 test("names the file the way FlutterFlow would, an underscore before every capital", () => {
@@ -430,4 +430,228 @@ test("compiles the verifiable classes even when a sibling cannot be verified", (
     ["background_downloader_service.dart"],
   );
   assert.equal(plan.skipped.length, 1);
+});
+test("a class that exports the unreproducible dependency is skipped, not refused", () => {
+  // `export` pulls the package in exactly as `import` does. If exports were
+  // not read, the class would be compiled against a manifest missing the
+  // package and the analyzer would refuse the deploy over a URI it could not
+  // resolve, instead of the class being reported as unverified.
+  const exportsPrivateThing = `export 'package:private_thing/private_thing.dart';
+
+class ReExportsPrivateThing {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "ReExportsPrivateThing", content: exportsPrivateThing }],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /it imports private_thing/);
+});
+
+test("a dart:-only class still verifies under an unreproducible override", () => {
+  // dart: URIs come from the SDK itself, which no dependency_overrides entry
+  // can re-source, so nothing the class resolves can be redirected.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dependency_overrides:
+  core_types:
+    git: https://example.invalid/core.git
+`;
+  const dartOnly = `import 'dart:async';
+
+class SchedulesWork {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "SchedulesWork", content: dartOnly }],
+    pubspec,
+  );
+
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a version-constraint override is carried and does not skip anything", () => {
+  // The override rewrites intl to a constraint the manifest can express, so
+  // resolution already matches the project's and the class verifies - the
+  // graph-poison skip only applies to sources the manifest cannot carry.
+  const pubspec = `${REPRESENTABLE_PUBSPEC}
+dependency_overrides:
+  intl: 0.20.1
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("an sdk: override keeps its own channel instead of duplicating a scalar dependency", () => {
+  // A project that declares `flutter_web_plugins: any` and then overrides it
+  // to `{sdk: flutter}` must not emit the name under `dependencies:` twice -
+  // the generated pubspec would carry a duplicate key and `pub get` would
+  // fail, skipping the check over a manifest bug, not the project's code.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: any
+
+dependency_overrides:
+  flutter_web_plugins:
+    sdk: flutter
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+
+  assert.equal(manifest.dependencies.flutter_web_plugins, "any");
+  assert.deepEqual(manifest.sdkPackages, ["flutter"]);
+  assert.deepEqual(manifest.sdkOverrides, ["flutter_web_plugins"]);
+  assert.deepEqual(manifest.dependencyOverrides, {});
+  assert.deepEqual(manifest.unrepresentable, []);
+
+  // The name is still importable: the override only changes where it resolves
+  // from, not whether a class may name it.
+  const usesWebPlugins = `import 'package:flutter_web_plugins/flutter_web_plugins.dart';
+
+class RegistersPlugin {}
+`;
+  const plan = planCustomCodeVerification(
+    [{ className: "RegistersPlugin", content: usesWebPlugins }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+test("an SDK package declared as a multiline flow mapping still verifies classes", () => {
+  // `{` alone on the dependency's own line used to read as an unclosed -
+  // unreadable - mapping, so the SDK package classified unrepresentable and
+  // every package-importing class was skipped over a reproducible source.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {
+    sdk: flutter
+  }
+  background_downloader: ^8.0.0
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.deepEqual(manifest.sdkPackages, ["flutter", "flutter_web_plugins"]);
+  assert.deepEqual(manifest.unrepresentable, []);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
+test("a conditional import of the unreproducible dependency is skipped, not refused", () => {
+  // `if (...)` names a second URI the code needs when the condition holds; a
+  // scan that reads only the first URI would send the class to the runner
+  // without private_thing in its manifest, and the analyzer's missing-URI
+  // diagnostic would refuse the deploy instead of reporting it unverified.
+  const conditional = `import 'package:background_downloader/background_downloader.dart' if (dart.library.io) 'package:private_thing/private_thing.dart';
+
+class ConditionallyPrivate {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "ConditionallyPrivate", content: conditional }],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /private_thing/);
+});
+
+test("a git-forked SDK package is unrepresentable for a class that imports it", () => {
+  // The name list in the extractor says flutter_localizations is always an
+  // SDK package, but this project forks it from git - the pubspec source, not
+  // the name, decides. Filtering the name out here would send the class to
+  // the analyzer without the package and its missing-URI error would refuse
+  // the deploy instead of reporting the class unverified.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    git:
+      url: https://example.invalid/flutter_localizations_fork.git
+  background_downloader: ^8.5.0
+`;
+  const usesFork = `import 'package:flutter_localizations/flutter_localizations.dart';
+
+class LocalizesThings {}
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.deepEqual(manifest.unrepresentable, ["flutter_localizations"]);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "LocalizesThings", content: usesFork }],
+    pubspec,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /it imports flutter_localizations/);
+});
+
+test("an SDK dependency declared inline reproduces instead of breaking the manifest", () => {
+  // `flutter_web_plugins: {sdk: flutter}` is the same declaration as the
+  // block form; treated as a scalar it would be forwarded as a constraint
+  // whose braces the runner rejects, refusing the whole deploy.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {sdk: flutter}
+  background_downloader: ^8.5.0
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.ok(manifest.sdkPackages.includes("flutter_web_plugins"));
+  assert.deepEqual(manifest.unrepresentable, []);
+  assert.equal("flutter_web_plugins" in manifest.dependencies, false);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
 });
