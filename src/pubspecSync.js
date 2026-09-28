@@ -157,11 +157,106 @@ function readSourceDirective(lines, entryIndex, endIndex, parentIndent) {
 }
 
 /**
+ * Reads the source key of a dependency written as an inline flow mapping.
+ *
+ * YAML allows the same mapping inline that readSourceDirective reads in block
+ * form: `name: {sdk: flutter}` is the same declaration as the block form, and
+ * `name: {version: ^1.0.0, hosted: {name: x, url: y}}` puts version beside its
+ * source exactly as the block form does. The same precedence applies: a source
+ * key wins over `version:`.
+ *
+ * Without this an inline mapping looks scalar - its value is nonempty - and
+ * gets forwarded as a version constraint, which the runner then rejects for
+ * containing braces. A map whose members cannot be read yields key null, so
+ * the entry is classified unrepresentable rather than sent downstream as
+ * something it is not.
+ *
+ * @param {string} value - The text after `name:` on the dependency's own line
+ * @returns {{key: string|null, value: string|null}|null} The source own-key,
+ *   else the `version:` own-key, key null for an unreadable mapping, or null
+ *   when the value is not a flow mapping at all
+ */
+function parseFlowSourceDirective(value) {
+  const text = String(value || "").trim();
+  if (!text.startsWith("{")) return null;
+
+  // Find the closing brace, skipping nested mappings and quoted text.
+  let quote = null;
+  let depth = 0;
+  let end = -1;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{") depth += 1;
+    else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+      if (depth < 0) return { key: null, value: null };
+    }
+  }
+  if (end === -1) return { key: null, value: null };
+
+  // Split the members on top-level commas only - a comma inside a nested map
+  // or a quote belongs to the member, not the map.
+  const inner = text.slice(1, end);
+  const segments = [];
+  quote = null;
+  depth = 0;
+  let start = 0;
+  for (let i = 0; i < inner.length; i += 1) {
+    const char = inner[i];
+    if (quote) {
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") depth -= 1;
+    else if (char === "," && depth === 0) {
+      segments.push(inner.slice(start, i));
+      start = i + 1;
+    }
+  }
+  segments.push(inner.slice(start));
+
+  let version = null;
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (!trimmed) continue;
+    const key = parseDependencyName(trimmed);
+    if (!key) return { key: null, value: null };
+    const { value: memberValue } = splitValueAndComment(
+      trimmed.slice(trimmed.indexOf(":") + 1),
+    );
+    if (key === "version") {
+      version = { key, value: memberValue };
+      continue;
+    }
+    return { key, value: memberValue };
+  }
+  return version ?? { key: null, value: null };
+}
+
+/**
  * Reads every package declared under `dependencies:` with its constraint.
  *
  * A dependency written in block form (`sdk:`, `git:`, `path:`, or a nested
- * `version:`) has no scalar constraint and must never be rewritten as one, so
- * it is reported with `isScalar: false`.
+ * `version:`) or as an inline flow mapping (`{sdk: flutter}`) has no scalar
+ * constraint and must never be rewritten as one, so it is reported with
+ * `isScalar: false`.
  *
  * @param {string} yamlContent - Raw pubspec.yaml content
  * @returns {Map<string, {constraint: string, comment: string, lineIndex: number, isScalar: boolean, sourceKey: string|null, sourceValue: string|null}>}
@@ -186,13 +281,17 @@ export function parseExistingDependencies(yamlContent) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    const isScalar = value !== "";
+    // An inline `{sdk: flutter}`-style mapping is not a constraint, so it is
+    // read for its own source keys like a block entry is.
+    const flowSource = parseFlowSourceDirective(value);
+    const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever
     // dependency follows.
     const directive = isScalar
       ? null
-      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+      : (flowSource ??
+        readSourceDirective(lines, i, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,
@@ -244,13 +343,15 @@ export function parseDependencyBlock(yamlContent, blockName) {
     const { value, comment } = splitValueAndComment(
       trimmed.slice(trimmed.indexOf(":") + 1),
     );
-    const isScalar = value !== "";
+    const flowSource = parseFlowSourceDirective(value);
+    const isScalar = value !== "" && flowSource === null;
     // A block-form entry carries its source on the next line down. A scalar one
     // has nothing deeper, and looking anyway would walk into whichever
     // dependency follows.
     const directive = isScalar
       ? null
-      : readSourceDirective(lines, i, block.endIndex, block.childIndent.length);
+      : (flowSource ??
+        readSourceDirective(lines, i, block.endIndex, block.childIndent.length));
 
     declared.set(name, {
       constraint: value,

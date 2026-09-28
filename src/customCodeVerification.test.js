@@ -294,6 +294,55 @@ test("a version-constraint override is carried and does not skip anything", () =
   assert.deepEqual(plan.skipped, []);
 });
 
+test("a conditional import of the unreproducible dependency is skipped, not refused", () => {
+  // `if (...)` names a second URI the code needs when the condition holds; a
+  // scan that reads only the first URI would send the class to the runner
+  // without private_thing in its manifest, and the analyzer's missing-URI
+  // diagnostic would refuse the deploy instead of reporting it unverified.
+  const conditional = `import 'package:background_downloader/background_downloader.dart' if (dart.library.io) 'package:private_thing/private_thing.dart';
+
+class ConditionallyPrivate {}
+`;
+
+  const plan = planCustomCodeVerification(
+    [{ className: "ConditionallyPrivate", content: conditional }],
+    PROJECT_PUBSPEC,
+  );
+
+  assert.deepEqual(plan.sources, []);
+  assert.equal(plan.skipped.length, 1);
+  assert.match(plan.skipped[0].reason, /private_thing/);
+});
+
+test("an SDK dependency declared inline reproduces instead of breaking the manifest", () => {
+  // `flutter_web_plugins: {sdk: flutter}` is the same declaration as the
+  // block form; treated as a scalar it would be forwarded as a constraint
+  // whose braces the runner rejects, refusing the whole deploy.
+  const pubspec = `name: my_app
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {sdk: flutter}
+  background_downloader: ^8.5.0
+`;
+
+  const manifest = buildAnalysisManifest(pubspec);
+  assert.ok(manifest.sdkPackages.includes("flutter_web_plugins"));
+  assert.deepEqual(manifest.unrepresentable, []);
+  assert.equal("flutter_web_plugins" in manifest.dependencies, false);
+
+  const plan = planCustomCodeVerification(
+    [{ className: "BackgroundDownloaderService", content: SELF_CONTAINED }],
+    pubspec,
+  );
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(plan.skipped, []);
+});
+
 test("an SDK package no list has heard of is reproduced from its pubspec source", () => {
   // The regression: flutter_web_plugins is a genuine Flutter SDK package that
   // the hand-kept list omitted, so every project declaring it - which is every

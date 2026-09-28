@@ -56,19 +56,13 @@ function stripComments(code) {
   return out;
 }
 
-/**
- * Scans Dart source for `package:name/...` imports and returns the
- * third-party pub.dev packages it references, in first-seen order.
- *
- * This is what a generated action's real dependencies are - not whatever an
- * AI-authored spec declared alongside it. A declared dependency list can miss
- * a package the code actually imports (a manual edit, a regeneration cycle
- * that added an import without updating the spec), and FlutterFlow rejects a
- * push whose pubspec.yaml omits a package the code imports.
- *
- * @param {string} code - Dart source
- * @returns {string[]} Package names, deduplicated
- */
+// A directive can carry further URIs in its `if (...)` clauses - each names
+// the file imported when the condition holds, so every quoted literal inside
+// an import/export directive is code the class needs. The directive regex
+// runs to the closing `;`; string literals can never contain one.
+const DIRECTIVE_PATTERN = /\b(?:import|export)\s+(?=['"])[^;]*;/g;
+const URI_PATTERN = /(['"])([^'"\n]+)\1/g;
+
 /**
  * Returns every URI the source imports or exports, in first-seen order.
  *
@@ -83,15 +77,18 @@ function stripComments(code) {
 export function extractImportUris(code = "") {
   const uris = [];
   const seen = new Set();
-  const directiveRegex = /\b(?:import|export)\s+(['"])([^'"\n]+)\1/g;
   const stripped = stripComments(code);
-  let match;
+  let directive;
 
-  while ((match = directiveRegex.exec(stripped)) !== null) {
-    const uri = match[2];
-    if (seen.has(uri)) continue;
-    seen.add(uri);
-    uris.push(uri);
+  while ((directive = DIRECTIVE_PATTERN.exec(stripped)) !== null) {
+    URI_PATTERN.lastIndex = 0;
+    let match;
+    while ((match = URI_PATTERN.exec(directive[0])) !== null) {
+      const uri = match[2];
+      if (seen.has(uri)) continue;
+      seen.add(uri);
+      uris.push(uri);
+    }
   }
 
   return uris;
@@ -101,16 +98,21 @@ export function extractPackageImports(code = "") {
   const names = [];
   const seen = new Set();
   // `export 'package:x/x.dart'` pulls the package in exactly as `import` does,
-  // so both directives name a dependency the code needs.
-  const importRegex = /\b(?:import|export)\s+['"]package:([a-zA-Z0-9_]+)\//g;
+  // and an `if (...)` clause's alternative URI does the same when its
+  // condition holds, so every package URI in a directive names a dependency.
+  const packageUriPattern = /['"]package:([a-zA-Z0-9_]+)\//g;
   const stripped = stripComments(code);
-  let match;
+  let directive;
 
-  while ((match = importRegex.exec(stripped)) !== null) {
-    const name = match[1];
-    if (FLUTTER_SDK_PACKAGES.has(name) || seen.has(name)) continue;
-    seen.add(name);
-    names.push(name);
+  while ((directive = DIRECTIVE_PATTERN.exec(stripped)) !== null) {
+    packageUriPattern.lastIndex = 0;
+    let match;
+    while ((match = packageUriPattern.exec(directive[0])) !== null) {
+      const name = match[1];
+      if (FLUTTER_SDK_PACKAGES.has(name) || seen.has(name)) continue;
+      seen.add(name);
+      names.push(name);
+    }
   }
 
   return names;

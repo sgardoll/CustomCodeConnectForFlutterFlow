@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractPackageImports } from "./dartPackageImports.js";
+import {
+  extractImportUris,
+  extractPackageImports,
+} from "./dartPackageImports.js";
 
 test("detects a single third-party package import", () => {
   assert.deepEqual(
@@ -65,6 +68,36 @@ test("ignores an import mentioned only in a block comment", () => {
   const code = [
     "/* import 'package:torch_light/torch_light.dart'; */",
     "Future<void> doThing() async {}",
+  ].join("\n");
+
+  assert.deepEqual(extractPackageImports(code), []);
+});
+
+test("reads every URI a directive carries, including conditional alternatives", () => {
+  // `if (dart.library.io) 'x.dart'` selects another file the code needs, so
+  // both URIs in the directive count.
+  const code =
+    "import 'package:public_api/public_api.dart' if (dart.library.io) 'package:private_types/private_types.dart';\n" +
+    "export 'src/iface.dart' if (dart.library.html) 'package:web_impl/web_impl.dart';\n" +
+    "class Conditional {}\n";
+
+  assert.deepEqual(extractPackageImports(code), [
+    "public_api",
+    "private_types",
+    "web_impl",
+  ]);
+  assert.deepEqual(extractImportUris(code), [
+    "package:public_api/public_api.dart",
+    "package:private_types/private_types.dart",
+    "src/iface.dart",
+    "package:web_impl/web_impl.dart",
+  ]);
+});
+
+test("a conditional URI in a comment is not a dependency", () => {
+  const code = [
+    "// import 'package:a/a.dart' if (dart.library.io) 'package:b/b.dart';",
+    "class Plain {}",
   ].join("\n");
 
   assert.deepEqual(extractPackageImports(code), []);
