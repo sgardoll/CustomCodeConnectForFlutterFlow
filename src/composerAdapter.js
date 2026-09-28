@@ -381,11 +381,7 @@ export function initComposer({ onSubmit }) {
       heroDemoOwned = false;
       cancelHeroDemo();
     }
-    if (chipTyping) {
-      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
-      mirrorTyped();
-      cancelChipTyping();
-    }
+    finishChipTyping();
   }
 
   // --- Chip fill (prototype fillChip, lines 1816-1829) ---
@@ -400,6 +396,18 @@ export function initComposer({ onSubmit }) {
     }
     composer.classList.remove("is-demo-typing");
     syncSend();
+  }
+
+  // A takeover lands the fill's end state — the complete chip prompt — rather
+  // than freezing mid-type, so a submit after it can never carry a half-typed
+  // prompt (the same end state as a fill that finished on its own).
+  function finishChipTyping() {
+    if (!chipTyping) return;
+    field.value =
+      chips.find((chip) => chip.classList.contains("is-active"))?.dataset
+        .prompt || field.value;
+    mirrorTyped();
+    cancelChipTyping();
   }
 
   function clearChipSelection() {
@@ -486,7 +494,7 @@ export function initComposer({ onSubmit }) {
       return;
     }
     finishHeroDemo();
-    cancelChipTyping();
+    finishChipTyping();
     if (event.key === "Tab" && !event.shiftKey && session.active) {
       event.preventDefault();
       acceptSuggestion();
@@ -566,7 +574,7 @@ export function initComposer({ onSubmit }) {
   // theirs to trim.
   field.addEventListener("pointerdown", () => {
     finishHeroDemo(true);
-    cancelChipTyping();
+    finishChipTyping();
     clearChipSelection();
   });
 
@@ -609,11 +617,7 @@ export function initComposer({ onSubmit }) {
       heroDemoOwned = false;
       cancelHeroDemo();
     }
-    if (chipTyping) {
-      field.value = chips.find((chip) => chip.classList.contains("is-active"))?.dataset.prompt || field.value;
-      mirrorTyped();
-      cancelChipTyping();
-    }
+    finishChipTyping();
     clearTimeout(debounceTimer);
   }
 

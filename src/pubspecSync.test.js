@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyDependencyOverrides,
   mergeDependenciesIntoYaml,
   parseDependencyBlock,
   parseExistingDependencies,
@@ -388,6 +389,28 @@ test("reads a source from dependency_overrides too", () => {
   );
 
   assert.equal(overrides.get("flutter_web_plugins").sourceKey, "sdk");
+});
+
+test("blank lines and comments do not hide a version member from an override", () => {
+  // YAML permits blank lines and comments inside a block mapping. A version
+  // member written after them is still the entry's own member — stopping the
+  // search at the first non-matching line would leave the old pin in place
+  // while reporting the raise as applied.
+  const pubspec = `dependencies:
+  intl:
+
+    # pinned deliberately after a regression
+    version: 0.19.0
+  http: ^1.0.0
+`;
+  const { yaml, overridden, skipped } = applyDependencyOverrides(pubspec, {
+    intl: "0.20.0",
+  });
+
+  assert.deepEqual(overridden, [{ name: "intl", from: "0.19.0", to: "0.20.0" }]);
+  assert.deepEqual(skipped, []);
+  assert.match(yaml, /version: 0\.20\.0/);
+  assert.match(yaml, /# pinned deliberately after a regression/);
 });
 
 test("a brace inside a flow-map comment does not close the mapping", () => {

@@ -38,8 +38,18 @@ export async function readProvisionResponse(response, handlers = {}) {
       if (event.message && onLog) onLog(event.message);
       return;
     }
-    // A "result" event, or the whole body from a non-streaming runner.
-    finalResult = event;
+    // Only an explicit "result" event is a streamed decision; any other event
+    // (heartbeat, progress noise) is not the runner's answer. A non-streaming
+    // runner answers with a bare JSON payload — no `event` field — which counts
+    // only when it carries a definitive decision of its own: a boolean
+    // `success`.
+    if (event.event === "result") {
+      finalResult = event;
+      return;
+    }
+    if (event.event === undefined && typeof event.success === "boolean") {
+      finalResult = event;
+    }
   };
 
   // A mid-stream read failure is a dropped connection, not a decision from

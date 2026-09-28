@@ -483,8 +483,17 @@ export function initHeroMarkField() {
     document.removeEventListener("visibilitychange", onVisibilityChange);
   }
 
-  // Keep the page clean on navigations that tear down the canvas.
-  window.addEventListener("pagehide", dispose);
+  // Keep the page clean on navigations that tear down the canvas. A persisted
+  // pagehide only parks the page in the back-forward cache, so it pauses the
+  // loop without disposing: the matching persisted pageshow restores it, and
+  // start() re-applies the reduced/no-pointer/visibility gates.
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) stop();
+    else dispose();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) start();
+  });
 
   return {
     dispose,

@@ -508,7 +508,17 @@ function rewriteVersionMember(lines, entry, constraint) {
   const parentIndent = indentOf(lines[entry.lineIndex]);
   for (let j = entry.lineIndex; j < lines.length; j += 1) {
     const line = lines[j];
-    if (j !== entry.lineIndex && indentOf(line) <= parentIndent) break;
+    // Blank and comment-only lines never close the entry's block — YAML
+    // ignores both — so they are skipped before the sibling test; a blank
+    // line's zero indent would otherwise end the search early.
+    const trimmed = line.trim();
+    if (
+      j !== entry.lineIndex &&
+      trimmed !== "" &&
+      !trimmed.startsWith("#") &&
+      indentOf(line) <= parentIndent
+    )
+      break;
     // YAML permits quoted keys - `{'version': 0.19.0}` declares the same
     // member as `{version: 0.19.0}`.
     const isMember =

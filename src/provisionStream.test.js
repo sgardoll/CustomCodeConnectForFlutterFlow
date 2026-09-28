@@ -258,6 +258,20 @@ test("a mid-stream read failure is an unknown outcome, not a thrown error", asyn
   assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.UNCONFIRMED);
 });
 
+test("an unrecognized streamed event is not a result — the outcome stays unknown", async () => {
+  // Heartbeats and other progress noise share the event envelope but are not
+  // the runner's answer. Treating any event as the final result would
+  // fabricate a success from a message that decides nothing.
+  const result = await readProvisionResponse(
+    provisionAtStatus(
+      ['{"event":"heartbeat"}\n'],
+      200,
+    ),
+  );
+  assert.equal(result.finalResultReceived, false);
+  assert.equal(deployOutcomeOfStreamResult(result), DeployOutcome.UNCONFIRMED);
+});
+
 test("a delivered result is classified by the ordinary rule, not the rejection carve-out", async () => {
   const shipped = await readProvisionResponse(
     provisionAtStatus(

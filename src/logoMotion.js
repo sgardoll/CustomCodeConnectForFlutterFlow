@@ -382,7 +382,17 @@ export function createPipelineLogoLoop(options = {}) {
     document.removeEventListener("visibilitychange", onVisibility);
   }
 
-  window.addEventListener("pagehide", dispose);
+  // A persisted pagehide only parks the page in the back-forward cache, so it
+  // pauses the loop without disposing: the matching persisted pageshow resumes
+  // through sync(), which re-applies the visibility gates. A real teardown
+  // still disposes.
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) stop();
+    else dispose();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) sync();
+  });
 
   /* A helper to review a specific beat deterministically (also used by
      playwright visual artefacts): paints the pose for `t` without starting the

@@ -255,11 +255,25 @@ const PROMPT_IMAGE_UPLOAD_TIMEOUT_MS = 30000
 // Handle returned by initComposer; lets attachment state gate the Send button.
 let composerControls = null
 
-function readAsDataUrl(file) {
+function readAsDataUrl(file, signal) {
   return new Promise((resolve) => {
     const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = () => resolve(null)
+    const done = (value) => {
+      signal?.removeEventListener("abort", onAbort)
+      resolve(value)
+    }
+    const onAbort = () => {
+      reader.abort()
+      done(null)
+    }
+    reader.onload = () => done(reader.result)
+    reader.onerror = () => done(null)
+    // The upload timeout aborts this too: a FileReader that never settles
+    // must not hold its slot (and the send gate) forever.
+    if (signal) {
+      if (signal.aborted) { resolve(null); return }
+      signal.addEventListener("abort", onAbort, { once: true })
+    }
     reader.readAsDataURL(file)
   })
 }
@@ -319,7 +333,7 @@ function uploadedFileUrl(uploaded) {
 // Resolves "added", "failed" (no usable upload URL, including a timeout),
 // or "dropped" (the slot was removed while the upload was in flight).
 async function addPromptImage(file, slot, signal) {
-  const dataUrl = await readAsDataUrl(file)
+  const dataUrl = await readAsDataUrl(file, signal)
   if (dataUrl && promptImages.includes(slot)) {
     // Fast local preview while the upload is still in flight.
     slot.dataUrl = dataUrl
@@ -435,6 +449,13 @@ async function handlePromptImageSelect(event) {
 }
 
 function removePromptImage(index) {
+  // A run already in flight snapshotted its attachments: removing a slot now
+  // would abort the upload that slot was promised, silently dropping a
+  // submitted image from the run's payload.
+  if (pipelineState.isRunning) {
+    showToast("Wait for the current generation to finish before removing images.", "info")
+    return
+  }
   const slot = promptImages[index]
   const entry = pendingImageUploads.find((e) => e.slot === slot)
   // Removing a pending thumbnail aborts its upload and frees the send gate
@@ -3445,6 +3466,15 @@ async function resolveProjectPubspec(apiClient, newDependencies = {}) {
             }
           }
         }
+        // This export postdates every confirmed write, so a verified credit
+        // is spent whether or not its recorded bytes were observed verbatim:
+        // a verified write already landed, and the file's current content —
+        // matching, reformatted by the server, or missing — is its end state.
+        // Uncertain records survive: an unproven write may still land later.
+        for (const [content, record] of [...contents]) {
+          record.verified = 0;
+          if (record.uncertain <= 0) contents.delete(content);
+        }
         if (contents.size === 0) dirty.delete(path);
       }
       if (dirty.size === 0) projectSourceDirtyWrites.delete(cacheKey);
@@ -4017,6 +4047,18 @@ async function getConfirmedStoredProjectId(forApiKey) {
   if (order <= ffAppliedConfirmationOrder) return "";
   ffAppliedConfirmationOrder = order;
   if (!verified) return "";
+  // A selection bound to this key + endpoint generation is the active choice:
+  // when it names a different project the stored value is superseded, so the
+  // deploy follows the confirmed binding — never the stored target it
+  // replaced. A binding made under another key or generation does not
+  // describe this push and must not be clobbered.
+  if (
+    projectSelectionIdentity &&
+    projectSelectionIdentity.projectId !== projectId &&
+    isProjectSelectionConfirmed(projectSelectionIdentity.projectId, apiKey)
+  ) {
+    return projectSelectionIdentity.projectId;
+  }
   // Never overwrite an in-flight explicit choice for a different project.
   if (
     !projectSelectionIdentity ||
