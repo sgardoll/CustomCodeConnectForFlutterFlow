@@ -1996,7 +1996,14 @@
           min-height: 300px;
           padding: 34px 24px;
         }
-        .pipeline-view h3 { font-size: 25px; }
+        .pipeline-view h3 {
+          font-size: 25px;
+          /* The longest phase title ("Understanding your prompt") measures
+             ~304px at this size, past the 298px content column, so it wrapped
+             to two lines and pushed every later section down 30px. Tightening
+             tracking keeps the phase title to the canonical single line. */
+          letter-spacing: -0.045em;
+        }
         .pipeline-progress .pipeline-glyph.logo-loop { margin-bottom: 16px; }
         .pipeline-prompt-recap {
           padding: 22px;

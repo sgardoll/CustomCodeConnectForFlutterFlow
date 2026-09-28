@@ -1014,6 +1014,11 @@
         display: flex;
         flex-direction: column;
         gap: 12px;
+        /* Auto margins take precedence over the panel's align/justify center:
+           the card centers when there is room and starts at the top (still
+           scrollable) when the results stage is shorter than the card. */
+        margin: auto;
+        flex-shrink: 0;
       }
       .error-input-header {
         display: flex;
@@ -1987,7 +1992,14 @@
           min-height: 300px;
           padding: 34px 24px;
         }
-        .pipeline-view h3 { font-size: 25px; }
+        .pipeline-view h3 {
+          font-size: 25px;
+          /* The longest phase title ("Understanding your prompt") measures
+             ~304px at this size, past the 298px content column, so it wrapped
+             to two lines and pushed every later section down 30px. Tightening
+             tracking keeps the phase title to the canonical single line. */
+          letter-spacing: -0.045em;
+        }
         .pipeline-progress .pipeline-glyph.logo-loop { margin-bottom: 16px; }
         .pipeline-prompt-recap {
           padding: 22px;
@@ -3298,7 +3310,7 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-BqLZ8Bz9.js"></script>
+    <script type="module" crossorigin src="/assets/index-DxfErulo.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-BQUorxWE.css">
   </head>
   <body>
@@ -3583,7 +3595,7 @@
             </div>
 
             <!-- Error Input Panel (overlay on results) -->
-            <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;">
+            <div id="error-input-panel" class="hidden" style="position:absolute;inset:0;background:rgba(255,255,255,0.97);z-index:10;align-items:center;justify-content:center;padding:48px;display:none;overflow-y:auto;">
               <div class="error-input-card" style="width:100%;max-width:560px;">
                 <div class="error-input-header">
                   <div class="flex items-center gap-2">
