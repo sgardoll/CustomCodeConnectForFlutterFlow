@@ -77,6 +77,12 @@ for (const { name, width, height } of viewports) {
       await page.goto("/");
 
       const field = page.locator("#pipeline-input");
+      // The hero demo types the shipped prompt in on load — the settled value
+      // only holds once the class retires, so wait for the demo's end state
+      // rather than polling the prefix.
+      await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/, {
+        timeout: 15000,
+      });
       await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
       await expect(page.locator(".ghost .suggest")).toHaveText("");
       await expect(page.locator("#tab-hint")).toBeHidden();
@@ -408,6 +414,52 @@ test.describe("STU-445 hero composer behaviour", () => {
     await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
     await expect(page.locator("#pipeline-input")).toHaveValue(COMPOSER_DEFAULT_PROMPT);
     await expect(page.locator("#hero-send")).toBeEnabled();
+  });
+
+  test("a mid-demo click completes the prompt — a submit can never carry a prefix", async ({
+    page,
+  }) => {
+    const prompts = [];
+    await page.route(ENDPOINTS.pipeline, async (route) => {
+      const body = route.request().postDataJSON();
+      if (body && body.step === "architect") prompts.push(body.prompt);
+      await route.fulfill(oneArtifact());
+    });
+
+    await page.goto("/", { waitUntil: "commit" });
+
+    // Catch the demo mid-type: a real prefix is in the field and the rest of
+    // the prompt is still seconds away, so a frozen prefix would fail below.
+    await page.waitForFunction(
+      (expected) => {
+        const field = document.getElementById("pipeline-input");
+        const composer = document.getElementById("composer");
+        return (
+          composer?.classList.contains("is-demo-typing") &&
+          field &&
+          field.value.length > 0 &&
+          field.value.length < expected.length
+        );
+      },
+      COMPOSER_DEFAULT_PROMPT,
+      { timeout: 8000 },
+    );
+
+    // The takeover lands the complete shipped prompt — the same end state as
+    // a finished demo — not whatever the timer had reached.
+    await page.locator("#pipeline-input").click();
+    const field = page.locator("#pipeline-input");
+    await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#hero-send")).toBeEnabled();
+
+    // Submitting right after the takeover runs the complete example, never a
+    // half-typed prefix.
+    await page.locator("#hero-send").click();
+    await expect
+      .poll(() => prompts.length, { timeout: 30000 })
+      .toBe(1);
+    expect(prompts[0]).toContain(COMPOSER_DEFAULT_PROMPT);
   });
 
   test("a live reduced-motion flip mid-demo stops the typing and restores the prompt", async ({

@@ -56,9 +56,14 @@ test.describe("Redesigned hero landing and composer", () => {
     await expect(heading).toBeVisible();
     await expect(heading).toContainText("FlutterFlow custom code.");
 
-    // Composer is present with its shipped example prompt.
+    // Composer is present with its shipped example prompt. The hero demo
+    // types it in on load, so wait for the demo's end state rather than
+    // polling the prefix.
     const composer = page.locator("#pipeline-input");
     await expect(composer).toBeVisible();
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/, {
+      timeout: 15000,
+    });
     await expect(composer).toHaveValue(COMPOSER_DEFAULT_PROMPT);
     await expect(composer).toHaveAttribute(
       "placeholder",
