@@ -94,6 +94,23 @@ test("reads every URI a directive carries, including conditional alternatives", 
   ]);
 });
 
+test("a semicolon inside a quoted URI does not end the directive", () => {
+  // `;` is legal in a Dart URI - `src/a;b.dart` is a real filename. Cutting
+  // the directive there would lose the URI entirely, and a conditional
+  // alternative written after it would be lost with it.
+  const code =
+    "import 'src/a;b.dart' if (dart.library.io) 'package:io_impl/io_impl.dart' show A;\n" +
+    "export \"src/b;c.dart\";\n" +
+    "class Plain {}\n";
+
+  assert.deepEqual(extractImportUris(code), [
+    "src/a;b.dart",
+    "package:io_impl/io_impl.dart",
+    "src/b;c.dart",
+  ]);
+  assert.deepEqual(extractPackageImports(code), ["io_impl"]);
+});
+
 test("a conditional URI in a comment is not a dependency", () => {
   const code = [
     "// import 'package:a/a.dart' if (dart.library.io) 'package:b/b.dart';",

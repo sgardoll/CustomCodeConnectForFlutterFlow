@@ -59,8 +59,11 @@ function stripComments(code) {
 // A directive can carry further URIs in its `if (...)` clauses - each names
 // the file imported when the condition holds, so every quoted literal inside
 // an import/export directive is code the class needs. The directive regex
-// runs to the closing `;`; string literals can never contain one.
-const DIRECTIVE_PATTERN = /\b(?:import|export)\s+(?=['"])[^;]*;/g;
+// runs to the closing `;`, stepping over quoted literals whole because a
+// string is the one place a `;` is legal - `import 'src/a;b.dart';` names a
+// file, and stopping at its `;` would lose the URI.
+const DIRECTIVE_PATTERN =
+  /\b(?:import|export)\s+(?=['"])(?:'[^'\n]*'|"[^"\n]*"|[^;'"])*;/g;
 const URI_PATTERN = /(['"])([^'"\n]+)\1/g;
 
 /**
