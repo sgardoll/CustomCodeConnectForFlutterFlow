@@ -45,8 +45,9 @@ export const ENDPOINTS = {
   createCheckout: `${BUILDSHIP_BASE_URL}/stripe/create-checkout-session-intl`,
   createPortal: `${BUILDSHIP_BASE_URL}/stripe/create-portal-session`,
   connectFeedback: `${BUILDSHIP_BASE_URL}/connectFeedback`,
-  deployCustomClasses:
-    "https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app/deployCustomClasses",
+  // Glob matches both the production runner URL and the dev server's
+  // same-origin /api/ffai-runner proxy path, which the app uses under vite dev.
+  deployCustomClasses: "**/deployCustomClasses",
   flutterFlowListProjects: "https://api.flutterflow.io/v2/listProjects",
   flutterFlowLegacyListProjects:
     "https://api.flutterflow.io/v2/l/listProjects",

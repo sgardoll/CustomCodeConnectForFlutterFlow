@@ -149,6 +149,10 @@ https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app/deployCustomClasses
 
 Override it at build time with `VITE_FLUTTERFLOW_CLASS_PROVISION_ENDPOINT`.
 `VITE_FLUTTERFLOW_DSL_DEPLOY_ENDPOINT` remains accepted for compatibility.
+Under `npm run dev` the app instead calls the same-origin path
+`/api/ffai-runner/deployCustomClasses`, which the Vite dev server proxies to
+the runner — its CORS allowlist admits only the production origin, so a direct
+browser call from localhost is rejected before the request reaches it.
 Deploy the runner with:
 
 ```bash

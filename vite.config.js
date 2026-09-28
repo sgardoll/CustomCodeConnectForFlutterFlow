@@ -28,6 +28,15 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/openai/, ''),
           secure: true
+        },
+        // Same-origin route to the class-provisioning runner: its CORS
+        // allowlist only admits the production site, so dev traffic must be
+        // proxied through this server instead of sent cross-origin.
+        '/api/ffai-runner': {
+          target: 'https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/ffai-runner/, ''),
+          secure: true
         }
       }
     },

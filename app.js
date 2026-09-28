@@ -92,10 +92,15 @@ import { cancelSurfaceMotion, currentSurfaceRect, morphSurface, exitHero } from 
 
 // --- CONFIGURATION ---
 const IS_DEV = import.meta.env.DEV
+// The runner's CORS allowlist admits only the production origin, so a dev
+// server must reach it through Vite's same-origin /api/ffai-runner proxy
+// rather than calling the runner directly.
 const FLUTTERFLOW_CLASS_PROVISION_ENDPOINT =
   import.meta.env.VITE_FLUTTERFLOW_CLASS_PROVISION_ENDPOINT ||
   import.meta.env.VITE_FLUTTERFLOW_DSL_DEPLOY_ENDPOINT ||
-  "https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app/deployCustomClasses";
+  (IS_DEV
+    ? "/api/ffai-runner/deployCustomClasses"
+    : "https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app/deployCustomClasses");
 
 // --- ANALYTICS ---
 const POSTHOG_KEY = import.meta.env.VITE_PUBLIC_POSTHOG_KEY;
