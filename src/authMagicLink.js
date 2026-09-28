@@ -36,6 +36,16 @@ export function explainPlusAliasRule(rawEmail) {
   return renderRejectionMessage(email, domain);
 }
 
+/**
+ * A magic-link send is only successful when the server says so: the explicit
+ * success code, or a legacy response that carries no code at all. Any other
+ * code — including the plus-alias rejection — is an error, even though the
+ * HTTP request itself succeeded.
+ */
+export function isMagicLinkSuccess(data) {
+  return !data?.code || data.code === MAGIC_LINK_SUCCESS_CODE;
+}
+
 export function getMagicLinkResultMessage(data, email) {
   if (data?.code === PLUS_ALIAS_REJECTED_CODE) {
     return data.message || explainPlusAliasRule(email) || 'Please enter your primary email address.';

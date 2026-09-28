@@ -5,6 +5,7 @@ import {
   explainPlusAliasRule,
   getMagicLinkResultMessage,
   isKnownProviderPlusAlias,
+  isMagicLinkSuccess,
   trimEmail,
 } from "./authMagicLink.js";
 
@@ -76,5 +77,22 @@ test("getMagicLinkResultMessage treats legacy success responses as sent", () => 
   assert.equal(
     getMagicLinkResultMessage({ message: "Check your email" }, `user@${firstAllowlistedDomain}`),
     `Check your email — we sent a link to user@${firstAllowlistedDomain}`
+  );
+});
+
+test("isMagicLinkSuccess accepts only the success code or a legacy code-less response", () => {
+  assert.equal(isMagicLinkSuccess({ code: fixtures.successCode }), true);
+  assert.equal(isMagicLinkSuccess({ success: true, message: "Magic link sent" }), true);
+  assert.equal(isMagicLinkSuccess({ message: "Check your email" }), true);
+
+  // The alias rejection is an error despite the HTTP success...
+  assert.equal(
+    isMagicLinkSuccess({ code: fixtures.validationCode, message: "Use primary email." }),
+    false
+  );
+  // ...and so is any other server error code, which must never read as sent.
+  assert.equal(
+    isMagicLinkSuccess({ code: "SEND_FAILED", message: "Could not send the link." }),
+    false
   );
 });

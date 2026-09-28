@@ -24,6 +24,7 @@ import {
  * key material (raw or masked) is rendered into a status label.
  */
 const KEY = "ff-secret-token-abc123";
+const NEW_KEY = "ff-secret-token-xyz789";
 const PROJ = "proj-abc-123";
 const EMAIL = "metered@example.com";
 const STAGING_LIST = "https://api.flutterflow.io/v2-staging/listProjects";
@@ -108,6 +109,39 @@ async function saveKeyThroughModal(page, { key, project } = {}) {
   // walkthrough inside a 1s timeout; wait it out, then clear the overlay once.
   await page.waitForTimeout(1300);
   await dismissOpenModals(page);
+}
+
+// Gate the production projects endpoint: the next request can be held pending
+// and released on demand, so a test can let a stale response land only after
+// the endpoint changed. Every other production request answers immediately.
+async function gateProductionListProjects(page) {
+  let holdNext = false;
+  let releaseHeld = null;
+  let markHeld = null;
+  const held = new Promise((resolve) => {
+    markHeld = resolve;
+  });
+
+  await page.route(ENDPOINTS.flutterFlowListProjects, async (route) => {
+    if (!holdNext) {
+      await route.fulfill(sampleProjectList());
+      return;
+    }
+    holdNext = false;
+    markHeld();
+    await new Promise((resolve) => {
+      releaseHeld = resolve;
+    });
+    await route.fulfill(sampleProjectList());
+  });
+
+  return {
+    holdNext: () => {
+      holdNext = true;
+    },
+    waitForHeld: () => held,
+    release: () => releaseHeld(),
+  };
 }
 
 test.describe("STU-384 account connection", () => {
@@ -270,6 +304,151 @@ test.describe("STU-384 account connection", () => {
     await expect(
       page.locator(`#flutterflow-projects-select option[value="proj-def-456"]`),
     ).toHaveCount(0);
+  });
+
+  test("a late project fetch from the previous endpoint cannot overwrite the new endpoint's list", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    const gate = await gateProductionListProjects(page);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its production re-fetch is held in flight.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+
+    // Switch to staging while the production response is still pending, so the
+    // staging list is what the dropdown must show.
+    await page
+      .locator("#api-keys-modal summary", { hasText: "Advanced" })
+      .click();
+    await page
+      .locator("#flutterflow-endpoint-select")
+      .selectOption("https://api.flutterflow.io/v2-staging/");
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+
+    // Release the stale production response: it must be discarded, not allowed
+    // to replace the staging list the new endpoint already returned.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-abc-123"]`),
+    ).toHaveCount(0);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+  });
+
+  test("a late connection check from the previous endpoint cannot overwrite the new endpoint's status", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, {
+      ...signedInContext(),
+      [ENDPOINTS.flutterFlowListProjects]: sampleProjectList(),
+      [STAGING_LIST]: stagingProjectList(),
+    });
+    const gate = await gateProductionListProjects(page);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+
+    // Start a production connection check and keep its response pending.
+    gate.holdNext();
+    await page.evaluate(() => {
+      window.validateFlutterFlowConnection();
+    });
+    await gate.waitForHeld();
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Checking connection…",
+    );
+
+    // Switch to staging while the check is still pending; staging's re-fetch
+    // settles the card to connected.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await page
+      .locator("#api-keys-modal summary", { hasText: "Advanced" })
+      .click();
+    await page
+      .locator("#flutterflow-endpoint-select")
+      .selectOption("https://api.flutterflow.io/v2-staging/");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+
+    // Release the stale check with a different outcome: it must not overwrite
+    // the staging status or resurrect a target project.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="proj-stg-789"]`),
+    ).toHaveCount(1);
+  });
+
+  test("replacing the key without choosing a project clears the old target", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    await page.goto("/");
+
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor and replace the key. The dropdown re-selects the
+    // stored project when its list loads, but that is not a choice.
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await expect(page.locator("#flutterflow-projects-select")).toHaveValue(PROJ);
+
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // The old key's target is gone: nothing a later deploy reads can silently
+    // point at it.
+    const storedAfter = await page.evaluate(() =>
+      localStorage.getItem("ccc_api_key_flutterflow_project_id"),
+    );
+    expect(storedAfter).toBeNull();
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
   });
 
   test("removing the key flips the connection card back to not-configured", async ({ page }) => {

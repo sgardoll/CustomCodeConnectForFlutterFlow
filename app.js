@@ -47,7 +47,7 @@ import {
   explainPlusAliasRule,
   getMagicLinkResultMessage,
   isKnownProviderPlusAlias,
-  PLUS_ALIAS_REJECTED_CODE,
+  isMagicLinkSuccess,
   trimEmail,
 } from "./src/authMagicLink.js";
 import {
@@ -1070,6 +1070,12 @@ let confirmProjectToken = 0;
 //       | 'unauthorized' | 'network-error'
 let ffConnectionState = "not-configured";
 
+// Monotonic generation of the configured FlutterFlow endpoint. Every project
+// fetch and connection check captures it when it starts and discards its
+// outcome if the generation moved on, so a late response from a previous
+// endpoint can never overwrite the current endpoint's status or project list.
+let ffEndpointGeneration = 0;
+
 async function initializeApiKeys() {
   // Remove an exportable key left by an earlier version even if its encrypted
   // credentials were already cleared.
@@ -1435,6 +1441,10 @@ async function saveApiKeys() {
   const flutterflowInput = document.getElementById("flutterflow-api-key-input");
   const projectSelect = document.getElementById("flutterflow-projects-select");
   const enteredKey = flutterflowInput.value.trim();
+  // Captured before the save: a replacement key must not silently inherit the
+  // target project that was chosen for the key it replaces.
+  const previousProjectId = flutterflowProjectId;
+  const isKeyReplaced = Boolean(enteredKey) && enteredKey !== flutterflowApiKey;
 
   // Only save if user entered a new value
   if (enteredKey) {
@@ -1448,7 +1458,18 @@ async function saveApiKeys() {
       projectSelect.focus();
       return;
     }
-    await saveApiKey("flutterflow_project_id", selectedProjectId);
+    // The dropdown re-selects the stored project whenever it loads, so an
+    // unchanged value is not a fresh choice. A replacement key keeps only an
+    // explicitly chosen (different) project; the old target is cleared so a
+    // deploy can never silently use it with the new key.
+    if (isKeyReplaced && selectedProjectId === previousProjectId) {
+      clearStoredProjectSelection();
+      projectSelect.value = "";
+    } else {
+      await saveApiKey("flutterflow_project_id", selectedProjectId);
+    }
+  } else if (isKeyReplaced) {
+    clearStoredProjectSelection();
   }
 
   // Reinitialize keys
@@ -1594,7 +1615,12 @@ function renderApiKeyConnection() {
  * @returns {Promise<Array|null>} the loaded projects, or null on error.
  */
 async function validateFlutterFlowConnection() {
+  // The endpoint this check belongs to. If the endpoint changes while the
+  // check is in flight, its outcome describes a previous endpoint and must be
+  // discarded rather than overwrite the new endpoint's state.
+  const generation = ffEndpointGeneration;
   const apiKey = await getApiKey("flutterflow");
+  if (generation !== ffEndpointGeneration) return null;
   if (!apiKey || !hasStoredKey("flutterflow")) {
     ffConnectionState = "not-configured";
     renderApiKeyConnection();
@@ -1612,12 +1638,14 @@ async function validateFlutterFlowConnection() {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
+    if (generation !== ffEndpointGeneration) return null;
     ffConnectionState = projects && projects.length > 0
       ? "connected"
       : "no-projects";
     renderApiKeyConnection();
     return projects;
   } catch (error) {
+    if (generation !== ffEndpointGeneration) return null;
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
       ? "unauthorized"
@@ -1646,6 +1674,10 @@ function clearStoredProjectSelection() {
  * re-fetch the project list for the new endpoint when a key is configured.
  */
 function invalidateStaleProjectSelection() {
+  // Any request still in flight belongs to the previous endpoint: advancing
+  // the generation makes it discard its outcome instead of writing it over the
+  // new endpoint's status or project list.
+  ffEndpointGeneration += 1;
   clearStoredProjectSelection();
   const select = document.getElementById("flutterflow-projects-select");
   if (select) {
@@ -1726,6 +1758,11 @@ async function fetchProjects(apiKey) {
     return;
   }
 
+  // The endpoint this fetch belongs to. If it changes while the fetch is in
+  // flight, its response describes a previous endpoint and must be discarded
+  // rather than overwrite the new endpoint's list or status.
+  const generation = ffEndpointGeneration;
+
   // Show loading state
   select.innerHTML = '<option value="">Loading projects...</option>';
   if (errorElement) errorElement.classList.add("hidden");
@@ -1746,6 +1783,7 @@ async function fetchProjects(apiKey) {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
+    if (generation !== ffEndpointGeneration) return;
 
     if (!projects || projects.length === 0) {
       ffConnectionState = "no-projects";
@@ -1772,6 +1810,7 @@ async function fetchProjects(apiKey) {
       select.value = flutterflowProjectId;
     }
   } catch (error) {
+    if (generation !== ffEndpointGeneration) return;
     console.error("Failed to fetch projects:", error);
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
@@ -5553,10 +5592,14 @@ async function handleMagicLinkRequest() {
 
   try {
     const data = await sendMagicLink(email)
-    const isAliasRejected = data?.code === PLUS_ALIAS_REJECTED_CODE
-    if (input && !isAliasRejected) input.value = ''
-    input?.setAttribute('aria-invalid', String(isAliasRejected))
-    setSignInMessage(getMagicLinkResultMessage(data, email), isAliasRejected ? 'error' : 'success')
+    // Only the explicit success code (or a legacy code-less response) counts
+    // as sent. Any other code — the plus-alias rejection or an unexpected
+    // error — keeps the address, marks the field invalid and reports an
+    // error, so the user is never told to check for a link that was not sent.
+    const isSuccess = isMagicLinkSuccess(data)
+    if (input && isSuccess) input.value = ''
+    input?.setAttribute('aria-invalid', String(!isSuccess))
+    setSignInMessage(getMagicLinkResultMessage(data, email), isSuccess ? 'success' : 'error')
     // A successful send must stay retryable — the user may want to resend to
     // a different address, or send another link if the first one expires —
     // so the button is re-enabled either way, never left permanently disabled.
@@ -5564,8 +5607,8 @@ async function handleMagicLinkRequest() {
     // clearly reads as usable again.
     if (btn) {
       btn.disabled = false
-      btn.textContent = isAliasRejected ? 'Send Sign-in Link' : 'Sent!'
-      if (!isAliasRejected) {
+      btn.textContent = isSuccess ? 'Sent!' : 'Send Sign-in Link'
+      if (isSuccess) {
         setTimeout(() => { if (btn.textContent === 'Sent!') btn.textContent = 'Send Sign-in Link' }, 2500)
       }
     }
