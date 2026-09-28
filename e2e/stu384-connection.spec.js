@@ -417,6 +417,71 @@ test.describe("STU-384 account connection", () => {
     ).toHaveCount(1);
   });
 
+  test("a late project fetch from the previous key cannot overwrite the new key's list", async ({ page }) => {
+    await seedSession(page);
+    await applyDefaultRoutes(page, signedInContext());
+    // Only the held OLD-key request answers with this list, so a stale
+    // response landing after the key was replaced is unmistakable.
+    const staleKeyList = () =>
+      ok({
+        success: true,
+        value: JSON.stringify({
+          entries: [
+            { id: "proj-old-key-111", project: { name: "Old Key Project" } },
+          ],
+        }),
+      });
+    const gate = await gateProductionListProjects(page, staleKeyList);
+
+    await page.goto("/");
+    await saveKeyThroughModal(page, { key: KEY, project: PROJ });
+    await expect(page.locator("#acct-ff-project")).toHaveText(PROJ);
+
+    // Re-open the editor: its fetch with the saved key is held in flight.
+    gate.holdNext();
+    await page
+      .locator(".acct-connection button", { hasText: "Configure" })
+      .first()
+      .click();
+    await expect(page.locator("#api-keys-modal")).toBeVisible();
+    await gate.waitForHeld();
+
+    // Replace the key while the old key's fetch is still pending. The blur
+    // fetch for the new key answers immediately, so the dropdown now shows
+    // the list that belongs to the key being saved.
+    const input = page.locator("#flutterflow-api-key-input");
+    await input.fill(NEW_KEY);
+    await input.blur();
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+
+    await page.locator("#api-keys-modal .bg-blue-500").click();
+    await expect(page.locator("#api-keys-modal")).toBeHidden();
+    await page.waitForTimeout(1300);
+    await dismissOpenModals(page);
+
+    // Release the stale old-key response: it must be discarded, not allowed
+    // to replace the new key's list or regress its connection status.
+    const staleSettled = page.waitForResponse(ENDPOINTS.flutterFlowListProjects);
+    gate.release();
+    await staleSettled;
+    await page.waitForTimeout(150);
+
+    await expect(
+      page.locator(`#flutterflow-projects-select option[value="${PROJ}"]`),
+    ).toHaveCount(1);
+    await expect(
+      page.locator(
+        '#flutterflow-projects-select option[value="proj-old-key-111"]',
+      ),
+    ).toHaveCount(0);
+    await expect(page.locator("#acct-ff-status")).toHaveText(
+      "Connected to FlutterFlow",
+    );
+    await expect(page.locator("#acct-ff-project")).toHaveText("—");
+  });
+
   test("replacing the key without choosing a project clears the old target", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, signedInContext());

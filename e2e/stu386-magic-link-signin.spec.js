@@ -137,6 +137,32 @@ test.describe("Magic-link sign-in", () => {
     await expect(submit).toHaveText("Send Sign-in Link");
   });
 
+  test("an HTTP-success response that declares success:false is surfaced as an error", async ({ page }) => {
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: guestIdentity(),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+      // HTTP 200 with an explicit failure and no code: this must never read as
+      // "Sent!" or clear the address.
+      [ENDPOINTS.authSendMagicLink]: ok({ success: false }),
+    });
+
+    await page.goto("/#account");
+    await page.locator("#auth-signedout button", { hasText: "Sign In" }).click();
+
+    const input = page.locator("#signin-email-input");
+    const submit = page.locator("#signin-submit-btn");
+    await input.fill("person@example.com");
+    await submit.click();
+
+    await expect(page.locator("#signin-message")).toContainText(
+      "Something went wrong",
+    );
+    await expect(page.locator("#signin-message")).toHaveClass(/signin-message-error/);
+    await expect(input).toHaveValue("person@example.com");
+    await expect(input).toHaveAttribute("aria-invalid", "true");
+    await expect(submit).toHaveText("Send Sign-in Link");
+  });
+
   test("recovers from a failed send, and retry succeeds", async ({ page }) => {
     let attempt = 0;
     await applyDefaultRoutes(page, {

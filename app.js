@@ -1076,6 +1076,41 @@ let ffConnectionState = "not-configured";
 // endpoint can never overwrite the current endpoint's status or project list.
 let ffEndpointGeneration = 0;
 
+// Monotonic sequence of started projects requests (fetches and connection
+// checks). Only the newest request may apply its outcome, so a late response
+// for a key that has since been replaced — or one superseded by a newer key's
+// fetch — can never overwrite the new key's project list or status, even when
+// the endpoint did not change.
+let ffProjectRequestSeq = 0;
+
+function beginProjectRequest() {
+  ffProjectRequestSeq += 1;
+  return ffProjectRequestSeq;
+}
+
+/**
+ * Whether a projects request's outcome still describes the current connection
+ * identity and may be applied. Three things can move under an in-flight
+ * request: the endpoint (ffEndpointGeneration), the configured key (a
+ * replacement or a clear), and the newest request (a newer request, in
+ * particular one made with a different key, supersedes every older one). A
+ * response that lost any of them must not populate the current key's project
+ * list or connection status. A request made with the currently configured key
+ * stays valid even when it was issued before that key was saved — that is the
+ * editor's preview fetch.
+ */
+function isCurrentProjectRequest({
+  seq,
+  generation,
+  storedKeyAtStart,
+  requestKey,
+}) {
+  if (seq !== ffProjectRequestSeq) return false;
+  if (generation !== ffEndpointGeneration) return false;
+  return storedKeyAtStart === flutterflowApiKey
+    || requestKey === flutterflowApiKey;
+}
+
 async function initializeApiKeys() {
   // Remove an exportable key left by an earlier version even if its encrypted
   // credentials were already cleared.
@@ -1615,12 +1650,17 @@ function renderApiKeyConnection() {
  * @returns {Promise<Array|null>} the loaded projects, or null on error.
  */
 async function validateFlutterFlowConnection() {
-  // The endpoint this check belongs to. If the endpoint changes while the
-  // check is in flight, its outcome describes a previous endpoint and must be
-  // discarded rather than overwrite the new endpoint's state.
+  // The connection identity this check belongs to. If the endpoint, the
+  // configured key, or the newest request moves while the check is in flight,
+  // its outcome describes a previous identity and must be discarded rather
+  // than overwrite the new one's state.
+  const seq = beginProjectRequest();
   const generation = ffEndpointGeneration;
+  const storedKeyAtStart = flutterflowApiKey;
   const apiKey = await getApiKey("flutterflow");
-  if (generation !== ffEndpointGeneration) return null;
+  const outcomeIsCurrent = () =>
+    isCurrentProjectRequest({ seq, generation, storedKeyAtStart, requestKey: apiKey });
+  if (!outcomeIsCurrent()) return null;
   if (!apiKey || !hasStoredKey("flutterflow")) {
     ffConnectionState = "not-configured";
     renderApiKeyConnection();
@@ -1638,14 +1678,14 @@ async function validateFlutterFlowConnection() {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
-    if (generation !== ffEndpointGeneration) return null;
+    if (!outcomeIsCurrent()) return null;
     ffConnectionState = projects && projects.length > 0
       ? "connected"
       : "no-projects";
     renderApiKeyConnection();
     return projects;
   } catch (error) {
-    if (generation !== ffEndpointGeneration) return null;
+    if (!outcomeIsCurrent()) return null;
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)
       ? "unauthorized"
@@ -1758,10 +1798,15 @@ async function fetchProjects(apiKey) {
     return;
   }
 
-  // The endpoint this fetch belongs to. If it changes while the fetch is in
-  // flight, its response describes a previous endpoint and must be discarded
-  // rather than overwrite the new endpoint's list or status.
+  // The connection identity this fetch belongs to. If the endpoint, the
+  // configured key, or the newest request moves while the fetch is in flight,
+  // its response describes a previous identity and must be discarded rather
+  // than overwrite the new one's list or status.
+  const seq = beginProjectRequest();
   const generation = ffEndpointGeneration;
+  const storedKeyAtStart = flutterflowApiKey;
+  const outcomeIsCurrent = () =>
+    isCurrentProjectRequest({ seq, generation, storedKeyAtStart, requestKey: apiKey });
 
   // Show loading state
   select.innerHTML = '<option value="">Loading projects...</option>';
@@ -1783,7 +1828,7 @@ async function fetchProjects(apiKey) {
       getFlutterFlowEndpoint(),
     );
     const projects = await client.listProjects();
-    if (generation !== ffEndpointGeneration) return;
+    if (!outcomeIsCurrent()) return;
 
     if (!projects || projects.length === 0) {
       ffConnectionState = "no-projects";
@@ -1810,7 +1855,7 @@ async function fetchProjects(apiKey) {
       select.value = flutterflowProjectId;
     }
   } catch (error) {
-    if (generation !== ffEndpointGeneration) return;
+    if (!outcomeIsCurrent()) return;
     console.error("Failed to fetch projects:", error);
     const msg = String((error && error.message) || "");
     ffConnectionState = /(401|403)|denied|unauthorized|scoped|list permission/i.test(msg)

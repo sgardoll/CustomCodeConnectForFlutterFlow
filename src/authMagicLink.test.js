@@ -80,7 +80,7 @@ test("getMagicLinkResultMessage treats legacy success responses as sent", () => 
   );
 });
 
-test("isMagicLinkSuccess accepts only the success code or a legacy code-less response", () => {
+test("isMagicLinkSuccess accepts only the success code or a genuinely success-shaped legacy response", () => {
   assert.equal(isMagicLinkSuccess({ code: fixtures.successCode }), true);
   assert.equal(isMagicLinkSuccess({ success: true, message: "Magic link sent" }), true);
   assert.equal(isMagicLinkSuccess({ message: "Check your email" }), true);
@@ -94,5 +94,66 @@ test("isMagicLinkSuccess accepts only the success code or a legacy code-less res
   assert.equal(
     isMagicLinkSuccess({ code: "SEND_FAILED", message: "Could not send the link." }),
     false
+  );
+});
+
+test("isMagicLinkSuccess rejects explicit failures, error fields and empty bodies", () => {
+  // A 200 that says it failed is a failure, code or no code — never "sent".
+  assert.equal(isMagicLinkSuccess({ success: false }), false);
+  assert.equal(
+    isMagicLinkSuccess({ success: false, message: "Could not send the link." }),
+    false
+  );
+  assert.equal(
+    isMagicLinkSuccess({ success: false, error: "Mail delivery failed" }),
+    false
+  );
+  assert.equal(
+    isMagicLinkSuccess({ success: false, code: fixtures.successCode }),
+    false
+  );
+
+  // A code-less error payload is an error shape, not a legacy success.
+  assert.equal(isMagicLinkSuccess({ error: "Mail delivery failed" }), false);
+
+  // Empty or malformed bodies are not success-shaped.
+  assert.equal(isMagicLinkSuccess({}), false);
+  assert.equal(isMagicLinkSuccess(null), false);
+  assert.equal(isMagicLinkSuccess(undefined), false);
+  assert.equal(isMagicLinkSuccess("sent"), false);
+  assert.equal(isMagicLinkSuccess([]), false);
+});
+
+test("getMagicLinkResultMessage stays aligned with the success predicate", () => {
+  // A code-less failure must never read as a sent link.
+  assert.equal(
+    getMagicLinkResultMessage({ success: false }, `user@${firstAllowlistedDomain}`),
+    "Something went wrong. Please try again."
+  );
+  assert.equal(
+    getMagicLinkResultMessage(
+      { success: false, message: "Could not send the link." },
+      `user@${firstAllowlistedDomain}`
+    ),
+    "Could not send the link."
+  );
+  assert.equal(
+    getMagicLinkResultMessage(
+      { error: "Mail delivery failed" },
+      `user@${firstAllowlistedDomain}`
+    ),
+    "Something went wrong. Please try again."
+  );
+  // Even the success code cannot rescue an explicit failure.
+  assert.equal(
+    getMagicLinkResultMessage(
+      { success: false, code: fixtures.successCode, message: "Delivery failed." },
+      `user@${firstAllowlistedDomain}`
+    ),
+    "Delivery failed."
+  );
+  assert.equal(
+    getMagicLinkResultMessage(null, `user@${firstAllowlistedDomain}`),
+    "Something went wrong. Please try again."
   );
 });
