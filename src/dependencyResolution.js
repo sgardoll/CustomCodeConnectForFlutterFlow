@@ -23,10 +23,12 @@ import {
 } from "./pubspecSync.js";
 import { constraintCanReach, constraintLowerBound } from "./pubVersions.js";
 import { resolveLatestCompatibleVersions } from "./pubRegistry.js";
+import { FLUTTER_SDK_PACKAGES } from "./dartPackageImports.js";
 
 /**
  * @typedef {Object} DependencyPlan
- * @property {Object<string, string>} additions - name -> constraint to add
+ * @property {Object<string, string|{sdk: string}>} additions - name ->
+ *   constraint to add, or `{sdk}` for a package the Flutter SDK supplies
  * @property {Object<string, string>} overrides - name -> constraint to rewrite
  * @property {Array<{name: string, constraint: string}>} kept - left as declared
  * @property {string[]} warnings - what the deploying user needs to know
@@ -73,11 +75,16 @@ export async function planDependencyChanges(
 
   const declared = parseExistingDependencies(yamlContent);
   const missing = [];
+  const missingSdk = [];
 
   for (const [name, requiredMinimum] of requested) {
     const existing = declared.get(name);
     if (!existing) {
-      missing.push(name);
+      // An SDK-supplied name absent from the project's pubspec is still
+      // SDK-sourced - pub.dev does not carry it, so a hosted constraint would
+      // name a source pub cannot resolve. The merged pubspec gets the same
+      // `sdk: flutter` entry the project would have declared itself.
+      (FLUTTER_SDK_PACKAGES.has(name) ? missingSdk : missing).push(name);
       continue;
     }
 
@@ -92,9 +99,20 @@ export async function planDependencyChanges(
       continue;
     }
 
+    // A `version:` own-key - `intl: {version: 0.19.0}` or the same key on a
+    // block form's child line - is a hosted pin written in mapping shape, so
+    // it has no scalar constraint but still bounds what the project resolves
+    // and must be compared like one. Other block sources (git, path, SDK,
+    // hosted-without-version) carry no comparable version.
+    const effectiveConstraint = existing.isScalar
+      ? existing.constraint
+      : existing.sourceKey === null
+        ? existing.version
+        : null;
+
     // Checked before the constraint itself: a block-form entry has no scalar
     // constraint, and an empty one would read as `any` and look satisfiable.
-    if (!existing.isScalar) {
+    if (effectiveConstraint === null) {
       plan.warnings.push(
         `"${name}" is declared in your project from a git, path, or SDK source, but the generated code needs at least ${minimum}. ` +
           "Left as-is — update it yourself if the build fails.",
@@ -103,16 +121,20 @@ export async function planDependencyChanges(
       continue;
     }
 
-    if (constraintCanReach(existing.constraint, minimum)) {
-      plan.kept.push({ name, constraint: existing.constraint });
+    if (constraintCanReach(effectiveConstraint, minimum)) {
+      plan.kept.push({ name, constraint: effectiveConstraint });
       continue;
     }
 
     plan.overrides[name] = `^${minimum}`;
     plan.warnings.push(
-      `"${name}" was pinned to ${existing.constraint} in your project, which cannot resolve the ${minimum} the generated code needs. ` +
+      `"${name}" was pinned to ${effectiveConstraint} in your project, which cannot resolve the ${minimum} the generated code needs. ` +
         `Raising it to ^${minimum} — this changes a dependency the rest of your app also uses.`,
     );
+  }
+
+  for (const name of missingSdk) {
+    plan.additions[name] = { sdk: "flutter" };
   }
 
   // Rule 3: everything the project does not have yet.

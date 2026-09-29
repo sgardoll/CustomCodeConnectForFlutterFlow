@@ -5,6 +5,8 @@ import 'dart:io';
 const maxClassesPerRequest = 20;
 const maxCodeBytes = 500000;
 const maxDependenciesPerRequest = 200;
+// pub.dev's own ceiling on a package name.
+const maxPackageNameLength = 64;
 
 const analysisPackageName = 'ccc_custom_code_analysis';
 const defaultSdkConstraint = '>=3.0.0 <4.0.0';
@@ -52,23 +54,46 @@ Future<void> _handle(HttpRequest request) async {
       await channel.result(HttpStatus.notFound, {
         'success': false,
         'error': 'Not found.',
+        'preWrite': true,
       });
       return;
     }
 
-    final payload = await _readJson(request);
-    final apiKey = _stringField(payload, 'apiKey', maxLength: 10000);
-    final projectId = _stringField(payload, 'projectId', maxLength: 200);
-    final baseUrl = _stringField(payload, 'baseUrl', maxLength: 500, required: false);
-    final commitMessage = _stringField(
-      payload,
-      'commitMessage',
-      maxLength: 300,
-      required: false,
-    );
-    final dryRun = payload['dryRun'] == true;
-    final classes = _normalizeClasses(payload['customClasses']);
-    final verification = _normalizeVerification(payload['verification']);
+    // Only request parsing/validation throws FormatException here — those are
+    // provably pre-write. Decoding CLI output can raise the same exception
+    // AFTER the deploy began, so it must fall to the generic catch below,
+    // which does not claim preWrite.
+    Map<String, dynamic> payload;
+    String apiKey;
+    String projectId;
+    String baseUrl;
+    String commitMessage;
+    bool dryRun;
+    List<CustomClassEntry> classes;
+    _VerificationRequest? verification;
+    try {
+      payload = await _readJson(request);
+      apiKey = _stringField(payload, 'apiKey', maxLength: 10000);
+      projectId = _stringField(payload, 'projectId', maxLength: 200);
+      baseUrl = _stringField(payload, 'baseUrl', maxLength: 500, required: false);
+      commitMessage = _stringField(
+        payload,
+        'commitMessage',
+        maxLength: 300,
+        required: false,
+      );
+      dryRun = payload['dryRun'] == true;
+      classes = _normalizeClasses(payload['customClasses']);
+      verification = _normalizeVerification(payload['verification']);
+    } on FormatException catch (error) {
+      await channel.result(HttpStatus.badRequest, {
+        'success': false,
+        'error': error.message,
+        // Request validation precedes any work against the project.
+        'preWrite': true,
+      });
+      return;
+    }
 
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
@@ -89,6 +114,8 @@ Future<void> _handle(HttpRequest request) async {
             : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
+        // Workspace setup precedes any write to FlutterFlow.
+        'preWrite': true,
       });
       return;
     }
@@ -106,6 +133,8 @@ Future<void> _handle(HttpRequest request) async {
             'deployed to FlutterFlow.',
         'details': analysis.report,
         'analyzerErrors': analysis.errors,
+        // The compile gate runs before the deploy script starts.
+        'preWrite': true,
       });
       return;
     }
@@ -153,6 +182,8 @@ Future<void> _handle(HttpRequest request) async {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy timed out.',
         'details': _trimOutput(result.output),
+        // The CLI may already have uploaded classes before timing out.
+        'preWrite': false,
       });
       return;
     }
@@ -163,6 +194,7 @@ Future<void> _handle(HttpRequest request) async {
         'error': 'FlutterFlow AI DSL deploy failed.',
         'details': _trimOutput(result.output),
         'exitCode': result.exitCode,
+        'preWrite': false,
       });
       return;
     }
@@ -180,17 +212,16 @@ Future<void> _handle(HttpRequest request) async {
       'verified': analysis?.verifiedFiles ?? const <String>[],
       'verificationSkipped': analysis?.skippedReason,
     });
-  } on FormatException catch (error) {
-    await channel.result(HttpStatus.badRequest, {
-      'success': false,
-      'error': error.message,
-    });
   } catch (error, stackTrace) {
     stderr.writeln(error);
     stderr.writeln(stackTrace);
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
+      // The stage is unknown — a FormatException from decoding CLI output can
+      // land here after the upload began — so the write cannot be proven not
+      // to have run.
+      'preWrite': false,
     });
   }
 }
@@ -495,7 +526,8 @@ _VerificationRequest? _normalizeVerification(Object? value) {
       value['dependencyOverrides'],
       'dependencyOverrides',
     ),
-    sdkPackages: _normalizeSdkPackages(value['sdkPackages']),
+    sdkPackages: _normalizeSdkPackages(value['sdkPackages'], 'sdkPackages'),
+    sdkOverrides: _normalizeSdkPackages(value['sdkOverrides'], 'sdkOverrides'),
     sources: sources,
   );
 }
@@ -522,7 +554,7 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
   final result = <String, String>{};
   for (final entry in value.entries) {
     final name = '${entry.key}';
-    if (!_packageNamePattern.hasMatch(name)) {
+    if (!_isValidPackageName(name)) {
       throw FormatException('Invalid package name in verification.$field: $name.');
     }
     final constraint = '${entry.value}'.trim();
@@ -543,22 +575,31 @@ Map<String, String> _normalizeDependencyMap(Object? value, String field) {
 /// `pub get` with an honest error, whereas a list refuses correct deploys the
 /// moment it falls behind the SDK. The pattern is the load-bearing check - each
 /// name becomes a key in the generated pubspec.
-List<String> _normalizeSdkPackages(Object? value) {
+List<String> _normalizeSdkPackages(Object? value, String field) {
   if (value == null) return const <String>[];
   if (value is! List) {
-    throw const FormatException('verification.sdkPackages must be an array.');
+    throw FormatException('verification.$field must be an array.');
+  }
+  // Bounded like the dependency maps: each entry expands into the generated
+  // pubspec, so an unbounded array is caller-controlled work before pub get
+  // ever sees it.
+  if (value.length > maxDependenciesPerRequest) {
+    throw FormatException('Too many entries in verification.$field.');
   }
 
-  final result = <String>[];
+  final result = <String>{};
   for (final raw in value) {
     final name = '$raw';
-    if (!_packageNamePattern.hasMatch(name)) {
+    if (!_isValidPackageName(name)) {
       throw FormatException('Invalid SDK package name: $name.');
     }
-    if (!result.contains(name)) result.add(name);
+    result.add(name);
   }
-  return result;
+  return result.toList();
 }
+
+bool _isValidPackageName(String name) =>
+    name.length <= maxPackageNameLength && _packageNamePattern.hasMatch(name);
 
 String _validateConstraint(
   String field,
@@ -951,6 +992,7 @@ final class _VerificationRequest {
     required this.dependencies,
     required this.overrides,
     required this.sdkPackages,
+    required this.sdkOverrides,
     required this.sources,
   }) : unavailableReason = null;
 
@@ -960,6 +1002,7 @@ final class _VerificationRequest {
         dependencies = const <String, String>{},
         overrides = const <String, String>{},
         sdkPackages = const <String>[],
+        sdkOverrides = const <String>[],
         sources = const <_VerificationSource>[];
 
   /// Why this request cannot be compiled, or null when it can.
@@ -969,6 +1012,7 @@ final class _VerificationRequest {
   final Map<String, String> dependencies;
   final Map<String, String> overrides;
   final List<String> sdkPackages;
+  final List<String> sdkOverrides;
   final List<_VerificationSource> sources;
 
   /// Builds the pubspec the scratch package is compiled from.
@@ -1005,12 +1049,20 @@ final class _VerificationRequest {
       lines.add('  $name: ${_yamlScalar(dependencies[name]!)}');
     }
 
-    if (overrides.isNotEmpty) {
+    // SDK-sourced overrides belong in dependency_overrides, not in
+    // `dependencies` with sdkPackages: an override can share its name with a
+    // direct dependency, and emitting both under one map writes the key twice.
+    if (overrides.isNotEmpty || sdkOverrides.isNotEmpty) {
       lines
         ..add('')
         ..add('dependency_overrides:');
       for (final name in overrides.keys.toList()..sort()) {
         lines.add('  $name: ${_yamlScalar(overrides[name]!)}');
+      }
+      for (final name in sdkOverrides.toList()..sort()) {
+        lines
+          ..add('  $name:')
+          ..add('    sdk: flutter');
       }
     }
 

@@ -1,0 +1,93 @@
+/* Shared exported control primitives and interaction states. */
+:where(button, [role="button"], input, select, textarea, a) {
+  -webkit-tap-highlight-color: transparent;
+}
+
+:where(button, [role="button"], .control-button, .icon-button) {
+  min-height: 44px;
+  border-radius: var(--radius-md, 12px);
+  transition: color var(--motion-fast, 160ms) ease, background-color var(--motion-fast, 160ms) ease,
+    border-color var(--motion-fast, 160ms) ease, box-shadow var(--motion-fast, 160ms) ease,
+    transform var(--motion-fast, 160ms) ease, opacity var(--motion-fast, 160ms) ease;
+}
+
+:where(.icon-button, .modal-close, button:has(> svg:only-child)) {
+  min-width: 44px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+:where(button, [role="button"], input, select, textarea, a[href]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent, #3b82f6) 45%, transparent);
+  outline-offset: 2px;
+}
+
+:where(button, [role="button"]):active:not(:disabled) { transform: scale(0.98); }
+:where(button, [role="button"]):disabled,
+:where(button, [role="button"])[aria-disabled="true"] { cursor: not-allowed; opacity: 0.5; box-shadow: none; }
+:where(button, [role="button"])[aria-busy="true"] { cursor: progress; pointer-events: none; }
+:where(button, [role="button"])[aria-busy="true"]::after {
+  content: "";
+  width: 1em;
+  height: 1em;
+  margin-inline-start: 0.55em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: shared-control-spin 700ms linear infinite;
+}
+
+:where(input, select, textarea, .control-field) {
+  min-height: 44px;
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface-sunken, #f8fafc);
+}
+
+:where(.badge, .sb-section-badge, .results-file-count, .pm-popular-badge) {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+:where(.panel, .results-panel, .pm-card) {
+  border: 1px solid var(--border, #dfe3ea);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--surface, #fff);
+}
+
+.modal-overlay {
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.modal-overlay.open .modal-content { transform: scale(1) translateY(0) !important; }
+.modal-overlay[aria-hidden="true"] { pointer-events: none; }
+.modal-overlay[aria-busy="true"] { cursor: progress; }
+.modal-content {
+  width: min(100%, 680px);
+  max-height: calc(100dvh - 32px) !important;
+  overflow: auto !important;
+  overscroll-behavior: contain;
+}
+.modal-content > :is(.border-t, .wt-footer) { position: sticky; bottom: 0; z-index: 2; background: #fff; }
+.modal-content > :is(.border-b, .pm-header) { position: sticky; top: 0; z-index: 2; background: #fff; }
+
+@media (max-width: 480px), (max-height: 600px) {
+  .modal-overlay { align-items: flex-start; padding: 8px; }
+  .modal-content { max-height: calc(100dvh - 16px) !important; border-radius: 14px; }
+}
+
+@media (hover: hover) {
+  :where(button, [role="button"]):hover:not(:disabled):not([aria-disabled="true"]) { filter: brightness(0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+@keyframes shared-control-spin { to { transform: rotate(360deg); } }

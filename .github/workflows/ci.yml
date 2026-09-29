@@ -37,28 +37,13 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
-      # The test:ui and test:accessibility scripts land with the milestone
-      # branches; until they do, npm exits "Missing script" and fails the
-      # required check, so these steps only run when the scripts exist.
-      - name: Check for browser test suites
-        id: browser-tests
-        run: |
-          node -e '
-            const s = require("./package.json").scripts;
-            require("fs").appendFileSync(process.env.GITHUB_OUTPUT,
-              `ui=${s["test:ui"] ? "yes" : "no"}\naccessibility=${s["test:accessibility"] ? "yes" : "no"}\n`);
-          '
-
       - name: Install Playwright Chromium
-        if: steps.browser-tests.outputs.ui == 'yes' || steps.browser-tests.outputs.accessibility == 'yes'
         run: npx playwright install chromium --with-deps
 
       - name: Run browser tests
-        if: steps.browser-tests.outputs.ui == 'yes'
         run: npm run test:ui
 
       - name: Run accessibility modal tests
-        if: steps.browser-tests.outputs.accessibility == 'yes'
         run: npm run test:accessibility
 
       - name: Run deploy guard

@@ -25,9 +25,33 @@ def load_deploy_module():
     return module
 
 
+def expected_absent_bundles(deploy, html):
+    """The absent bundle paths the guard must report for this document.
+
+    Every assets/index-* reference in the HTML, rewritten to a hash nobody
+    built, in the order missing_referenced_assets returns them. Derived from
+    the document itself so the case holds however many bundles the build
+    emits - the redesign adds a CSS bundle beside the JS one, and hard-coding
+    a single expected file is exactly what broke the test on those branches.
+    """
+    rewritten = set()
+    for pattern in (deploy.ASSET_REFERENCE, deploy.CSS_URL_REFERENCE):
+        for match in pattern.finditer(html):
+            ref = match.group("path").strip()
+            if ref.startswith(("#", "//")) or deploy.URI_SCHEME.match(ref):
+                continue
+            rel = ref.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+            if rel.startswith("assets/index-"):
+                rewritten.add(
+                    rel.replace("assets/index-", "assets/index-absent-", 1)
+                )
+    return sorted(rewritten)
+
+
 def main():
     deploy = load_deploy_module()
     built_html = (deploy.DIST / "index.html").read_text(encoding="utf-8")
+    absent_html = built_html.replace("assets/index-", "assets/index-absent-")
 
     cases = [
         (
@@ -37,8 +61,8 @@ def main():
         ),
         (
             "a bundle hash with no built file is caught",
-            built_html.replace("assets/index-", "assets/index-absent-"),
-            None,  # asserted below - the real hash is not known here
+            absent_html,
+            expected_absent_bundles(deploy, built_html),
         ),
         (
             "external, protocol-relative, data and anchor refs are ignored",
@@ -96,11 +120,7 @@ def main():
     for name, document, expected in cases:
         document = document.replace("PLACEHOLDER", real_bundle)
         actual = deploy.missing_referenced_assets(document)
-
-        if expected is None:
-            ok = len(actual) == 1 and actual[0].startswith("assets/index-absent-")
-        else:
-            ok = actual == expected
+        ok = actual == expected
 
         print(f"{'PASS' if ok else 'FAIL'}  {name}")
         if not ok:

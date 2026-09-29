@@ -5,18 +5,22 @@ import sys
 
 DIST_DIR = "dist"
 
-# Provider hosts the client must never call directly - provider traffic is
-# expected to go through the app's own proxies, so a bare endpoint in a
-# client-side asset means a key is going over the wire unproxied. The hosts
-# legitimately appear inside the `api/*-proxy.php` files, which are the
-# proxies, so these patterns only apply to files a browser executes.
-CLIENT_FILE_SUFFIXES = (".js", ".html", ".css")
+# The PHP proxies under dist/api/ exist to forward same-origin browser calls
+# to the provider endpoints, so naming an endpoint there is the architecture,
+# not a leak. Everywhere else in the bundle a provider endpoint means client
+# code is calling the provider directly - the credential exposure those
+# proxies exist to prevent - so the endpoint patterns skip only that
+# directory.
+PROXY_DIR = os.path.join(DIST_DIR, "api")
 
-PROVIDER_ENDPOINTS = {
-    "api.groq.com endpoint": r"api\.groq\.com",
-    "api.openai.com endpoint": r"api\.openai\.com",
-    "api.anthropic.com endpoint": r"api\.anthropic\.com",
-    "generativelanguage.googleapis.com endpoint": r"generativelanguage\.googleapis\.com",
+# Every provider the app supports. The shipped client must reach all of them
+# through the same-origin proxies, never by naming the provider's host.
+ENDPOINT_PATTERNS = {
+    "Groq endpoint": re.compile(r"api\.groq\.com"),
+    "Google Gemini endpoint": re.compile(r"generativelanguage\.googleapis\.com"),
+    "Anthropic endpoint": re.compile(r"api\.anthropic\.com"),
+    "OpenAI endpoint": re.compile(r"api\.openai\.com"),
+    "OpenRouter endpoint": re.compile(r"openrouter\.ai"),
 }
 
 # An identifier naming a credential (`apiKey`, `api_key`, `x-api-key`,
@@ -28,27 +32,41 @@ KEY_ASSIGNMENT = (
     r"\s*[:=]\s*['\"][^'\"\s]{8,}['\"]"
 )
 
-# Credential shapes for the providers this app works with. A key baked into
-# the bundle at build time (e.g. via a `define` replacement) carries no
-# identifier, so only its format gives it away.
+# Credential literals, matched by shape rather than by the property they are
+# assigned to, so provider-specific or minified identifiers cannot hide them.
+# A key baked into the bundle at build time (e.g. via a `define` replacement)
+# carries no identifier, so only its format gives it away. The sk- prefix is
+# anchored so ordinary kebab-case text ("task-...") does not match; a real
+# key is a leak anywhere in dist/, the proxies included.
 PROVIDER_KEY_FORMATS = {
-    "Google API key": r"AIza[0-9A-Za-z_-]{35}",
-    "Anthropic API key": r"sk-ant-[0-9A-Za-z_-]{20,}",
-    "OpenAI API key": r"sk-(?:proj-|svcacct-)?[0-9A-Za-z_-]{20,}",
-    "Groq API key": r"gsk_[0-9A-Za-z]{20,}",
-    "Stripe secret key": r"(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}",
-}
-
-ENDPOINT_PATTERNS = {
-    label: re.compile(body) for label, body in PROVIDER_ENDPOINTS.items()
+    "OpenAI API key": re.compile(
+        r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}"
+    ),
+    "OpenRouter API key": re.compile(r"sk-or-(?:v1-)?[A-Za-z0-9_-]{20,}"),
+    "Anthropic API key": re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),
+    "Google API key": re.compile(r"AIza[0-9A-Za-z_-]{30,}"),
+    "Groq API key": re.compile(r"gsk_[0-9A-Za-z]{20,}"),
+    "Stripe secret key": re.compile(r"(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}"),
 }
 
 # Key material is checked in every bundled file, client or server-side alike:
 # a credential does not belong in a shipped artifact wherever it sits.
 KEY_PATTERNS = {
     "API key/secret assignment": re.compile(KEY_ASSIGNMENT, re.IGNORECASE),
-    **{label: re.compile(body) for label, body in PROVIDER_KEY_FORMATS.items()},
+    **PROVIDER_KEY_FORMATS,
 }
+
+
+def patterns_for(path):
+    """The checks a file in dist/ must pass.
+
+    Credential shapes are never legitimate anywhere. Endpoints are legitimate
+    only inside the proxy directory, whose whole job is naming its upstream.
+    """
+    checks = dict(KEY_PATTERNS)
+    if os.path.dirname(path) != PROXY_DIR:
+        checks.update(ENDPOINT_PATTERNS)
+    return checks
 
 
 def main() -> int:
@@ -68,10 +86,7 @@ def main() -> int:
             except OSError as e:
                 print(f"WARN: could not read {path}: {e}", file=sys.stderr)
                 continue
-            patterns = dict(KEY_PATTERNS)
-            if name.endswith(CLIENT_FILE_SUFFIXES):
-                patterns.update(ENDPOINT_PATTERNS)
-            for label, pattern in patterns.items():
+            for label, pattern in patterns_for(path).items():
                 for match in pattern.finditer(content):
                     line_no = content.count("\n", 0, match.start()) + 1
                     leaks.append((path, line_no, label))

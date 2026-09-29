@@ -58,3 +58,6 @@ BUILDSHIP_REVIEW_SYSTEM_PROMPT.txt
 BUILDSHIP_REVIEW_SYSTEM_PROMPT_UPDATED.txt
 /graphify-out
 /.playwright-mcp
+
+# Playwright run artifacts
+test-results/

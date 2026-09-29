@@ -143,6 +143,30 @@ test("extracts a prominent score from legacy markdown reviews", () => {
   assert.equal(presentation.score, 74);
 });
 
+test("treats out-of-range review scores as unknown rather than fabricated", () => {
+  const presentation = buildReviewPresentation({
+    bundle,
+    reviewResult: {
+      overallReview: { status: "warning", score: "Score: 999/100", summary: "Score out of range." },
+      artifacts: [],
+    },
+  });
+
+  assert.equal(presentation.score, null);
+});
+
+test("treats negative review scores as unknown rather than fabricated", () => {
+  const presentation = buildReviewPresentation({
+    bundle,
+    reviewResult: {
+      overallReview: { status: "warning", score: -5, summary: "Negative score." },
+      artifacts: [],
+    },
+  });
+
+  assert.equal(presentation.score, null);
+});
+
 test("leaves structured reviews without score fields unscored", () => {
   const presentation = buildReviewPresentation({
     bundle,

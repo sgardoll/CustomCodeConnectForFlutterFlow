@@ -92,15 +92,10 @@ reported rather than silently dropped:
 * It imports something FlutterFlow only generates once the app is built -
   `/backend/schema/structs/index.dart`, `../flutter_flow/lat_lng.dart`. Those
   files do not exist until after the deploy.
-* The project declares a dependency from a source this manifest cannot
-  express - a `git:` or `path:` source, a private `hosted:` block, or a
-  `dependency_overrides` entry written that way - and the class resolves
-  packages at all. `pubspec.lock`, the only document recording which packages
-  that source brings in, never leaves the project, so the unreproducible
-  package can sit anywhere in the class's transitive closure and an override
-  can rewrite any name in the graph. The scratch package would resolve
-  different code, and a check against the wrong version reports a result that
-  does not describe what ships.
+* It imports a package the project declares from a source this manifest cannot
+  express: a `git:` or `path:` source, or a nested `hosted:` block. The scratch
+  package would resolve different code, and a check against the wrong version
+  reports a result that does not describe what ships.
 
 The second case is decided once per deploy, not per class, because a
 project-level source can alter resolution for a class that never names it. A
@@ -111,11 +106,14 @@ nothing through pub and is still compiled.
 
 **Which packages the Flutter SDK supplies is read from the project's own
 pubspec** - a dependency written in block form under `sdk:` is an SDK package by
-definition. Nothing keeps a list of SDK package names, because a list goes stale
-the moment the SDK ships one it has not heard of, and a stale list reads a
-perfectly valid package as unreproducible. That is not hypothetical: a list
-missing `flutter_web_plugins` refused whole deploys for projects that declared
-it.
+definition. A small name list still exists, but only for names the pubspec does
+not declare at all: a package the code imports and the project lacks is written
+as `sdk: flutter` when the SDK supplies it, so discovery never emits a hosted
+constraint pub.dev cannot resolve. A name the list has not heard of degrades to
+the ordinary hosted lookup, not a wrong answer. For declared dependencies the
+list plays no part - the pubspec's own keys are the authority, because a stale
+list read a perfectly valid `flutter_web_plugins` declaration as
+unreproducible and refused whole deploys over it.
 
 The manifest is sent as package names and version constraints, never as
 pubspec.yaml text, and the runner builds the document itself - it runs
@@ -151,6 +149,10 @@ https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app/deployCustomClasses
 
 Override it at build time with `VITE_FLUTTERFLOW_CLASS_PROVISION_ENDPOINT`.
 `VITE_FLUTTERFLOW_DSL_DEPLOY_ENDPOINT` remains accepted for compatibility.
+Under `npm run dev` the app instead calls the same-origin path
+`/api/ffai-runner/deployCustomClasses`, which the Vite dev server proxies to
+the runner — its CORS allowlist admits only the production origin, so a direct
+browser call from localhost is rejected before the request reaches it.
 Deploy the runner with:
 
 ```bash

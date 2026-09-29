@@ -76,17 +76,17 @@ function collect(declared, into, sdkPackages) {
       continue;
     }
 
-    // A block-form entry's own-keys say where the package comes from (see
-    // readSourceDirective). `sdk:` is the Flutter SDK, which the runner
-    // reproduces from the name alone as `name: {sdk: flutter}`. A `version:`
-    // with no source key beside it is simply a constraint written on its own
-    // line.
+    // A block-form entry's own keys say where the package comes from, in
+    // whatever order YAML allows. `sdk:` is the Flutter SDK, which the runner
+    // reproduces from the name alone as `name: {sdk: flutter}`. A mapping
+    // whose only own key is `version:` is a normal pub.dev dependency with
+    // its constraint written on its own line.
     if (info.sourceKey === "sdk") {
       sdkPackages.add(name);
       continue;
     }
-    if (info.sourceKey === "version") {
-      into[name] = unquoteConstraint(info.sourceValue);
+    if (info.sourceKey === null && info.version) {
+      into[name] = unquoteConstraint(info.version);
       continue;
     }
 
@@ -111,29 +111,42 @@ function collect(declared, into, sdkPackages) {
  * @returns {{
  *   sdkConstraint: string,
  *   dependencies: Object<string, string>,
- *   overrides: Object<string, string>,
+ *   dependencyOverrides: Object<string, string>,
  *   sdkPackages: string[],
+ *   sdkOverrides: string[],
  *   availablePackages: Set<string>,
  *   unrepresentable: string[],
+ *   unrepresentableOverrides: string[],
  * }}
  */
 export function buildAnalysisManifest(projectPubspecYaml) {
   const sdkPackages = new Set();
+  const sdkOverrides = new Set();
   const dependencies = {};
-  const overrides = {};
+  const dependencyOverrides = {};
 
-  const unrepresentable = collect(
+  // The two blocks are kept apart: a direct dependency only reaches a class
+  // that names it, but a dependency_overrides entry rewrites resolution for
+  // every package in the graph that depends on the overridden name, so the
+  // consequences of dropping one are much wider than dropping the other. SDK
+  // entries are kept apart too: the runner emits sdkPackages under
+  // `dependencies:` and sdkOverrides under `dependency_overrides:`, and an
+  // `sdk:` override sharing a name with a scalar dependency must land in the
+  // second list or the generated pubspec declares the name twice.
+  const unrepresentableDependencies = collect(
     parseExistingDependencies(projectPubspecYaml),
     dependencies,
     sdkPackages,
   );
-  unrepresentable.push(
-    ...collect(
-      parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
-      overrides,
-      sdkPackages,
-    ),
+  const unrepresentableOverrides = collect(
+    parseDependencyBlock(projectPubspecYaml, "dependency_overrides"),
+    dependencyOverrides,
+    sdkOverrides,
   );
+  const unrepresentable = [
+    ...unrepresentableDependencies,
+    ...unrepresentableOverrides,
+  ];
 
   const availablePackages = new Set([
     ...Object.keys(dependencies),
@@ -145,10 +158,12 @@ export function buildAnalysisManifest(projectPubspecYaml) {
   return {
     sdkConstraint: unquoteConstraint(sdk) || FALLBACK_SDK_CONSTRAINT,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages: [...sdkPackages].sort(),
+    sdkOverrides: [...sdkOverrides].sort(),
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   };
 }
 
@@ -183,53 +198,84 @@ function skipReason(className, unresolvableImports, missingPackages) {
  *
  * @param {Array<{className: string, content: string}>} classes - Classes to deploy
  * @param {string} projectPubspecYaml - The project's merged pubspec.yaml
- * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>}}
+ * @returns {{manifest: Object, sources: Array<{fileName: string, content: string}>, skipped: Array<{className: string, reason: string}>, approximate: string[]}}
+ *   `approximate` is retained for the deploy path's contract; nothing is
+ *   compiled approximately under this rule, so it is always empty.
  */
 export function planCustomCodeVerification(classes, projectPubspecYaml) {
   const {
     sdkConstraint,
     dependencies,
-    overrides,
+    dependencyOverrides,
     sdkPackages,
+    sdkOverrides,
     availablePackages,
     unrepresentable,
+    unrepresentableOverrides,
   } = buildAnalysisManifest(projectPubspecYaml);
 
-  const manifest = { sdkConstraint, dependencies, overrides, sdkPackages };
+  const manifest = {
+    sdkConstraint,
+    dependencies,
+    dependencyOverrides,
+    sdkPackages,
+    sdkOverrides,
+  };
   const sources = [];
   const skipped = [];
+  const approximate = [];
 
   for (const entry of classes) {
     const { className, content } = entry;
 
+    // SDK names must reach the unrepresentable check: a project can declare
+    // `flutter` or `flutter_localizations` from git or hosted, and a name
+    // filtered out here would slip past that check and reach the analyzer as
+    // a missing-URI error, refusing the deploy instead of reporting the class
+    // unverified.
     const importedPackages = extractPackageImports(content);
 
-    // Global, not scoped to this class's imports: the scratch manifest drops
-    // the project's source for these packages, so the graph it resolves can
-    // differ from the project's anywhere - including a package this class
-    // only reaches transitively, or a name a `dependency_overrides` entry
-    // redirects for every package that depends on it. Only pubspec.lock -
-    // which a deploy never sees - records which packages those are, so any
-    // class that resolves packages at all is reported rather than compiled.
-    // A class using only `dart:` resolves nothing through pub and is
-    // unaffected, so it is still verified.
+    // An entry the manifest cannot express poisons the whole resolution
+    // graph, not just classes that name it. A git/path/hosted dependency's
+    // own pubspec still constrains every package it shares with the ones a
+    // class imports, and a dependency_overrides entry rewrites resolution
+    // for every dependent - so dropping either can make the scratch package
+    // resolve different versions than the project, and a clean analysis
+    // then approves code the project cannot build. Which packages drift is
+    // only recorded in pubspec.lock, which a deploy never sees, so any
+    // class that resolves packages at all is reported instead of compiled.
+    // `dart:`-only classes need no package resolution and are unaffected.
     const resolvesPackages = extractImportUris(content).some((uri) =>
       uri.startsWith("package:"),
     );
 
     if (unrepresentable.length > 0 && resolvesPackages) {
-      // When the class does name one of these packages itself, the reason
-      // says so, because that is the actionable case.
+      // When the class names one of these packages itself, the reason says
+      // so, because that is the actionable case; otherwise it names the
+      // entries and whether they come from dependencies or overrides.
       const unresolvablePackages = importedPackages.filter((name) =>
         unrepresentable.includes(name),
       );
-      skipped.push({
-        className,
-        reason:
-          unresolvablePackages.length > 0
-            ? `${className} was not compiled before deploying: it imports or exports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`
-            : `${className} was not compiled before deploying: your project declares ${unrepresentable.join(", ")} from a source that cannot be reproduced outside it, and such a source can alter package resolution anywhere in the dependency graph, so resolution could not be matched exactly.`,
-      });
+      let reason;
+      if (unresolvablePackages.length > 0) {
+        reason = `${className} was not compiled before deploying: it imports or exports ${unresolvablePackages.join(", ")}, which your project declares from a source that cannot be reproduced outside it, so package resolution could not be matched exactly.`;
+      } else {
+        const depNames = unrepresentable.filter(
+          (name) => !unrepresentableOverrides.includes(name),
+        );
+        const described = [
+          depNames.length > 0
+            ? `your project's pubspec.yaml declares ${depNames.join(", ")} from a source that cannot be reproduced outside it`
+            : null,
+          unrepresentableOverrides.length > 0
+            ? `your project's dependency_overrides redirects ${unrepresentableOverrides.join(", ")} to a source that cannot be reproduced outside it`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(", and ");
+        reason = `${className} was not compiled before deploying: ${described}, and an entry like that can change what every package depending on it resolves to - including packages this class reaches transitively - so package resolution could not be matched exactly.`;
+      }
+      skipped.push({ className, reason });
       continue;
     }
 
@@ -252,5 +298,5 @@ export function planCustomCodeVerification(classes, projectPubspecYaml) {
     });
   }
 
-  return { manifest, sources, skipped };
+  return { manifest, sources, skipped, approximate };
 }

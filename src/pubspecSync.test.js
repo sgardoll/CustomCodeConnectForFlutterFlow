@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applyDependencyOverrides,
   mergeDependenciesIntoYaml,
   parseDependencyBlock,
   parseExistingDependencies,
@@ -210,8 +211,83 @@ test("a nested version block is read as a constraint, not as a source", () => {
 `;
   const declared = parseExistingDependencies(pubspec);
 
-  assert.equal(declared.get("intl").sourceKey, "version");
-  assert.equal(declared.get("intl").sourceValue, "^0.20.3");
+  // `version` is a constraint, not a source: with no sdk/git/path/hosted key
+  // present, the dependency is a normal pub.dev one.
+  assert.equal(declared.get("intl").sourceKey, null);
+  assert.equal(declared.get("intl").sourceValue, null);
+  assert.equal(declared.get("intl").version, "^0.20.3");
+});
+
+test("a source key is classified wherever it sits among the nested keys", () => {
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  sdk_thing:
+    version: ^2.0.0
+    sdk: flutter
+  git_thing:
+    version: ^3.0.0
+    git:
+      url: https://example.invalid/private.git
+  path_thing:
+    version: ^4.0.0
+    path: ../nearby
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // YAML mappings are order-independent, so a `version:` written before the
+  // source directive must not hide it: reading only the first key classified
+  // this hosted dependency as a plain pub.dev one, and the verification
+  // runner compiled against a different package source than the project ships.
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("sdk_thing").sourceKey, "sdk");
+  assert.equal(declared.get("sdk_thing").sourceValue, "flutter");
+  assert.equal(declared.get("git_thing").sourceKey, "git");
+  assert.equal(declared.get("path_thing").sourceKey, "path");
+  assert.equal(declared.get("path_thing").sourceValue, "../nearby");
+
+  // The version line survives alongside the source key even though the
+  // source is what classifies the entry.
+  assert.equal(declared.get("hosted_thing").version, "^1.0.0");
+});
+
+test("a version written before an unrecognized key does not invent a source", () => {
+  const pubspec = `dependencies:
+  odd_thing:
+    version: ^5.0.0
+    description: not a real pubspec key
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // Keys that are neither sources nor `version` are skipped without ending
+  // the scan, so a source below them is still found and a missing one still
+  // reads as null.
+  assert.equal(declared.get("odd_thing").sourceKey, null);
+  assert.equal(declared.get("odd_thing").version, "^5.0.0");
+});
+
+test("a hosted source is read even when version: is written before it", () => {
+  // YAML mapping order is not significant, so this is the same dependency as
+  // hosted-then-version. Reading only the first own-key would classify it as a
+  // plain constraint and the verification manifest would resolve it from
+  // pub.dev instead of the project's own host.
+  const pubspec = `dependencies:
+  hosted_thing:
+    version: ^1.0.0
+    hosted:
+      name: hosted_thing
+      url: https://example.invalid
+  plain_thing:
+    version: ^2.0.0
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+  assert.equal(declared.get("plain_thing").sourceKey, null);
+  assert.equal(declared.get("plain_thing").version, "^2.0.0");
 });
 
 test("a hosted dependency may write its version before hosted:", () => {
@@ -247,6 +323,62 @@ test("a source key wins over version wherever it appears in the entry", () => {
   assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
 });
 
+test("an inline flow mapping is read as a source, not a constraint", () => {
+  // YAML permits the same mapping inline: `name: {sdk: flutter}` declares the
+  // same thing as the block form. Reading it as a scalar would forward braces
+  // as a version constraint, which the runner rejects.
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {sdk: flutter}
+  private_thing: {git: {url: https://example.invalid/private.git}}
+  pinned_thing: {version: ^1.2.0}
+  hosted_thing: {version: ^1.0.0, hosted: {name: hosted_thing, url: https://example.invalid}}
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+  assert.equal(declared.get("private_thing").sourceKey, "git");
+  assert.equal(declared.get("pinned_thing").sourceKey, null);
+  assert.equal(declared.get("pinned_thing").version, "^1.2.0");
+  // Mapping order is not significant, so a source key wins over a version
+  // written before it.
+  assert.equal(declared.get("hosted_thing").sourceKey, "hosted");
+});
+
+test("a flow mapping that cannot be read is unrepresentable, not a constraint", () => {
+  const pubspec = `dependencies:
+  broken_thing: {sdk: flutter
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("broken_thing").isScalar, false);
+  assert.equal(declared.get("broken_thing").sourceKey, null);
+});
+
+test("a flow mapping spanning lines is still read as a source", () => {
+  // YAML lets the same `{...}` members wrap onto following lines. Only the
+  // dependency's own line used to reach the reader, so the opening `{` alone
+  // looked unclosed and the entry classified unrepresentable.
+  const pubspec = `dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins: {
+    sdk: flutter
+  }
+  intl: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
+  // Lines the wrapped map consumed must not reappear as dependencies.
+  assert.equal(declared.get("sdk"), undefined);
+  assert.equal(declared.get("intl").constraint, "^0.20.3");
+  assert.equal(declared.get("intl").isScalar, true);
+});
+
 test("reads a source from dependency_overrides too", () => {
   const overrides = parseDependencyBlock(
     `dependency_overrides:
@@ -257,4 +389,43 @@ test("reads a source from dependency_overrides too", () => {
   );
 
   assert.equal(overrides.get("flutter_web_plugins").sourceKey, "sdk");
+});
+
+test("blank lines and comments do not hide a version member from an override", () => {
+  // YAML permits blank lines and comments inside a block mapping. A version
+  // member written after them is still the entry's own member — stopping the
+  // search at the first non-matching line would leave the old pin in place
+  // while reporting the raise as applied.
+  const pubspec = `dependencies:
+  intl:
+
+    # pinned deliberately after a regression
+    version: 0.19.0
+  http: ^1.0.0
+`;
+  const { yaml, overridden, skipped } = applyDependencyOverrides(pubspec, {
+    intl: "0.20.0",
+  });
+
+  assert.deepEqual(overridden, [{ name: "intl", from: "0.19.0", to: "0.20.0" }]);
+  assert.deepEqual(skipped, []);
+  assert.match(yaml, /version: 0\.20\.0/);
+  assert.match(yaml, /# pinned deliberately after a regression/);
+});
+
+test("a brace inside a flow-map comment does not close the mapping", () => {
+  const pubspec = `dependencies:
+  flutter_web_plugins: {
+    # close } later
+    sdk: flutter
+  }
+  intl: ^0.20.3
+`;
+  const declared = parseExistingDependencies(pubspec);
+
+  // YAML flow mappings permit comments between members; counting the `}` in
+  // the comment would end the map before `sdk:` and classify the package
+  // unrepresentable instead of SDK-sourced.
+  assert.equal(declared.get("flutter_web_plugins").sourceKey, "sdk");
+  assert.equal(declared.get("flutter_web_plugins").isScalar, false);
 });

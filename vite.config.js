@@ -5,7 +5,7 @@ export default defineConfig(({ mode }) => {
   
   return {
     server: {
-      port: 3000,
+      port: Number(process.env.CCC_TEST_PORT || 3000),
       open: true,
       proxy: {
         '/api/gemini': {
@@ -27,6 +27,15 @@ export default defineConfig(({ mode }) => {
           target: 'https://api.openai.com',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api\/openai/, ''),
+          secure: true
+        },
+        // Same-origin route to the class-provisioning runner: its CORS
+        // allowlist only admits the production site, so dev traffic must be
+        // proxied through this server instead of sent cross-origin.
+        '/api/ffai-runner': {
+          target: 'https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app',
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/api\/ffai-runner/, ''),
           secure: true
         }
       }
