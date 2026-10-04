@@ -6,10 +6,14 @@ const dockerfile = readFileSync(
   new URL("../cloud-run/ffai-runner/Dockerfile", import.meta.url),
   "utf8",
 );
-const runnerSource = readFileSync(
-  new URL("../cloud-run/ffai-runner/bin/server.dart", import.meta.url),
-  "utf8",
-);
+// Request validation lives in lib/request_validation.dart (server.dart imports
+// it), so the contract assertions must read both the entrypoint and the module.
+const runnerSource = [
+  "../cloud-run/ffai-runner/bin/server.dart",
+  "../cloud-run/ffai-runner/lib/request_validation.dart",
+]
+  .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .join("\n");
 const deployScript = readFileSync(
   new URL("../scripts/deploy_cloud_run_ffai.sh", import.meta.url),
   "utf8",
@@ -158,7 +162,7 @@ test("Cloud Run builds the analysis manifest itself rather than running caller-s
   );
   assert.match(
     runnerSource,
-    /_VerificationRequest\.unavailable\(/,
+    /VerificationRequest\.unavailable\(/,
     "the legacy path must report itself unavailable",
   );
 });
