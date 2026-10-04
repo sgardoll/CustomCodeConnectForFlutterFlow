@@ -31,8 +31,10 @@ import {
 import { applyFlutterFlowHeader } from "./src/flutterFlowHeader.js";
 import { buildBundleDeployPlan } from "./src/bundleDeployPlanner.js";
 import {
+  buildFinishPushFileMap,
   excludeProvisionedCodeFiles,
   findMissingCodeFiles,
+  isDeployFinishable,
   partitionProvisionedCodeFiles,
 } from "./src/flutterFlowCodeFileProvisioning.js";
 import { buildReviewPresentation } from "./src/reviewPresentation.js";
@@ -3219,7 +3221,8 @@ async function reconcileUnconfirmedProvision(apiClient, attempted, original) {
     message =
       `Checked FlutterFlow just now: all ${landed.length} custom class(es) are in the project (${names(landed)}). ` +
       "The final step, pushing your pubspec.yaml dependencies, did not run. " +
-      "Deploy again to finish it - classes already there are skipped, not duplicated.";
+      "Finish deploy to push the dependencies without re-writing the classes, " +
+      "or deploy again - classes already there are skipped, not duplicated.";
   } else if (landed.length === 0) {
     message =
       `Checked FlutterFlow just now: none of the ${notLanded.length} custom class(es) are in the project yet (${names(notLanded)}). ` +
@@ -3231,7 +3234,11 @@ async function reconcileUnconfirmedProvision(apiClient, attempted, original) {
       `not there yet: ${names(notLanded)}. Wait a minute, then deploy again - ` +
       "classes already there are skipped, and the rest are written.";
   }
-  return new UnconfirmedDeployError(message);
+  const error = new UnconfirmedDeployError(message);
+  // The reconcile outcome decides whether the terminal can offer "Finish
+  // deploy": when every class landed, only the pubspec push remains.
+  error.reconcilePartition = { landed, notLanded };
+  return error;
 }
 
 async function provisionMissingCodeFiles(
@@ -3422,11 +3429,28 @@ async function provisionMissingCodeFiles(
         },
         () => {},
       );
-      throw await reconcileUnconfirmedProvision(
+      const reconciled = await reconcileUnconfirmedProvision(
         apiClient,
         missingCodeFiles,
         error,
       );
+      // When every attempted class landed, offer "Finish deploy": completing
+      // the deploy only needs step 3 (the pubspec push). Carry what that push
+      // needs — the deploy-time credentials, the full file map, the already
+      // merged yaml, and the landed entry list — so the terminal action can
+      // push without re-provisioning the classes.
+      if (isDeployFinishable(reconciled.reconcilePartition)) {
+        reconciled.finishDeploy = {
+          apiKey: apiClient.apiKey,
+          projectId: apiClient.projectId,
+          endpoint: apiClient.baseUrl,
+          branchName: apiClient.branchName,
+          fileMap,
+          serializedYaml: pubspecYaml,
+          landed: reconciled.reconcilePartition.landed,
+        };
+      }
+      throw reconciled;
     }
     throw error;
   }
@@ -4542,6 +4566,9 @@ async function executeCommit(code, options = {}) {
         targetIdentity,
         state: commitState.currentState,
         elapsedTime: commitState.getElapsedTime(),
+        ...(error.finishDeploy
+          ? { finishDeploy: mergeFinishDeployContext(error.finishDeploy, targetIdentity, commitState) }
+          : {}),
       };
     }
 
@@ -4749,6 +4776,9 @@ async function executeBundleCommit(bundlePlan, options = {}) {
         targetIdentity,
         state: commitState.currentState,
         elapsedTime: commitState.getElapsedTime(),
+        ...(error.finishDeploy
+          ? { finishDeploy: mergeFinishDeployContext(error.finishDeploy, targetIdentity, commitState) }
+          : {}),
       };
     }
 
@@ -7804,15 +7834,145 @@ function showCommitPartialModal(result) {
  * in-flight write is never cancelled.
  */
 function showCommitUnconfirmedModal(result) {
+  let heading = "Deploy outcome not yet known";
+  let title =
+    "This browser stopped waiting before the FlutterFlow server reported a result.";
+  let guidance =
+    "The deploy may still be finishing on the server — it was <strong>not cancelled</strong>. " +
+    "Open your FlutterFlow project and confirm whether the class landed before retrying, so you do not " +
+    "push a duplicate or build on top of an unknown state.";
+
+  // When a reconcile proved every class this deploy was writing landed, only
+  // the pubspec push is missing. Offer it here instead of a blind full
+  // re-deploy, which would re-run the slower class write for nothing.
+  if (result.finishDeploy) {
+    pendingFinishDeploy = result.finishDeploy;
+    heading = "Deploy almost complete";
+    title =
+      "Your custom class(es) are in FlutterFlow — only the dependency push remains.";
+    guidance =
+      "Every class this deploy was writing is already in your project. The one step that did not run " +
+      "was pushing your pubspec.yaml dependencies, which the project needs to build. " +
+      "<button id=\"terminal-finish-deploy\" onclick=\"window.finishProvisionedDeploy()\" " +
+      "class=\"mt-3 px-4 py-2 text-sm font-medium text-white bg-amber-500 hover:bg-amber-600 rounded-lg transition-colors\">" +
+      "Finish deploy</button>";
+  }
+
   populateCommitTerminalModal(result, {
-    heading: "Deploy outcome not yet known",
-    title:
-      "This browser stopped waiting before the FlutterFlow server reported a result.",
-    guidance:
-      "The deploy may still be finishing on the server — it was <strong>not cancelled</strong>. " +
-      "Open your FlutterFlow project and confirm whether the class landed before retrying, so you do not " +
-      "push a duplicate or build on top of an unknown state.",
+    heading,
+    title,
+    guidance,
   });
+}
+
+// The "Finish deploy" action completes an interrupted deploy whose classes
+// already landed. Holds the push context (credentials, file map, merged yaml,
+// landed entries) plus the terminal template so the push renders like any
+// deploy. Set by showCommitUnconfirmedModal, read by finishProvisionedDeploy.
+let pendingFinishDeploy = null;
+
+/**
+ * Merges the reconcile's finish-push context — built in
+ * `provisionMissingCodeFiles` where the api client, file map, and merged yaml
+ * are in scope — with the current deploy's terminal identity, so a finished
+ * deploy renders the same truthful terminal a normal deploy would.
+ * @param {Object} context - The finishDeploy push context on the reconcile error
+ * @param {Object} targetIdentity - The interrupted deploy's target identity
+ * @param {Object} commitState - Holds the elapsed-time for the terminal render
+ * @returns {Object} The merged finishDeploy payload
+ */
+function mergeFinishDeployContext(context, targetIdentity, commitState) {
+  return {
+    ...context,
+    result: {
+      targetIdentity,
+      metadata: {
+        artifactType: targetIdentity?.artifactType,
+        artifactName: targetIdentity?.artifactName,
+        fileName: targetIdentity?.fileName,
+        projectId: targetIdentity?.projectId,
+      },
+      message:
+        `Deploy finished: ${targetIdentity?.artifactName || "custom classes"} and ` +
+        "their dependencies are now in FlutterFlow.",
+      addedDependencies: [],
+      unverified: [],
+      approximate: [],
+      warnings: [],
+      elapsedTime: commitState.getElapsedTime(),
+    },
+  };
+}
+
+/**
+ * Completes an interrupted deploy whose classes already landed by running only
+ * step 3 — the pubspec push. The landed classes are excluded from the sync map
+ * (they are already in the project), so this never re-provisions them, and the
+ * push reuses the same file-map/zip/push machinery as a normal deploy.
+ */
+async function finishProvisionedDeploy() {
+  const finish = pendingFinishDeploy;
+  if (!finish) return;
+  if (deployInFlight) return;
+  pendingFinishDeploy = null;
+
+  const apiClient = new FlutterFlowApiClient(
+    finish.apiKey,
+    finish.projectId,
+    finish.branchName,
+    finish.endpoint,
+  );
+
+  closeCommitTerminalModal();
+  setDeployBusy(true);
+  showCommitProgress();
+
+  try {
+    commitProgress.set("package");
+    const finishFileMap = buildFinishPushFileMap(
+      finish.fileMap,
+      finish.landed,
+      finish.serializedYaml,
+    );
+    const syncMetadata = await buildApiSyncMetadata(finishFileMap, new Map());
+    const zippedCustomCode = await createZipFromFileMap(finishFileMap);
+
+    const pushRequest = {
+      project_id: finish.projectId,
+      zipped_custom_code: zippedCustomCode,
+      uid: `web_${Date.now()}`,
+      branch_name: apiClient.branchName,
+      serialized_yaml: finish.serializedYaml,
+      file_map: syncMetadata.fileMapContents,
+      functions_map: syncMetadata.functionsMapContents,
+    };
+
+    invalidateProjectSourceCache(apiClient);
+    commitProgress.set("push");
+    const result = await pushCodeWithUiTimeout(apiClient, pushRequest);
+
+    if (result.success) {
+      renderCommitTerminal({
+        ...finish.result,
+        success: true,
+        warnings: result.errorMap ? Array.from(result.errorMap.entries()) : [],
+      });
+      return;
+    }
+    const error = new Error(
+      result.errorMessage || getFlutterFlowErrorMessage(result.responseCode),
+    );
+    error.remoteRefusal = true;
+    throw error;
+  } catch (error) {
+    renderCommitTerminal({
+      ...finish.result,
+      success: false,
+      error: error.message,
+      unconfirmed: error instanceof UnconfirmedDeployError,
+      remoteRefusal: error.remoteRefusal === true,
+    });
+  }
 }
 
 /**
@@ -8229,6 +8389,7 @@ window.openCommitConfirmModal = openCommitConfirmModal;
 window.closeCommitConfirmModal = closeCommitConfirmModal;
 window.closeCommitSuccessModal = closeCommitSuccessModal
 window.closeCommitTerminalModal = closeCommitTerminalModal
+window.finishProvisionedDeploy = finishProvisionedDeploy
 window.showCommitPartialModal = showCommitPartialModal
 window.showCommitUnconfirmedModal = showCommitUnconfirmedModal
 window.showCommitSuccessModal = showCommitSuccessModal
