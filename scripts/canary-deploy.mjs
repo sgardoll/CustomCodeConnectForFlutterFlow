@@ -8,8 +8,8 @@
 // (workspace init, compile gate, DSL validation) but never write to the
 // project, so this is safe to run unattended.
 //
-// It also curls the runner's /healthz when present and reports its versions,
-// but never fails on a missing /healthz - another change is adding it in
+// It also curls the runner's /runnerHealth when present and reports its versions,
+// but never fails on a missing /runnerHealth - another change is adding it in
 // parallel and it may not be deployed yet.
 
 const RUNNER_DEFAULT_URL = "https://ccc-ffai-runner-y5cyj3473a-uw.a.run.app";
@@ -145,27 +145,27 @@ async function main() {
     clearTimeout(timer);
   }
 
-  // The /healthz route is being added alongside this canary; do not fail the
+  // The /runnerHealth route is being added alongside this canary; do not fail the
   // canary when it is not deployed yet.
   try {
-    const health = await fetch(`${baseUrl}/healthz`, {
+    const health = await fetch(`${baseUrl}/runnerHealth`, {
       signal: AbortSignal.timeout(10000),
     });
     if (health.ok) {
       const healthBody = await health.json().catch(() => ({}));
       console.log(
-        `[canary] healthz: HTTP ${health.status}` +
+        `[canary] health: HTTP ${health.status}` +
           (healthBody.versions
             ? ` versions=${JSON.stringify(healthBody.versions)}`
             : ` ${JSON.stringify(healthBody)}`),
       );
     } else {
       console.log(
-        `[canary] healthz: HTTP ${health.status} (not reported as a failure)`,
+        `[canary] health: HTTP ${health.status} (not reported as a failure)`,
       );
     }
   } catch {
-    console.log("[canary] healthz: unavailable (not reported as a failure)");
+    console.log("[canary] health: unavailable (not reported as a failure)");
   }
 }
 

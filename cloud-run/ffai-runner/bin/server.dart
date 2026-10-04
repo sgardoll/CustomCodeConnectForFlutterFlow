@@ -8,8 +8,13 @@ import 'package:ccc_ffai_runner/sha256.dart';
 
 // The lowest flutterflow_cli the vendored FlutterFlow AI snapshot accepts. The
 // image pins FLUTTERFLOW_CLI_VERSION to this (see Dockerfile); it must be kept
-// in lockstep there, and it is what /healthz reports as the required minimum.
+// in lockstep there, and it is what the health route reports as the required minimum.
 const minCliVersion = '0.0.41';
+
+/// The liveness/version route the container actually serves. Must not be a
+/// path Google's front end reserves ('/healthz'), or Cloud Run answers it and
+/// this handler is unreachable.
+const healthPath = '/runnerHealth';
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -37,7 +42,10 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
-    if (request.method == 'GET' && request.uri.path == '/healthz') {
+    // NOT /healthz: Cloud Run's front end answers that path itself and the
+    // request never reaches this container, so a route there is dead code in
+    // production however well it works locally.
+    if (request.method == 'GET' && request.uri.path == healthPath) {
       await _writeJsonBody(request.response, await _healthz());
       return;
     }

@@ -193,10 +193,12 @@ deploy for the throwaway project `automated-test-miedro` to the runner's
 `/deployCustomClasses`, so it exercises workspace init, the compile gate and the
 DSL push path without writing anything to a real project. It fails (non-zero)
 on any non-200 response, on `success:false`, or if the runner rejects the
-`flutter_web_plugins` SDK package, and also reports the runner's `/healthz`
+`flutter_web_plugins` SDK package, and also reports the runner's health route
 versions when that endpoint is deployed - without failing when it is not yet.
 
-`GET /healthz` answers `{sha, flutterflowCli, minFlutterflowCli}`. The deploy
+`GET /runnerHealth` answers `{sha, flutterflowCli, minFlutterflowCli}`. It is **not**
+`/healthz`: Cloud Run's front end answers that path itself, so a route there never
+reaches the container and is dead in production however well it works locally. The deploy
 script passes the checkout's short SHA as `RUNNER_GIT_SHA`, so comparing `sha`
 against `git log -1 --format=%h` tells you whether a merged runner fix is
 actually live. That question is what a months-long stall in a merged-but-never-
