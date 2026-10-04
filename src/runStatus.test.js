@@ -19,6 +19,38 @@ describe("runStatus — id plumbing", () => {
     assert.ok(isValidRunId(id));
   });
 
+  // The id names a Firestore document, so a guessable one could be overwritten
+  // by someone writing to a run they do not own. Without Web Crypto the right
+  // answer is no id at all: the runner then keeps no record and the deploy
+  // behaves exactly as it did before this feature.
+  it("returns null rather than a guessable id when there is no Web Crypto", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    Object.defineProperty(globalThis, "crypto", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      assert.equal(generateDeployRunId(), null);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", original);
+    }
+  });
+
+  it("falls back to getRandomValues rather than Math.random when randomUUID is absent", () => {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "crypto");
+    Object.defineProperty(globalThis, "crypto", {
+      value: { getRandomValues: (array) => array.fill(7) },
+      configurable: true,
+    });
+    try {
+      const id = generateDeployRunId();
+      assert.equal(id, `dr_${"07".repeat(16)}`);
+      assert.ok(isValidRunId(id));
+    } finally {
+      Object.defineProperty(globalThis, "crypto", original);
+    }
+  });
+
   it("rejects invalid and over-long ids", () => {
     assert.equal(isValidRunId(""), false);
     assert.equal(isValidRunId("has a space"), false);

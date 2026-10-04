@@ -26,18 +26,29 @@ const RUN_ID_PATTERN = /^[A-Za-z0-9_-]{1,120}$/;
 
 /**
  * Generates a client-side run id. A random UUID (prefixed so it can never be
- * confused with a runner-minted id) with a small fallback for environments
- * without `crypto.randomUUID`.
- * @returns {string}
+ * confused with a runner-minted id), with `crypto.getRandomValues` for
+ * environments that have Web Crypto but not `randomUUID`.
+ *
+ * Randomness is load-bearing: the id names a Firestore document, so a
+ * guessable one could be overwritten by someone writing to a run they do not
+ * own. Where no cryptographic source exists it therefore returns `null` rather
+ * than a guessing-friendly id — without an id the runner keeps no record and
+ * the deploy behaves exactly as it did before this feature existed, which is a
+ * safe degradation rather than a weak id.
+ * @returns {string|null}
  */
 export function generateDeployRunId() {
   const cryptoObj = globalThis.crypto;
   if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
     return `${RUN_ID_PREFIX}${cryptoObj.randomUUID()}`;
   }
-  return `${RUN_ID_PREFIX}${Date.now().toString(36)}${Math.random()
-    .toString(36)
-    .slice(2, 10)}`;
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const bytes = cryptoObj.getRandomValues(new Uint8Array(16));
+    return `${RUN_ID_PREFIX}${Array.from(bytes, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("")}`;
+  }
+  return null;
 }
 
 /**
