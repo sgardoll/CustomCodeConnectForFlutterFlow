@@ -173,9 +173,24 @@ from a repository secret. Until that secret exists the job **silently skips**
 (rather than failing on every push), so set up this once or merged runner
 changes will deploy nothing:
 
-1. Create a service account with at least `roles/run.admin`,
-   `roles/cloudbuild.builds.editor` and `roles/iam.serviceAccountUser`, generate
-   a JSON key, and download it.
+1. Create a service account and grant it every role a **source** deploy needs,
+   then generate a JSON key and download it. `gcloud run deploy --source` does
+   more than create the service: it uploads the source to a bucket, builds an
+   image, and pushes that image to Artifact Registry. Each step needs its own
+   permission, and the failure only ever names the first one it is missing, so
+   grant the lot up front:
+
+   | Role | Why |
+   | --- | --- |
+   | `roles/run.admin` | create and route the revision |
+   | `roles/iam.serviceAccountUser` | act as the runtime service account |
+   | `roles/cloudbuild.builds.editor` | run the build |
+   | `roles/artifactregistry.writer` | push the built image (else `artifactregistry.repositories.get` is denied) |
+   | `roles/storage.objectAdmin` | read/write the source bucket `run-sources-<project>-<region>` (else `storage.buckets.get` is denied) |
+
+   Scope the last two to the repository and bucket if you prefer, but a partial
+   set fails at deploy time with a message naming only the next missing
+   permission — which is how this list was corrected twice.
 2. In **Settings → Secrets and variables → Actions**, create a repository secret
    named `CCC_FFAI_RUNNER_SA_KEY_JSON` whose value is the key's full JSON
    (including the surrounding `{ }`).
