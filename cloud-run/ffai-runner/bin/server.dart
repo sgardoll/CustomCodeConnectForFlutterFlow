@@ -23,6 +23,11 @@ Future<void> main() async {
 
 Future<void> _handle(HttpRequest request) async {
   final channel = _ResponseChannel(request.response);
+  // Declared outside the try so the catch below can close the record out. A
+  // variable declared inside a try block is not in scope in its catch, and an
+  // unexpected mid-run failure would otherwise leave the record reporting
+  // "running" forever — exactly the unknown state a record exists to remove.
+  RunRecorder? recorder;
   try {
     _writeCorsHeaders(request.response);
 
@@ -119,28 +124,26 @@ Future<void> _handle(HttpRequest request) async {
     // ask what actually happened instead of re-reading the project and
     // guessing. Older clients send no runId; for them nothing is recorded and
     // the deploy behaves exactly as before.
-    late RunRecorder recorder;
-    final recordRun = runId.isNotEmpty;
-    if (recordRun) {
-      recorder = RunRecorder(
-        FirestoreRunStore(
-          project:
-              Platform.environment['FIRESTORE_PROJECT'] ??
-              defaultFirestoreProject,
-        ),
-        runId: runId,
-        projectId: projectId,
-        keyHash: sha256Hex(utf8.encode(apiKey)),
-        classNames: classes.map((entry) => entry.className).toList(),
-      );
-    }
+    recorder = runId.isEmpty
+        ? null
+        : RunRecorder(
+            FirestoreRunStore(
+              project:
+                  Platform.environment['FIRESTORE_PROJECT'] ??
+                  defaultFirestoreProject,
+            ),
+            runId: runId,
+            projectId: projectId,
+            keyHash: sha256Hex(utf8.encode(apiKey)),
+            classNames: classes.map((entry) => entry.className).toList(),
+          );
 
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
     if (payload['stream'] == true) {
       channel.beginStream();
     }
-    _phase(channel, recordRun ? recorder : null, 'connected',
+    _phase(channel, recorder, 'connected',
         'Connected to the FlutterFlow deploy runner.');
 
     final workspace = Directory(
@@ -151,10 +154,10 @@ Future<void> _handle(HttpRequest request) async {
       workspace,
       apiKey,
       channel,
-      recordRun ? recorder : null,
+      recorder,
     );
     if (initResult != null) {
-      if (recordRun) {
+      if (recorder != null) {
         await recorder.recordFailed(
           initResult.timedOut
               ? 'Preparing the FlutterFlow AI workspace timed out.'
@@ -184,10 +187,10 @@ Future<void> _handle(HttpRequest request) async {
       workspace,
       verification,
       channel,
-      recordRun ? recorder : null,
+      recorder,
     );
     if (analysis != null && analysis.hasErrors) {
-      if (recordRun) {
+      if (recorder != null) {
         await recorder.recordFailed(
           'The generated custom code does not compile.',
         );
@@ -231,7 +234,7 @@ Future<void> _handle(HttpRequest request) async {
 
     _phase(
       channel,
-      recordRun ? recorder : null,
+      recorder,
       'deploy_start',
       classes.length == 1
           ? 'Deploying ${classes.single.className} to FlutterFlow...'
@@ -243,12 +246,12 @@ Future<void> _handle(HttpRequest request) async {
       workingDirectory: workspace.path,
       apiKey: apiKey,
       channel: channel,
-      recorder: recordRun ? recorder : null,
+      recorder: recorder,
       timeout: _deployTimeout(classes.length),
     );
 
     if (result.timedOut) {
-      if (recordRun) {
+      if (recorder != null) {
         await recorder.recordFailed('FlutterFlow AI DSL deploy timed out.');
       }
       await channel.result(HttpStatus.gatewayTimeout, {
@@ -262,7 +265,7 @@ Future<void> _handle(HttpRequest request) async {
     }
 
     if (result.exitCode != 0) {
-      if (recordRun) {
+      if (recorder != null) {
         await recorder.recordFailed('FlutterFlow AI DSL deploy failed.');
       }
       await channel.result(HttpStatus.badGateway, {
@@ -286,7 +289,7 @@ Future<void> _handle(HttpRequest request) async {
 
     // The terminal write is awaited (bounded and error-swallowed in the
     // recorder) so a client whose response was lost can learn the run finished.
-    if (recordRun) {
+    if (recorder != null) {
       await recorder.recordDone(deployed, dryRun);
     }
 
@@ -301,9 +304,12 @@ Future<void> _handle(HttpRequest request) async {
   } catch (error, stackTrace) {
     stderr.writeln(error);
     stderr.writeln(stackTrace);
-    // Never allow a run-record write that follows the catch to take down the
-    // response - it is best effort, and no runId is parsed for a request that
-    // threw before it (request body/format errors).
+    // Close the record out too, or an unexpected failure leaves it reporting
+    // "running" forever and a later status query answers with a state that is
+    // no longer true. Best effort: the write is bounded and swallows its own
+    // failures, so it cannot take down the response below. Null when the throw
+    // preceded the record being opened, which is why it is nullable.
+    await recorder?.recordFailed('$error');
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
