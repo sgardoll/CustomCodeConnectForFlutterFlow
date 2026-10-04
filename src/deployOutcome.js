@@ -29,15 +29,18 @@ export const DeployOutcome = Object.freeze({
  *
  * Derivation: Cloud Run's request timeout for the deploy runner is 900s and
  * the runner reports a server-side timeout rather than hanging past it
- * (DEPLOYMENT.md), so a remote write cannot outlive roughly 900s. Observed
- * provision latency is of the order of one to a few minutes. 120s is therefore
- * comfortably longer than a healthy provision yet well below the server
- * deadline, so a normal deploy renders to completion long before this fires
- * and the UI can never out-wait a real server decision. This bound governs
- * only the UI's waiting/rendering: on expiry the UI stops claiming progress,
- * but it never aborts or retries the in-flight remote write.
+ * (DEPLOYMENT.md), so a remote write cannot outlive roughly 900s. Measured
+ * successful provisions on the production runner took 103s-215s (cold
+ * container: FlutterFlow AI SDK download, `flutter pub get`, `flutter analyze`,
+ * then the push), so the earlier 120s bound fired on routine deploys while the
+ * server went on to succeed, stranding the user on "outcome not yet known".
+ * 840s leaves ~4x headroom over the slowest observed run and still sits below
+ * the server deadline, so the UI can never out-wait a real server decision.
+ * Live phase events keep the progress view moving for the whole wait. This
+ * bound governs only the UI's waiting/rendering: on expiry the UI stops
+ * claiming progress, but it never aborts or retries the in-flight remote write.
  */
-export const DEPLOY_UI_TIMEOUT_MS = 120_000;
+export const DEPLOY_UI_TIMEOUT_MS = 840_000;
 
 // A response's status alone classifies it; the body only carries detail.
 // A stalled error body must therefore never hold up a definitive refusal —

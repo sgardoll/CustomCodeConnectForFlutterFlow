@@ -54,3 +54,30 @@ jobs:
 
       - name: Scan production bundle for API key/endpoint leaks
         run: python3 scripts/scan_bundle_for_leaks.py
+
+  # The runner's request validation is the code that rejected
+  # flutter_web_plugins and failed every deploy for months, and its tests only
+  # ran on a developer's machine - so nothing stopped that regression returning.
+  # The image is built only at deploy time, so this is also the only place the
+  # runner is compiled before it ships.
+  runner:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1
+
+      - name: Install runner dependencies
+        working-directory: cloud-run/ffai-runner
+        run: dart pub get
+
+      - name: Analyze the runner
+        working-directory: cloud-run/ffai-runner
+        run: dart analyze
+
+      - name: Test the runner
+        working-directory: cloud-run/ffai-runner
+        run: dart test

@@ -2,32 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-const maxClassesPerRequest = 20;
-const maxCodeBytes = 500000;
-const maxDependenciesPerRequest = 200;
-// pub.dev's own ceiling on a package name.
-const maxPackageNameLength = 64;
+import 'package:ccc_ffai_runner/request_validation.dart';
+import 'package:ccc_ffai_runner/run_record.dart';
+import 'package:ccc_ffai_runner/sha256.dart';
 
-const analysisPackageName = 'ccc_custom_code_analysis';
-const defaultSdkConstraint = '>=3.0.0 <4.0.0';
-
-// Pub package names are lower-case identifiers. Matching the whole string is
-// what keeps a caller from smuggling YAML structure in through a key.
-final _packageNamePattern = RegExp(r'^[a-z_][a-z0-9_]*$');
-
-// A pub version constraint, and nothing else. The allowed characters exclude
-// `:`, `#`, `{`, `}`, `/` and whitespace beyond single spaces, so `git:`,
-// `path:`, a nested `hosted:` mapping, and comment injection are all
-// unrepresentable rather than merely discouraged.
-final _constraintPattern = RegExp(r'^[A-Za-z0-9^~<>=*+._ -]+$');
-
-// Which packages the Flutter SDK supplies is not decided here. A caller names
-// the packages its project declares as `sdk: flutter`, and this runner emits
-// them as `name: {sdk: flutter}` - a value it writes itself, never one a caller
-// sent. There was an allowlist of SDK package names here, and it refused good
-// deploys: the client classified a package correctly by its pubspec source, and
-// the runner rejected it for not appearing on a list that had gone stale.
-// `_packageNamePattern` is what actually keeps a key from carrying YAML.
+// The lowest flutterflow_cli the vendored FlutterFlow AI snapshot accepts. The
+// image pins FLUTTERFLOW_CLI_VERSION to this (see Dockerfile); it must be kept
+// in lockstep there, and it is what /healthz reports as the required minimum.
+const minCliVersion = '0.0.41';
 
 Future<void> main() async {
   final port = int.tryParse(Platform.environment['PORT'] ?? '') ?? 8080;
@@ -41,6 +23,11 @@ Future<void> main() async {
 
 Future<void> _handle(HttpRequest request) async {
   final channel = _ResponseChannel(request.response);
+  // Declared outside the try so the catch below can close the record out. A
+  // variable declared inside a try block is not in scope in its catch, and an
+  // unexpected mid-run failure would otherwise leave the record reporting
+  // "running" forever — exactly the unknown state a record exists to remove.
+  RunRecorder? recorder;
   try {
     _writeCorsHeaders(request.response);
 
@@ -50,7 +37,26 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
-    if (request.method != 'POST' || request.uri.path != '/deployCustomClasses') {
+    if (request.method == 'GET' && request.uri.path == '/healthz') {
+      await _writeJsonBody(request.response, await _healthz());
+      return;
+    }
+
+    // GET /runStatus/<runId> answers what happened to a deploy whose response
+    // was lost. The id in the path is the one the client itself generated, so
+    // a 404 is a proof the request never reached the runner (nothing was
+    // written, a retry is safe), never an ambiguous "unknown". The caller must
+    // present the same API key the run started with; see fetchRunStatus.
+    final statusPath = RegExp(
+      r'^/runStatus/([A-Za-z0-9_-]+)$',
+    ).firstMatch(request.uri.path);
+    if (request.method == 'GET' && statusPath != null) {
+      await _handleRunStatus(request, statusPath.group(1)!);
+      return;
+    }
+
+    if (request.method != 'POST' ||
+        request.uri.path != '/deployCustomClasses') {
       await channel.result(HttpStatus.notFound, {
         'success': false,
         'error': 'Not found.',
@@ -68,23 +74,30 @@ Future<void> _handle(HttpRequest request) async {
     String projectId;
     String baseUrl;
     String commitMessage;
+    String runId;
     bool dryRun;
     List<CustomClassEntry> classes;
-    _VerificationRequest? verification;
+    VerificationRequest? verification;
     try {
       payload = await _readJson(request);
-      apiKey = _stringField(payload, 'apiKey', maxLength: 10000);
-      projectId = _stringField(payload, 'projectId', maxLength: 200);
-      baseUrl = _stringField(payload, 'baseUrl', maxLength: 500, required: false);
-      commitMessage = _stringField(
+      apiKey = stringField(payload, 'apiKey', maxLength: 10000);
+      projectId = stringField(payload, 'projectId', maxLength: 200);
+      baseUrl = stringField(
+        payload,
+        'baseUrl',
+        maxLength: 500,
+        required: false,
+      );
+      commitMessage = stringField(
         payload,
         'commitMessage',
         maxLength: 300,
         required: false,
       );
+      runId = stringField(payload, 'runId', maxLength: 120, required: false);
       dryRun = payload['dryRun'] == true;
       classes = _normalizeClasses(payload['customClasses']);
-      verification = _normalizeVerification(payload['verification']);
+      verification = normalizeVerification(payload['verification']);
     } on FormatException catch (error) {
       await channel.result(HttpStatus.badRequest, {
         'success': false,
@@ -95,23 +108,68 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
+    // The client generates the run id so a 404 on /runStatus proves the
+    // request never arrived. It becomes a document id in Firestore, so it is
+    // constrained to characters that are safe there (letters, digits, - and _).
+    if (runId.isNotEmpty && !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(runId)) {
+      await channel.result(HttpStatus.badRequest, {
+        'success': false,
+        'error': 'Invalid runId.',
+        'preWrite': true,
+      });
+      return;
+    }
+
+    // A run record lets a client whose connection dropped or whose wait expired
+    // ask what actually happened instead of re-reading the project and
+    // guessing. Older clients send no runId; for them nothing is recorded and
+    // the deploy behaves exactly as before.
+    recorder = runId.isEmpty
+        ? null
+        : RunRecorder(
+            FirestoreRunStore(
+              project:
+                  Platform.environment['FIRESTORE_PROJECT'] ??
+                  defaultFirestoreProject,
+            ),
+            runId: runId,
+            projectId: projectId,
+            keyHash: sha256Hex(utf8.encode(apiKey)),
+            classNames: classes.map((entry) => entry.className).toList(),
+          );
+
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
     if (payload['stream'] == true) {
       channel.beginStream();
     }
-    channel.phase('connected', 'Connected to the FlutterFlow deploy runner.');
+    _phase(channel, recorder, 'connected',
+        'Connected to the FlutterFlow deploy runner.');
 
     final workspace = Directory(
-      Platform.environment['FFAI_WORKSPACE'] ?? '/workspace/custom_code_connect',
+      Platform.environment['FFAI_WORKSPACE'] ??
+          '/workspace/custom_code_connect',
     );
-    final initResult = await _ensureWorkspace(workspace, apiKey, channel);
+    final initResult = await _ensureWorkspace(
+      workspace,
+      apiKey,
+      channel,
+      recorder,
+    );
     if (initResult != null) {
+      if (recorder != null) {
+        await recorder.recordFailed(
+          initResult.timedOut
+              ? 'Preparing the FlutterFlow AI workspace timed out.'
+              : 'FlutterFlow AI workspace initialization failed.',
+        );
+      }
       await channel.result(HttpStatus.badGateway, {
         'success': false,
-        'error': initResult.timedOut
-            ? 'Preparing the FlutterFlow AI workspace timed out.'
-            : 'FlutterFlow AI workspace initialization failed.',
+        'error':
+            initResult.timedOut
+                ? 'Preparing the FlutterFlow AI workspace timed out.'
+                : 'FlutterFlow AI workspace initialization failed.',
         'details': _trimOutput(initResult.output),
         'exitCode': initResult.exitCode,
         // Workspace setup precedes any write to FlutterFlow.
@@ -125,11 +183,22 @@ Future<void> _handle(HttpRequest request) async {
     // accepts a call to a named argument the package never declared - exactly
     // the class of error that otherwise lands in the project and breaks every
     // custom widget or action importing it.
-    final analysis = await _verifyCustomCode(workspace, verification, channel);
+    final analysis = await _verifyCustomCode(
+      workspace,
+      verification,
+      channel,
+      recorder,
+    );
     if (analysis != null && analysis.hasErrors) {
+      if (recorder != null) {
+        await recorder.recordFailed(
+          'The generated custom code does not compile.',
+        );
+      }
       await channel.result(HttpStatus.unprocessableEntity, {
         'success': false,
-        'error': 'The generated custom code does not compile, so nothing was '
+        'error':
+            'The generated custom code does not compile, so nothing was '
             'deployed to FlutterFlow.',
         'details': analysis.report,
         'analyzerErrors': analysis.errors,
@@ -163,7 +232,9 @@ Future<void> _handle(HttpRequest request) async {
       args.addAll(['--commit-message', commitMessage]);
     }
 
-    channel.phase(
+    _phase(
+      channel,
+      recorder,
       'deploy_start',
       classes.length == 1
           ? 'Deploying ${classes.single.className} to FlutterFlow...'
@@ -175,9 +246,14 @@ Future<void> _handle(HttpRequest request) async {
       workingDirectory: workspace.path,
       apiKey: apiKey,
       channel: channel,
+      recorder: recorder,
+      timeout: _deployTimeout(classes.length),
     );
 
     if (result.timedOut) {
+      if (recorder != null) {
+        await recorder.recordFailed('FlutterFlow AI DSL deploy timed out.');
+      }
       await channel.result(HttpStatus.gatewayTimeout, {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy timed out.',
@@ -189,6 +265,9 @@ Future<void> _handle(HttpRequest request) async {
     }
 
     if (result.exitCode != 0) {
+      if (recorder != null) {
+        await recorder.recordFailed('FlutterFlow AI DSL deploy failed.');
+      }
       await channel.result(HttpStatus.badGateway, {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy failed.',
@@ -199,15 +278,25 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
+    final deployed = classes
+        .map(
+          (entry) => {
+            'artifactId': entry.artifactId,
+            'className': entry.className,
+          },
+        )
+        .toList();
+
+    // The terminal write is awaited (bounded and error-swallowed in the
+    // recorder) so a client whose response was lost can learn the run finished.
+    if (recorder != null) {
+      await recorder.recordDone(deployed, dryRun);
+    }
+
     await channel.result(HttpStatus.ok, {
       'success': true,
       'message': 'Custom classes upserted through FlutterFlow AI DSL.',
-      'deployed': classes
-          .map((entry) => {
-                'artifactId': entry.artifactId,
-                'className': entry.className,
-              })
-          .toList(),
+      'deployed': deployed,
       'dryRun': dryRun,
       'verified': analysis?.verifiedFiles ?? const <String>[],
       'verificationSkipped': analysis?.skippedReason,
@@ -215,6 +304,12 @@ Future<void> _handle(HttpRequest request) async {
   } catch (error, stackTrace) {
     stderr.writeln(error);
     stderr.writeln(stackTrace);
+    // Close the record out too, or an unexpected failure leaves it reporting
+    // "running" forever and a later status query answers with a state that is
+    // no longer true. Best effort: the write is bounded and swallows its own
+    // failures, so it cannot take down the response below. Null when the throw
+    // preceded the record being opened, which is why it is nullable.
+    await recorder?.recordFailed('$error');
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
@@ -226,18 +321,35 @@ Future<void> _handle(HttpRequest request) async {
   }
 }
 
+/// Reports a phase to the streaming channel and, when a run is being recorded,
+/// persists it to the run record so a disconnected client can later ask what
+/// happened.
+void _phase(
+  _ResponseChannel channel,
+  RunRecorder? recorder,
+  String id,
+  String message,
+) {
+  channel.phase(id, message);
+  recorder?.recordPhase(id, message);
+}
+
 Future<_RunOutcome?> _ensureWorkspace(
   Directory workspace,
   String apiKey,
   _ResponseChannel channel,
+  RunRecorder? recorder,
 ) async {
-  final packageConfig = File('${workspace.path}/.dart_tool/package_config.json');
+  final packageConfig = File(
+    '${workspace.path}/.dart_tool/package_config.json',
+  );
   if (packageConfig.existsSync()) {
-    channel.phase('workspace_ready', 'Build environment is ready.');
+    _phase(channel, recorder, 'workspace_ready', 'Build environment is ready.');
     return null;
   }
 
-  channel.phase('workspace_init', 'Preparing the FlutterFlow AI workspace...');
+  _phase(channel, recorder, 'workspace_init',
+      'Preparing the FlutterFlow AI workspace...');
   final parent = workspace.parent;
   await parent.create(recursive: true);
   final workspaceName = workspace.path.split(Platform.pathSeparator).last;
@@ -252,33 +364,46 @@ Future<_RunOutcome?> _ensureWorkspace(
     workingDirectory: parent.path,
     apiKey: apiKey,
     channel: channel,
+    recorder: recorder,
   );
 
   if (result.timedOut || result.exitCode != 0) {
     return result;
   }
 
-  channel.phase('workspace_ready', 'Build environment is ready.');
+  _phase(channel, recorder, 'workspace_ready', 'Build environment is ready.');
   return null;
+}
+
+/// Caps a single deploy invocation, scaling with how many classes it must
+/// upload. A fixed cap would have to be sized to the largest bundle, either
+/// killing a big one or over-waiting a small one; starting at 5 minutes and
+/// growing by 15s per class keeps even the maximum 20-class request at 10
+/// minutes - comfortably under Cloud Run's 900s request timeout and inside the
+/// browser's 840s wait, with headroom to spare.
+Duration _deployTimeout(int classCount) {
+  return const Duration(minutes: 5) + Duration(seconds: 15 * classCount);
 }
 
 /// Runs the FlutterFlow CLI, forwarding its output line by line so the caller
 /// can report real progress instead of guessing at it.
+///
+/// The [timeout] default is the workspace-init cap: `flutterflow ai init`
+/// fetches the SDK snapshot once and is deliberately given a tighter bound
+/// than a deploy, which pays for the per-class upload on top.
 Future<_RunOutcome> _runFlutterFlow(
   List<String> args, {
   required String workingDirectory,
   required String apiKey,
   required _ResponseChannel channel,
+  RunRecorder? recorder,
   Duration timeout = const Duration(minutes: 5),
 }) async {
   final process = await Process.start(
     'flutterflow',
     args,
     workingDirectory: workingDirectory,
-    environment: {
-      'FF_API_KEY': apiKey,
-      'FLUTTERFLOW_API_KEY': apiKey,
-    },
+    environment: {'FF_API_KEY': apiKey, 'FLUTTERFLOW_API_KEY': apiKey},
   );
 
   final output = StringBuffer();
@@ -287,6 +412,15 @@ Future<_RunOutcome> _runFlutterFlow(
     timedOut = true;
     process.kill(ProcessSignal.sigkill);
   });
+  // A cold start can be silent for a minute or more (SDK download, `flutter
+  // analyze`), which the caller cannot distinguish from a dead connection. Emit
+  // a heartbeat every 15s while the CLI runs so liveness stays observable; the
+  // channel drops it for callers that did not ask for a stream, so it costs a
+  // non-streaming request nothing.
+  final heartbeat = Timer.periodic(
+    const Duration(seconds: 15),
+    (_) => channel.heartbeat(),
+  );
 
   void consume(String rawLine) {
     final line = _redact(rawLine, apiKey).trimRight();
@@ -295,7 +429,7 @@ Future<_RunOutcome> _runFlutterFlow(
     // Markers are progress reporting, not output worth showing in an error.
     final marker = _readPhaseMarker(line);
     if (marker != null) {
-      channel.phase(marker.phase, marker.message);
+      _phase(channel, recorder, marker.phase, marker.message);
       return;
     }
 
@@ -315,6 +449,7 @@ Future<_RunOutcome> _runFlutterFlow(
   final exitCode = await process.exitCode;
   await Future.wait([stdoutDone, stderrDone]);
   timer.cancel();
+  heartbeat.cancel();
 
   return _RunOutcome(
     exitCode: exitCode,
@@ -396,13 +531,22 @@ final class _ResponseChannel {
     _write({'event': 'log', 'message': message});
   }
 
+  /// Marks the runner as alive without claiming progress. Existing clients
+  /// ignore unknown events, so this is invisible to them; it exists so a proxy
+  /// or the browser can tell a long, silent step from a dead connection.
+  void heartbeat() {
+    _write({'event': 'heartbeat'});
+  }
+
   void _write(Map<String, Object?> event) {
     if (!_streaming || _closed) return;
-    _writes = _writes.then((_) {
-      _response.write('${jsonEncode(event)}\n');
-      return _response.flush();
-      // A disconnected client must not take down the deploy.
-    }).catchError((Object _) {});
+    _writes = _writes
+        .then((_) {
+          _response.write('${jsonEncode(event)}\n');
+          return _response.flush();
+          // A disconnected client must not take down the deploy.
+        })
+        .catchError((Object _) {});
   }
 
   Future<void> result(int statusCode, Map<String, Object?> payload) async {
@@ -429,9 +573,91 @@ void _writeCorsHeaders(HttpResponse response) {
   final allowedOrigin = Platform.environment['ALLOWED_ORIGIN'] ?? '*';
   response.headers
     ..set('Access-Control-Allow-Origin', allowedOrigin)
-    ..set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-    ..set('Access-Control-Allow-Headers', 'Content-Type')
+    ..set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+    // x-ff-api-key lets the browser present the deploy key on GET /runStatus so
+    // a run id is never a bearer capability on its own.
+    ..set('Access-Control-Allow-Headers', 'Content-Type, x-ff-api-key')
     ..set('Vary', 'Origin');
+}
+
+/// Liveness and version probe, so a merged-but-never-deployed fix is
+/// detectable in minutes rather than on the next failed deploy: the SHA the
+/// image was built from (set by the deploy pipeline as RUNNER_GIT_SHA, absent
+/// until then), the flutterflow_cli actually installed, and the minimum the
+/// vendored snapshot requires.
+Future<Map<String, Object>> _healthz() async {
+  return {
+    'sha': Platform.environment['RUNNER_GIT_SHA'] ?? '',
+    'flutterflowCli': await _installedCliVersion(),
+    'minFlutterflowCli': minCliVersion,
+  };
+}
+
+Future<String> _installedCliVersion() async {
+  try {
+    final process = await Process.start('dart', ['pub', 'global', 'list']);
+    final output = await process.stdout.transform(utf8.decoder).join();
+    final exitCode = await process.exitCode;
+    // A version we could not read is better reported as absent than used to
+    // claim the deployed CLI matches the snapshot.
+    if (exitCode != 0) return '';
+    final regex = RegExp(r'^flutterflow_cli\s+(\S+)');
+    for (final line in const LineSplitter().convert(output)) {
+      final match = regex.firstMatch(line.trim());
+      if (match != null) return match.group(1)!;
+    }
+    return '';
+  } on ProcessException {
+    return '';
+  }
+}
+
+Future<void> _writeJsonBody(HttpResponse response, Object body) async {
+  response.statusCode = HttpStatus.ok;
+  response.headers.contentType = ContentType.json;
+  response.write(jsonEncode(body));
+  try {
+    await response.close();
+  } catch (_) {}
+}
+
+/// Serves `GET /runStatus/<runId>`: looks up the run record and enforces that
+/// the caller presents the same API key the run started with.
+Future<void> _handleRunStatus(HttpRequest request, String runId) async {
+  final store = FirestoreRunStore(
+    project:
+        Platform.environment['FIRESTORE_PROJECT'] ?? defaultFirestoreProject,
+  );
+  final lookup = await fetchRunStatus(
+    runId: runId,
+    presentedKey: _apiKeyFromRequest(request),
+    store: store,
+  );
+  await _writeJsonResponse(request.response, lookup.statusCode, lookup.body);
+}
+
+/// The API key the caller must present to read a run. Read from a header
+/// (preferred, to keep it out of URLs and access logs) with a query-parameter
+/// fallback for callers that cannot set a custom header.
+String? _apiKeyFromRequest(HttpRequest request) {
+  final header = request.headers.value('x-ff-api-key')?.trim();
+  if (header != null && header.isNotEmpty) return header;
+  final query = request.uri.queryParameters['key']?.trim();
+  if (query != null && query.isNotEmpty) return query;
+  return null;
+}
+
+Future<void> _writeJsonResponse(
+  HttpResponse response,
+  int statusCode,
+  Object body,
+) async {
+  response.statusCode = statusCode;
+  response.headers.contentType = ContentType.json;
+  response.write(jsonEncode(body));
+  try {
+    await response.close();
+  } catch (_) {}
 }
 
 Future<Map<String, dynamic>> _readJson(HttpRequest request) async {
@@ -443,187 +669,6 @@ Future<Map<String, dynamic>> _readJson(HttpRequest request) async {
   return decoded;
 }
 
-String _stringField(
-  Map<String, dynamic> source,
-  String key, {
-  required int maxLength,
-  bool required = true,
-}) {
-  final value = source[key];
-  if (value == null || value == '') {
-    if (required) throw FormatException('Missing $key.');
-    return '';
-  }
-  if (value is! String) {
-    throw FormatException('$key must be a string.');
-  }
-  final trimmed = value.trim();
-  if (required && trimmed.isEmpty) {
-    throw FormatException('Missing $key.');
-  }
-  if (utf8.encode(trimmed).length > maxLength) {
-    throw FormatException('$key is too long.');
-  }
-  return trimmed;
-}
-
-/// Reads the optional compile-check payload. Absent means the caller is an
-/// older client that predates verification; its deploys keep working and are
-/// reported as unverified rather than refused.
-_VerificationRequest? _normalizeVerification(Object? value) {
-  if (value == null) return null;
-  if (value is! Map<String, dynamic>) {
-    throw const FormatException('verification must be an object.');
-  }
-
-  // Clients deployed before the manifest became structured sent pubspec.yaml
-  // text. Running it would reintroduce the caller-controlled-source problem, so
-  // it is never executed - but rejecting the request outright would break every
-  // deploy from a still-cached client during the rollout window. The deploy
-  // goes ahead with the check reported as unavailable, which is exactly what
-  // the deploy did before this feature existed, and the caller is told.
-  if (value.containsKey('pubspec') && !value.containsKey('dependencies')) {
-    return _VerificationRequest.unavailable(
-      'The compile check was skipped: this client sent a package manifest in '
-      'the older format, which the runner no longer executes. Reload the app '
-      'to pick up the current version.',
-    );
-  }
-
-  final rawSources = value['sources'];
-  if (rawSources is! List) {
-    throw const FormatException('verification.sources must be an array.');
-  }
-  if (rawSources.length > maxClassesPerRequest) {
-    throw const FormatException('Too many sources to verify in one request.');
-  }
-
-  final sources = rawSources.indexed.map((item) {
-    final raw = item.$2;
-    if (raw is! Map<String, dynamic>) {
-      throw FormatException('verification.sources[${item.$1}] must be an object.');
-    }
-    final fileName = _stringField(raw, 'fileName', maxLength: 200);
-    // The name becomes a path inside the scratch package, so anything that
-    // could climb out of it is a request to write somewhere else.
-    if (!RegExp(r'^[a-z0-9_]+\.dart$').hasMatch(fileName)) {
-      throw FormatException('Invalid verification file name: $fileName.');
-    }
-    return _VerificationSource(
-      fileName: fileName,
-      content: _stringField(raw, 'content', maxLength: maxCodeBytes),
-    );
-  }).toList();
-
-  return _VerificationRequest(
-    sdkConstraint: _validateConstraint(
-      'verification.sdkConstraint',
-      _stringField(value, 'sdkConstraint', maxLength: 200, required: false),
-      fallback: defaultSdkConstraint,
-    ),
-    dependencies: _normalizeDependencyMap(value['dependencies'], 'dependencies'),
-    overrides: _normalizeDependencyMap(
-      value['dependencyOverrides'],
-      'dependencyOverrides',
-    ),
-    sdkPackages: _normalizeSdkPackages(value['sdkPackages'], 'sdkPackages'),
-    sdkOverrides: _normalizeSdkPackages(value['sdkOverrides'], 'sdkOverrides'),
-    sources: sources,
-  );
-}
-
-/// Reads a `{name: version-constraint}` map, rejecting anything that could
-/// express more than a published package at a version.
-///
-/// This is the whole reason the manifest is sent as data rather than as
-/// pubspec.yaml text. The runner writes this manifest to disk and runs
-/// `flutter pub get` against it on a publicly reachable route, so a
-/// caller-supplied document could otherwise name a `git:` or `path:` source and
-/// have the runner fetch from a host of the caller's choosing. Only bare
-/// `name: version` entries can be expressed here, and the runner emits those
-/// lines itself, so no source directive can survive into the manifest.
-Map<String, String> _normalizeDependencyMap(Object? value, String field) {
-  if (value == null) return const <String, String>{};
-  if (value is! Map) {
-    throw FormatException('verification.$field must be an object.');
-  }
-  if (value.length > maxDependenciesPerRequest) {
-    throw FormatException('Too many entries in verification.$field.');
-  }
-
-  final result = <String, String>{};
-  for (final entry in value.entries) {
-    final name = '${entry.key}';
-    if (!_isValidPackageName(name)) {
-      throw FormatException('Invalid package name in verification.$field: $name.');
-    }
-    final constraint = '${entry.value}'.trim();
-    if (!_constraintPattern.hasMatch(constraint)) {
-      throw FormatException(
-        'Invalid version constraint for $name in verification.$field: $constraint.',
-      );
-    }
-    result[name] = constraint;
-  }
-  return result;
-}
-
-/// Reads the SDK-supplied package names a caller's project declares.
-///
-/// Validated as package names rather than against a list of the packages the
-/// Flutter SDK happens to ship: a name the SDK does not provide fails
-/// `pub get` with an honest error, whereas a list refuses correct deploys the
-/// moment it falls behind the SDK. The pattern is the load-bearing check - each
-/// name becomes a key in the generated pubspec.
-List<String> _normalizeSdkPackages(Object? value, String field) {
-  if (value == null) return const <String>[];
-  if (value is! List) {
-    throw FormatException('verification.$field must be an array.');
-  }
-  // Bounded like the dependency maps: each entry expands into the generated
-  // pubspec, so an unbounded array is caller-controlled work before pub get
-  // ever sees it.
-  if (value.length > maxDependenciesPerRequest) {
-    throw FormatException('Too many entries in verification.$field.');
-  }
-
-  final result = <String>{};
-  for (final raw in value) {
-    final name = '$raw';
-    if (!_isValidPackageName(name)) {
-      throw FormatException('Invalid SDK package name: $name.');
-    }
-    result.add(name);
-  }
-  return result.toList();
-}
-
-bool _isValidPackageName(String name) =>
-    name.length <= maxPackageNameLength && _packageNamePattern.hasMatch(name);
-
-String _validateConstraint(
-  String field,
-  String value, {
-  required String fallback,
-}) {
-  final constraint = value.trim();
-  if (constraint.isEmpty) return fallback;
-  if (!_constraintPattern.hasMatch(constraint)) {
-    throw FormatException('Invalid $field: $constraint.');
-  }
-  return constraint;
-}
-
-/// Quotes a value for YAML when a plain scalar would be misread.
-///
-/// `>=1.0.0 <2.0.0` is an ordinary pub range, but it opens with an indicator
-/// character and YAML would reject it as a plain scalar - the same reason
-/// pubspecSync's `formatConstraint` quotes on the client side.
-String _yamlScalar(String value) {
-  if (RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+-]*$').hasMatch(value)) return value;
-  return "'${value.replaceAll("'", "''")}'";
-}
-
 List<CustomClassEntry> _normalizeClasses(Object? value) {
   if (value is! List) {
     throw const FormatException('customClasses must be an array.');
@@ -632,7 +677,9 @@ List<CustomClassEntry> _normalizeClasses(Object? value) {
     throw const FormatException('At least one custom class is required.');
   }
   if (value.length > maxClassesPerRequest) {
-    throw const FormatException('Too many custom classes in one deploy request.');
+    throw const FormatException(
+      'Too many custom classes in one deploy request.',
+    );
   }
 
   return value.indexed.map((item) {
@@ -642,14 +689,19 @@ List<CustomClassEntry> _normalizeClasses(Object? value) {
       throw FormatException('customClasses[$index] must be an object.');
     }
 
-    final className = _stringField(raw, 'className', maxLength: 120);
+    final className = stringField(raw, 'className', maxLength: 120);
     if (!RegExp(r'^[A-Z][A-Za-z0-9_]*$').hasMatch(className)) {
       throw FormatException('Invalid custom class name: $className.');
     }
 
-    final content = _stringField(raw, 'content', maxLength: maxCodeBytes);
+    final content = stringField(raw, 'content', maxLength: maxCodeBytes);
     return CustomClassEntry(
-      artifactId: _stringField(raw, 'artifactId', maxLength: 200, required: false),
+      artifactId: stringField(
+        raw,
+        'artifactId',
+        maxLength: 200,
+        required: false,
+      ),
       className: className,
       content: content,
     );
@@ -667,8 +719,9 @@ List<CustomClassEntry> _normalizeClasses(Object? value) {
 /// caller states plainly what went unverified.
 Future<_AnalysisOutcome?> _verifyCustomCode(
   Directory workspace,
-  _VerificationRequest? verification,
+  VerificationRequest? verification,
   _ResponseChannel channel,
+  RunRecorder? recorder,
 ) async {
   if (verification == null) return null;
   if (verification.unavailableReason != null) {
@@ -676,7 +729,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   }
   if (verification.sources.isEmpty) return null;
 
-  channel.phase('verifying', 'Compiling your custom code...');
+  _phase(channel, recorder, 'verifying', 'Compiling your custom code...');
 
   final packageDir = Directory('${workspace.parent.path}/custom_code_analysis');
   final libDir = Directory('${packageDir.path}/lib');
@@ -685,11 +738,13 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   if (libDir.existsSync()) libDir.deleteSync(recursive: true);
   await libDir.create(recursive: true);
 
-  await File('${packageDir.path}/pubspec.yaml')
-      .writeAsString(verification.toPubspec());
+  await File(
+    '${packageDir.path}/pubspec.yaml',
+  ).writeAsString(verification.toPubspec());
   for (final source in verification.sources) {
-    await File('${libDir.path}/${source.fileName}')
-        .writeAsString(source.content);
+    await File(
+      '${libDir.path}/${source.fileName}',
+    ).writeAsString(source.content);
   }
 
   final pubGet = await _runProcess(
@@ -697,6 +752,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
     ['pub', 'get'],
     workingDirectory: packageDir.path,
     timeout: const Duration(minutes: 4),
+    channel: channel,
   );
   if (pubGet.exitCode != 0) {
     return _AnalysisOutcome.skipped(
@@ -710,6 +766,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
     ['analyze', '--no-pub', '--no-fatal-infos', '--no-fatal-warnings'],
     workingDirectory: packageDir.path,
     timeout: const Duration(minutes: 4),
+    channel: channel,
   );
 
   final errors = _analyzerErrors(analyze.output);
@@ -760,8 +817,16 @@ Future<_RunOutcome> _runProcess(
   List<String> args, {
   required String workingDirectory,
   required Duration timeout,
+  required _ResponseChannel channel,
 }) async {
   final buffer = StringBuffer();
+  // Same reason as `_runFlutterFlow`: `flutter pub get` and `flutter analyze`
+  // can be silent for a long while, and a heartbeat keeps the request visibly
+  // alive to a streaming caller.
+  final heartbeat = Timer.periodic(
+    const Duration(seconds: 15),
+    (_) => channel.heartbeat(),
+  );
   try {
     final process = await Process.start(
       executable,
@@ -774,10 +839,13 @@ Future<_RunOutcome> _runProcess(
       process.stderr.transform(utf8.decoder).forEach(buffer.write),
     ]);
 
-    final exitCode = await process.exitCode.timeout(timeout, onTimeout: () {
-      process.kill(ProcessSignal.sigkill);
-      return -1;
-    });
+    final exitCode = await process.exitCode.timeout(
+      timeout,
+      onTimeout: () {
+        process.kill(ProcessSignal.sigkill);
+        return -1;
+      },
+    );
     await drained;
     return _RunOutcome(
       exitCode: exitCode,
@@ -790,6 +858,8 @@ Future<_RunOutcome> _runProcess(
       output: '$executable could not be started: ${error.message}',
       timedOut: false,
     );
+  } finally {
+    heartbeat.cancel();
   }
 }
 
@@ -797,11 +867,13 @@ Future<File> _writeDeployScript(
   Directory workspace,
   List<CustomClassEntry> classes,
 ) async {
-  final dslDir = Directory('${workspace.path}/dsl')..createSync(recursive: true);
-  final calls = classes.map((entry) {
-    final name = _dartSingleQuoted(entry.className);
-    final code = _dartRawString(entry.content);
-    return '''
+  final dslDir = Directory('${workspace.path}/dsl')
+    ..createSync(recursive: true);
+  final calls = classes
+      .map((entry) {
+        final name = _dartSingleQuoted(entry.className);
+        final code = _dartRawString(entry.content);
+        return '''
           if (findCustomClass(project, name: $name) == null) {
             addCustomClass(
               project,
@@ -817,7 +889,8 @@ Future<File> _writeDeployScript(
           }
           _ensureDartFileName(project, $name);
 ''';
-  }).join('\n');
+      })
+      .join('\n');
 
   final script = '''
 library;
@@ -979,97 +1052,6 @@ String _trimOutput(Object value) {
   return '${text.substring(0, 4000)}...';
 }
 
-final class _VerificationSource {
-  const _VerificationSource({required this.fileName, required this.content});
-
-  final String fileName;
-  final String content;
-}
-
-final class _VerificationRequest {
-  const _VerificationRequest({
-    required this.sdkConstraint,
-    required this.dependencies,
-    required this.overrides,
-    required this.sdkPackages,
-    required this.sdkOverrides,
-    required this.sources,
-  }) : unavailableReason = null;
-
-  /// A request the runner will not compile, carrying why.
-  const _VerificationRequest.unavailable(this.unavailableReason)
-      : sdkConstraint = '',
-        dependencies = const <String, String>{},
-        overrides = const <String, String>{},
-        sdkPackages = const <String>[],
-        sdkOverrides = const <String>[],
-        sources = const <_VerificationSource>[];
-
-  /// Why this request cannot be compiled, or null when it can.
-  final String? unavailableReason;
-
-  final String sdkConstraint;
-  final Map<String, String> dependencies;
-  final Map<String, String> overrides;
-  final List<String> sdkPackages;
-  final List<String> sdkOverrides;
-  final List<_VerificationSource> sources;
-
-  /// Builds the pubspec the scratch package is compiled from.
-  ///
-  /// Emitted here rather than accepted from the caller: every line below is
-  /// either a fixed literal or a value already matched against
-  /// `_packageNamePattern` / `_constraintPattern`, so nothing a caller sends
-  /// can introduce a new YAML key, a nested mapping, or a comment.
-  String toPubspec() {
-    final lines = <String>[
-      'name: $analysisPackageName',
-      'description: Throwaway package used to compile generated custom code.',
-      'publish_to: none',
-      'version: 0.0.1',
-      '',
-      'environment:',
-      '  sdk: ${_yamlScalar(sdkConstraint)}',
-      '',
-      'dependencies:',
-      '  flutter:',
-      '    sdk: flutter',
-    ];
-
-    // `flutter` is always present above; any other SDK package the project
-    // declares is reproduced the same way.
-    for (final name in sdkPackages) {
-      if (name == 'flutter') continue;
-      lines
-        ..add('  $name:')
-        ..add('    sdk: flutter');
-    }
-
-    for (final name in dependencies.keys.toList()..sort()) {
-      lines.add('  $name: ${_yamlScalar(dependencies[name]!)}');
-    }
-
-    // SDK-sourced overrides belong in dependency_overrides, not in
-    // `dependencies` with sdkPackages: an override can share its name with a
-    // direct dependency, and emitting both under one map writes the key twice.
-    if (overrides.isNotEmpty || sdkOverrides.isNotEmpty) {
-      lines
-        ..add('')
-        ..add('dependency_overrides:');
-      for (final name in overrides.keys.toList()..sort()) {
-        lines.add('  $name: ${_yamlScalar(overrides[name]!)}');
-      }
-      for (final name in sdkOverrides.toList()..sort()) {
-        lines
-          ..add('  $name:')
-          ..add('    sdk: flutter');
-      }
-    }
-
-    return '${lines.join('\n')}\n';
-  }
-}
-
 final class _AnalysisOutcome {
   const _AnalysisOutcome({
     required this.errors,
@@ -1078,10 +1060,10 @@ final class _AnalysisOutcome {
   }) : skippedReason = null;
 
   const _AnalysisOutcome.skipped(String reason)
-      : errors = const <String>[],
-        report = '',
-        verifiedFiles = const <String>[],
-        skippedReason = reason;
+    : errors = const <String>[],
+      report = '',
+      verifiedFiles = const <String>[],
+      skippedReason = reason;
 
   final List<String> errors;
   final String report;

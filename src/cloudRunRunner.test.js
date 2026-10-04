@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
 const dockerfile = readFileSync(
   new URL("../cloud-run/ffai-runner/Dockerfile", import.meta.url),
   "utf8",
 );
-const runnerSource = readFileSync(
-  new URL("../cloud-run/ffai-runner/bin/server.dart", import.meta.url),
-  "utf8",
-);
+// Request validation lives in lib/request_validation.dart (server.dart imports
+// it), so the contract assertions must read both the entrypoint and the module.
+const runnerSource = [
+  "../cloud-run/ffai-runner/bin/server.dart",
+  "../cloud-run/ffai-runner/lib/request_validation.dart",
+]
+  .map((path) => readFileSync(new URL(path, import.meta.url), "utf8"))
+  .join("\n");
 const deployScript = readFileSync(
   new URL("../scripts/deploy_cloud_run_ffai.sh", import.meta.url),
   "utf8",
@@ -158,7 +162,7 @@ test("Cloud Run builds the analysis manifest itself rather than running caller-s
   );
   assert.match(
     runnerSource,
-    /_VerificationRequest\.unavailable\(/,
+    /VerificationRequest\.unavailable\(/,
     "the legacy path must report itself unavailable",
   );
 });
@@ -168,4 +172,77 @@ test("Cloud Run deployment reserves enough memory and serializes provisioning", 
   assert.match(deployScript, /CONCURRENCY="\$\{CONCURRENCY:-1\}"/);
   assert.match(deployScript, /--memory "\$MEMORY"/);
   assert.match(deployScript, /--concurrency "\$CONCURRENCY"/);
+});
+
+// The image is only exercised at deploy time and nothing builds it in CI, so a
+// missing COPY is invisible until a real deploy fails. It already happened once:
+// request validation moved to lib/, the Dockerfile still copied only bin/, and
+// the container could not start at all.
+test("the image copies every directory the entrypoint imports", () => {
+  const copied = new Set(
+    [...dockerfile.matchAll(/^COPY\s+(\S+)\s/gm)].map((match) =>
+      match[1].replace(/\/$/, ""),
+    ),
+  );
+  // `package:ccc_ffai_runner/x.dart` resolves inside the package's lib/, so a
+  // module imported this way only exists in the container if lib/ is copied in.
+  const imported = [
+    ...runnerSource.matchAll(/package:ccc_ffai_runner\/([A-Za-z0-9_/]+\.dart)/g),
+  ].map((match) => match[1]);
+
+  assert.ok(
+    imported.length > 0,
+    "server.dart must import from package:ccc_ffai_runner/ (otherwise this guard is vacuous)",
+  );
+  for (const modulePath of imported) {
+    assert.ok(
+      existsSync(
+        new URL(`../cloud-run/ffai-runner/lib/${modulePath}`, import.meta.url),
+      ),
+      `package:ccc_ffai_runner/${modulePath} must resolve to a file under lib/`,
+    );
+  }
+  for (const directory of ["bin", "lib"]) {
+    assert.ok(
+      copied.has(directory),
+      `the Dockerfile must COPY ${directory}/ — the entrypoint imports it, and without it the image cannot start`,
+    );
+  }
+});
+
+// The runner reports minFlutterflowCli at /healthz so a version drift is visible.
+// If the two ever disagree, /healthz reports a minimum the image does not
+// actually satisfy, which is worse than not reporting one at all.
+test("/healthz reports the same required CLI version the image pins", () => {
+  const pinned = dockerfile.match(
+    /^ARG FLUTTERFLOW_CLI_VERSION=(\d+\.\d+\.\d+)$/m,
+  )?.[1];
+  const reported = runnerSource.match(/const minCliVersion = '([^']+)'/)?.[1];
+
+  assert.ok(pinned, "Dockerfile must pin FLUTTERFLOW_CLI_VERSION");
+  assert.ok(
+    reported,
+    "server.dart must declare the minimum CLI version it reports",
+  );
+  assert.equal(
+    reported,
+    pinned,
+    "minCliVersion must match the pinned FLUTTERFLOW_CLI_VERSION",
+  );
+});
+
+// A merged runner fix that never shipped is the failure this guards: /healthz
+// has to be able to answer which revision is live, so the deploy must actually
+// pass the SHA through.
+test("the deploy passes the built revision to the runner for /healthz", () => {
+  assert.match(
+    deployScript,
+    /RUNNER_GIT_SHA="\$\{RUNNER_GIT_SHA:-\$\(git rev-parse/,
+    "the deploy script must derive RUNNER_GIT_SHA from its checkout",
+  );
+  assert.match(
+    deployScript,
+    /--set-env-vars "[^"]*RUNNER_GIT_SHA=\$RUNNER_GIT_SHA/,
+    "RUNNER_GIT_SHA must reach the service, or /healthz reports an empty SHA",
+  );
 });

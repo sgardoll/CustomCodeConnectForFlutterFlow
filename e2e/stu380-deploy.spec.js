@@ -985,9 +985,11 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.name).toBe("UnconfirmedDeployError");
 
     // The next deploy must re-export the project — a stale snapshot would lack
-    // gauge_model.dart and provision it a second time.
+    // gauge_model.dart and provision it a second time. One export already
+    // happened during the deploy: the reconcile re-read of the unconfirmed
+    // provision, which is why this is 3 (seed 1 + reconcile 1 + this reset).
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
   });
 
   test("a gateway 502 keeps the project snapshot dirty instead of reporting a refusal", async ({ page }) => {
@@ -1027,18 +1029,26 @@ test.describe("STU-380 transport outcome regressions", () => {
     // The UI must not report a definitive "nothing was written".
     expect(outcome.name).toBe("UnconfirmedDeployError");
     expect(outcome.outcome).toBe("unconfirmed");
-    // The cause must be truthful: an HTTP 502 was actually received, so the
-    // message names the status and may not claim the connection dropped. The
-    // reconcile-before-retry advice stays in both cases.
+    // An unconfirmed outcome is reconciled before it is reported: the message
+    // carries what the re-read of the project found (the class not landed yet,
+    // with the re-read-before-retry advice). The cause is kept alongside it —
+    // an HTTP 502 was actually received, so the message must name the status
+    // and may not claim the connection dropped. The re-read cannot reconstruct
+    // the cause, so reporting it in place of the cause would tell the user less
+    // than the code knows.
     expect(outcome.message).toContain("HTTP 502");
+    expect(outcome.message).toContain("Checked FlutterFlow just now");
+    expect(outcome.message).toContain("none of the 1 custom class(es) are in the project yet");
+    expect(outcome.message).toContain("re-read first");
     expect(outcome.message).not.toContain("dropped");
-    expect(outcome.message).toContain("reconcile");
 
     // The possibly-written class keeps the snapshot dirty: the next deploy
     // must re-export instead of planning against the cached pre-write snapshot
-    // and silently provisioning the class a second time.
+    // and silently provisioning the class a second time. One export already
+    // happened during the deploy: the reconcile re-read of the unconfirmed
+    // provision, so this is 3 (seed 1 + reconcile 1 + this reset).
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
   });
 
   test("a runner failure after deploy began also drops the cached snapshot", async ({ page }) => {
@@ -1084,8 +1094,10 @@ test.describe("STU-380 transport outcome regressions", () => {
     );
     expect(outcome.name).toBe("UnconfirmedDeployError");
 
+    // The next deploy must re-export — one export already happened during the
+    // deploy, the reconcile re-read of the unconfirmed provision.
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
   });
 
   test("a dropped provisioning stream keeps exports uncached until the file is seen", async ({ page }) => {
@@ -1148,24 +1160,25 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.name).toBe("UnconfirmedDeployError");
 
     // A follow-up deploy exports fresh but must not cache: the file may land
-    // later and leave this snapshot stale forever.
+    // later and leave this snapshot stale forever. One export already happened
+    // during the deploy, the reconcile re-read of the unconfirmed provision.
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
 
     // Even the request settling proves nothing about the remote write — a
     // dropped stream can precede it — so exports stay uncached.
     await page.evaluate(() => window.__CCC_PROVISION_STREAM__.close());
     await page.waitForTimeout(50);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(3);
+    expect(exportCalls).toBe(4);
 
     // The first export that actually shows the file proves the write landed;
     // the path clears and caching resumes.
     gaugeLanded = true;
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(4);
+    expect(exportCalls).toBe(5);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(4);
+    expect(exportCalls).toBe(5);
   });
 
   test("a retry's success cannot clear an earlier write that may still land", async ({ page }) => {
@@ -1263,20 +1276,22 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcomeB.settled).toBe("resolved");
 
     // An export showing B's content cannot clear A's write — it can still
-    // land afterwards and replace it, so nothing may be cached yet.
+    // land afterwards and replace it, so nothing may be cached yet. One export
+    // already happened when A timed out: the reconcile re-read of that
+    // unconfirmed provision.
     landed = "b";
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(3); // still uncached — A remains outstanding
+    expect(exportCalls).toBe(4); // still uncached — A remains outstanding
 
     // Only an export carrying A's exact content proves that write landed;
     // then the dirty set empties and caching resumes.
     landed = "a";
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(4);
+    expect(exportCalls).toBe(5);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(4);
+    expect(exportCalls).toBe(5);
   });
 
   test("an identical retry's success cannot retire the earlier uncertain write", async ({ page }) => {
@@ -1356,17 +1371,19 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcomeB.settled).toBe("resolved");
 
     // First X-sighting is attributable to the verified retry — A's write can
-    // still be in flight, so the snapshot must not cache.
+    // still be in flight, so the snapshot must not cache. One export already
+    // happened when A timed out: the reconcile re-read of that unconfirmed
+    // provision.
     landed = true;
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(2);
+    expect(exportCalls).toBe(3);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     // The second sighting shows the same unchanged X: it is the same fact as
     // the first, so it cannot retire A's uncertain write. While A can still
     // land, no export may be cached.
-    expect(exportCalls).toBe(3);
-    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
     expect(exportCalls).toBe(4);
+    await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
+    expect(exportCalls).toBe(5);
 
     // A's own late result is what resolves its write: the uncertain credit
     // converts to a verified one, and the next sighting consumes it — only
@@ -1380,9 +1397,9 @@ test.describe("STU-380 transport outcome regressions", () => {
     });
     await page.waitForTimeout(50);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(5);
+    expect(exportCalls).toBe(6);
     await page.evaluate(() => window.__CCC_RESOLVE_PROJECT_PUBSPEC__({}));
-    expect(exportCalls).toBe(5);
+    expect(exportCalls).toBe(6);
   });
 
   test("a push still in flight keeps exports uncached until it settles", async ({ page }) => {
