@@ -47,6 +47,15 @@ const runStatusCollection = 'deploy_runs';
 /// bounded to this and its failure swallowed.
 const runRecordWriteTimeout = Duration(seconds: 2);
 
+/// Cap on a status lookup, covering both the metadata-server token fetch and
+/// the Firestore read. The write path is bounded so a slow backend can never
+/// hold up a deploy; the read path needs its own bound for the same reason
+/// pointed at the service: Cloud Run runs this runner at concurrency 1, so one
+/// lookup that never returns occupies the instance's only slot and every
+/// deploy routed to it waits. A read that exceeds this becomes a 503, which
+/// the browser already treats as "unknown" and answers by reconciling.
+const runRecordReadTimeout = Duration(seconds: 5);
+
 /// An HTTP response from the backing store, kept opaque so the real transport
 /// (dart:io) and a test double share one shape.
 class FirestoreHttpResponse {
@@ -372,6 +381,7 @@ Future<RunStatusLookup> fetchRunStatus({
   required String runId,
   required String? presentedKey,
   required FirestoreRunStore store,
+  Duration readTimeout = runRecordReadTimeout,
 }) async {
   if (presentedKey == null || presentedKey.isEmpty) {
     return const RunStatusLookup(401, {
@@ -382,7 +392,7 @@ Future<RunStatusLookup> fetchRunStatus({
 
   final Map<String, dynamic>? document;
   try {
-    document = await store.get(runId);
+    document = await store.get(runId).timeout(readTimeout);
   } catch (error) {
     stderr.writeln('[run status] lookup failed for $runId: $error');
     return const RunStatusLookup(503, {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:ccc_ffai_runner/run_record.dart';
@@ -112,6 +113,23 @@ void main() {
         runId: 'dr_abc',
         presentedKey: key,
         store: store,
+      );
+      expect(lookup.statusCode, 503);
+    });
+
+    // The service runs at concurrency 1, so a lookup that never returns would
+    // occupy the instance's only slot and stall every deploy routed to it. The
+    // bound must turn that into an answer the browser can act on.
+    test('503 when the read never returns, instead of hanging forever', () async {
+      final store = _store(
+        (method, uri, {headers, body}) =>
+            Completer<FirestoreHttpResponse>().future,
+      );
+      final lookup = await fetchRunStatus(
+        runId: 'dr_abc',
+        presentedKey: key,
+        store: store,
+        readTimeout: const Duration(milliseconds: 50),
       );
       expect(lookup.statusCode, 503);
     });
