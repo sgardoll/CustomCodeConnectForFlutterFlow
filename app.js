@@ -3234,7 +3234,14 @@ async function reconcileUnconfirmedProvision(apiClient, attempted, original) {
       `not there yet: ${names(notLanded)}. Wait a minute, then deploy again - ` +
       "classes already there are skipped, and the rest are written.";
   }
-  const error = new UnconfirmedDeployError(message);
+  // The finding is added to the cause, never in place of it. Only the generic
+  // wait/timeout wording is dropped, because the finding is precisely what
+  // replaces it - but an HTTP status or a dropped connection is diagnosis the
+  // re-read cannot reconstruct, so discarding it would leave the user knowing
+  // less than the code does about their own failed deploy.
+  const error = new UnconfirmedDeployError(
+    original?.causeDetail ? `${original.causeDetail} ${message}` : message,
+  );
   // The reconcile outcome decides whether the terminal can offer "Finish
   // deploy": when every class landed, only the pubspec push remains.
   error.reconcilePartition = { landed, notLanded };
@@ -3370,10 +3377,15 @@ async function provisionMissingCodeFiles(
         result.httpRejected && typeof result.httpStatus === "number"
           ? `The FlutterFlow deploy runner returned HTTP ${result.httpStatus} without reporting a result.`
           : "The connection to the FlutterFlow deploy runner dropped before it reported a result.";
-      throw new UnconfirmedDeployError(
+      const error = new UnconfirmedDeployError(
         `${cause} The deploy may still be finishing on the server; open your FlutterFlow project to reconcile ` +
           "before retrying.",
       );
+      // Kept so reconciliation can add what its re-read found WITHOUT dropping
+      // this: an HTTP status or a dropped connection is the one part of the
+      // cause a later project export cannot reconstruct.
+      error.causeDetail = cause;
+      throw error;
     }
 
     if (!result.success) {
@@ -3384,11 +3396,15 @@ async function provisionMissingCodeFiles(
       // already uploaded, so it must be reported unconfirmed (and the catch
       // below drops the stale snapshot).
       if (deployOutcomeOfStreamResult(result) === DeployOutcome.UNCONFIRMED) {
-        throw new UnconfirmedDeployError(
+        const error = new UnconfirmedDeployError(
           `${message} The failure arrived after the deploy began — custom classes ` +
             "may already be written. Open your FlutterFlow project to reconcile " +
             "before retrying.",
         );
+        // The runner's own error is the cause; a re-read of the project cannot
+        // recover it, so reconciliation must not replace it.
+        error.causeDetail = message;
+        throw error;
       }
       // A verified pre-write rejection (compile gate, workspace, request
       // validation) is still the runner's answer — FlutterFlow was never

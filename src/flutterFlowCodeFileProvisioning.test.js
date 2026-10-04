@@ -163,6 +163,15 @@ test("isDeployFinishable is true only when every attempted class landed", () => 
   assert.equal(isDeployFinishable(nothingLanded), false);
 });
 
+test("isDeployFinishable is false for a missing partition, not a crash", () => {
+  // The reconcile re-read can fail or time out, and then returns the caller's
+  // original error — which carries no partition. That is an ordinary outcome,
+  // and an unproven partition must not offer a finish action. Treating it as
+  // impossible threw a TypeError out of the whole deploy.
+  assert.equal(isDeployFinishable(undefined), false);
+  assert.equal(isDeployFinishable(null), false);
+});
+
 // DONE CRITERION (client): a deploy whose step-2 response is lost must still
 // be finishable — the classes are present and the finish action pushes the
 // pubspec without re-provisioning them. These tests drive the exact pure

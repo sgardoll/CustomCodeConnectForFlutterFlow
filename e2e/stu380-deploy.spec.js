@@ -1030,9 +1030,13 @@ test.describe("STU-380 transport outcome regressions", () => {
     expect(outcome.name).toBe("UnconfirmedDeployError");
     expect(outcome.outcome).toBe("unconfirmed");
     // An unconfirmed outcome is reconciled before it is reported: the message
-    // is whatever the re-read of the project showed (here: the class not
-    // landed yet, with the re-read-before-retry advice) — not a fabricated
-    // "connection dropped" and not a claim that nothing was written.
+    // carries what the re-read of the project found (the class not landed yet,
+    // with the re-read-before-retry advice). The cause is kept alongside it —
+    // an HTTP 502 was actually received, so the message must name the status
+    // and may not claim the connection dropped. The re-read cannot reconstruct
+    // the cause, so reporting it in place of the cause would tell the user less
+    // than the code knows.
+    expect(outcome.message).toContain("HTTP 502");
     expect(outcome.message).toContain("Checked FlutterFlow just now");
     expect(outcome.message).toContain("none of the 1 custom class(es) are in the project yet");
     expect(outcome.message).toContain("re-read first");

@@ -78,11 +78,18 @@ export function excludeProvisionedCodeFiles(fileMap, entries) {
  * project's fresh export. When true the classes have landed and only step 3 —
  * the pubspec push — remains, so the interrupted deploy is finishable without
  * re-running the slower class write.
- * @param {{landed: Array, notLanded: Array}} partition - Outcome of
- *   `partitionProvisionedCodeFiles`
+ *
+ * A missing partition is `false`, not a crash. The reconcile re-read can fail
+ * or time out, and it then returns the caller's original error, which carries
+ * no partition — so an absent partition is an ordinary outcome here, not an
+ * impossible one. Treating it as un-finishable is also the safe answer: without
+ * a proven partition we cannot claim every class landed.
+ * @param {{landed: Array, notLanded: Array}|undefined|null} partition - Outcome
+ *   of `partitionProvisionedCodeFiles`, when one could be taken
  * @returns {boolean}
  */
 export function isDeployFinishable(partition) {
+  if (!partition) return false;
   return partition.notLanded.length === 0 && partition.landed.length > 0;
 }
 
