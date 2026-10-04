@@ -72,3 +72,40 @@ export function excludeProvisionedCodeFiles(fileMap, entries) {
     ),
   );
 }
+
+/**
+ * Whether every class a provisioning request attempted is now present in the
+ * project's fresh export. When true the classes have landed and only step 3 —
+ * the pubspec push — remains, so the interrupted deploy is finishable without
+ * re-running the slower class write.
+ * @param {{landed: Array, notLanded: Array}} partition - Outcome of
+ *   `partitionProvisionedCodeFiles`
+ * @returns {boolean}
+ */
+export function isDeployFinishable(partition) {
+  return partition.notLanded.length === 0 && partition.landed.length > 0;
+}
+
+/**
+ * Builds the file map for a "finish deploy" — the step-3 push that completes
+ * a deploy whose classes have already landed but whose provisioning response
+ * was lost. The landed classes are excluded: they are already in the project,
+ * so re-writing them would needlessly run the class/dependency handling they
+ * just went through. The merged pubspec is added as the remaining entry. This
+ * mirrors what the normal step-3 request already does, since it also excludes
+ * classes the runner wrote (see `provisionMissingCodeFiles`).
+ * @param {Map<string, Object>} fileMap - Entries a provisioning request was writing
+ * @param {Array<{path: string}>} landedEntries - Entries confirmed present in the project
+ * @param {string} serializedYaml - Merged pubspec.yaml to push
+ * @returns {Map<string, Object>} The finish-push file map
+ */
+export function buildFinishPushFileMap(fileMap, landedEntries, serializedYaml) {
+  const remaining = excludeProvisionedCodeFiles(fileMap, landedEntries);
+  const out = new Map(remaining);
+  out.set("pubspec.yaml", {
+    content: serializedYaml,
+    type: "D",
+    path: "pubspec.yaml",
+  });
+  return out;
+}
