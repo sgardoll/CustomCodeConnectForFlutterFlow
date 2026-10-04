@@ -49,7 +49,11 @@ async function main() {
     "",
   );
   const projectId = process.env.CANARY_PROJECT_ID || "automated-test-miedro";
-  const timeoutMs = Number(process.env.CANARY_TIMEOUT_MS || 60000);
+  // A real deploy takes 103-215s (measured on the production runner), and this
+// canary drives the same path, so a 60s bound made every scheduled run fail
+// with "timed out" - a daily false alarm that would mask a real one. Sized
+// above the slowest observed deploy and below Cloud Run's 900s request cap.
+const timeoutMs = Number(process.env.CANARY_TIMEOUT_MS || 300000);
 
   const payload = {
     apiKey,
