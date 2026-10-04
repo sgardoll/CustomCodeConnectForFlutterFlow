@@ -11,6 +11,11 @@ CONCURRENCY="${CONCURRENCY:-1}"
 # covers `flutter pub get` plus `flutter analyze` on top of the DSL run. Cloud
 # Run's 300s default would cut that off on a cold instance.
 TIMEOUT="${TIMEOUT:-900}"
+# Keep one instance always on. Most of a deploy's 103-215s on a cold start is
+# the FlutterFlow AI SDK download and a fresh `flutter pub get` after `ai init`;
+# a warm instance does that once at container boot instead of per request. The
+# tradeoff is a small always-on instance cost for a much shorter deploy.
+MIN_INSTANCES="${MIN_INSTANCES:-1}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
@@ -28,6 +33,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --memory "$MEMORY" \
   --concurrency "$CONCURRENCY" \
+  --min-instances "$MIN_INSTANCES" \
   --timeout "$TIMEOUT" \
   --set-env-vars "ALLOWED_ORIGIN=$ALLOWED_ORIGIN"
 

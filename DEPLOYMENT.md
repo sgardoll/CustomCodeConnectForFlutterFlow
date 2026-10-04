@@ -159,6 +159,52 @@ Deploy the runner with:
 PROJECT_ID=low-code-connect REGION=us-west1 ./scripts/deploy_cloud_run_ffai.sh
 ```
 
+Keep one instance warm by default: the script passes `--min-instances 1`, because
+most of a cold start (FlutterFlow AI SDK download and a fresh `flutter pub get`)
+is paid once per container instead of once per deploy. Override the count with
+`MIN_INSTANCES`, e.g. `MIN_INSTANCES=0 ./scripts/deploy_cloud_run_ffai.sh` to
+scale to zero and pay per-request cold starts instead.
+
+#### One-time setup for automated deploys (GitHub Actions)
+
+The workflow `.github/workflows/deploy-runner.yml` deploys the runner whenever
+`cloud-run/**` changes on `main`. It uses a Google Cloud service-account key
+from a repository secret. Until that secret exists the job **silently skips**
+(rather than failing on every push), so set up this once or merged runner
+changes will deploy nothing:
+
+1. Create a service account with at least `roles/run.admin`,
+   `roles/cloudbuild.builds.editor` and `roles/iam.serviceAccountUser`, generate
+   a JSON key, and download it.
+2. In **Settings → Secrets and variables → Actions**, create a repository secret
+   named `CCC_FFAI_RUNNER_SA_KEY_JSON` whose value is the key's full JSON
+   (including the surrounding `{ }`).
+3. The workflow reads `CCC_PROJECT_ID` (default `low-code-connect`) and
+   `CCC_REGION` (default `us-west1`) from repository variables; create those if
+   the defaults are not right. This is per-repo like every secret here, because
+   GitHub does not expose organisation secrets to private repositories on the
+   free plan.
+
+#### Runner canary (scheduled)
+
+The workflow `.github/workflows/canary.yml` runs daily (07:21 UTC) and on demand
+via **Actions → Runner canary → Run workflow**. It sends a `dryRun: true`
+deploy for the throwaway project `automated-test-miedro` to the runner's
+`/deployCustomClasses`, so it exercises workspace init, the compile gate and the
+DSL push path without writing anything to a real project. It fails (non-zero)
+on any non-200 response, on `success:false`, or if the runner rejects the
+`flutter_web_plugins` SDK package, and also reports the runner's `/healthz`
+versions when that endpoint is deployed - without failing when it is not yet.
+
+Until the FlutterFlow API key secret exists the canary job skips cleanly, so it
+never fails noisily before setup:
+
+1. Create a repository secret named `CANARY_FF_API_KEY` whose value is a
+   FlutterFlow API key with at least read access to `automated-test-miedro`.
+2. Optionally set a repository variable `CANARY_RUNNER_URL` if the production
+   runner lives somewhere other than the default, and `CANARY_PROJECT_ID` if the
+   throwaway project changes.
+
 ## BuildShip workflow and step prompts
 
 The generation pipeline (Architect → Generator → Review) runs on BuildShip, and

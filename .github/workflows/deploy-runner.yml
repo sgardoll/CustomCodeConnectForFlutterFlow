@@ -1,0 +1,50 @@
+name: Deploy runner
+
+# Deploy the FlutterFlow AI runner to Cloud Run whenever cloud-run/** changes
+# land on main, so a merged runner fix actually ships instead of sitting in the
+# repo. Additive only: it never touches branch protection and never runs on
+# pull requests.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloud-run/**"
+
+# The deploy script needs `gcloud` (auth + setup-gcloud below). No write access
+# to this repository itself is required.
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-runner
+  cancel-in-progress: true
+
+jobs:
+  deploy-runner:
+    # The whole point of gating on the secret instead of failing is that pushes
+    # before one-time setup complete are skipped quietly. Until
+    # CCC_FFAI_RUNNER_SA_KEY_JSON exists (see DEPLOYMENT.md) this job does not
+    # run; once it does, a merged cloud-run change deploys.
+    if: secrets.CCC_FFAI_RUNNER_SA_KEY_JSON != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          # JSON of a service account with roles/run.admin + roles/cloudbuild.builds.editor + roles/iam.serviceAccountUser.
+          credentials_json: ${{ secrets.CCC_FFAI_RUNNER_SA_KEY_JSON }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+        with:
+          project_id: ${{ vars.CCC_PROJECT_ID || 'low-code-connect' }}
+
+      - name: Deploy the FlutterFlow AI runner
+        run: |
+          PROJECT_ID="${{ vars.CCC_PROJECT_ID || 'low-code-connect' }}" \
+          REGION="${{ vars.CCC_REGION || 'us-west1' }}" \
+          ./scripts/deploy_cloud_run_ffai.sh
