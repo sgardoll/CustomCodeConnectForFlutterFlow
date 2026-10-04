@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ccc_ffai_runner/request_validation.dart';
+import 'package:ccc_ffai_runner/run_record.dart';
+import 'package:ccc_ffai_runner/sha256.dart';
 
 // The lowest flutterflow_cli the vendored FlutterFlow AI snapshot accepts. The
 // image pins FLUTTERFLOW_CLI_VERSION to this (see Dockerfile); it must be kept
@@ -35,6 +37,19 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
+    // GET /runStatus/<runId> answers what happened to a deploy whose response
+    // was lost. The id in the path is the one the client itself generated, so
+    // a 404 is a proof the request never reached the runner (nothing was
+    // written, a retry is safe), never an ambiguous "unknown". The caller must
+    // present the same API key the run started with; see fetchRunStatus.
+    final statusPath = RegExp(
+      r'^/runStatus/([A-Za-z0-9_-]+)$',
+    ).firstMatch(request.uri.path);
+    if (request.method == 'GET' && statusPath != null) {
+      await _handleRunStatus(request, statusPath.group(1)!);
+      return;
+    }
+
     if (request.method != 'POST' ||
         request.uri.path != '/deployCustomClasses') {
       await channel.result(HttpStatus.notFound, {
@@ -54,6 +69,7 @@ Future<void> _handle(HttpRequest request) async {
     String projectId;
     String baseUrl;
     String commitMessage;
+    String runId;
     bool dryRun;
     List<CustomClassEntry> classes;
     VerificationRequest? verification;
@@ -73,6 +89,7 @@ Future<void> _handle(HttpRequest request) async {
         maxLength: 300,
         required: false,
       );
+      runId = stringField(payload, 'runId', maxLength: 120, required: false);
       dryRun = payload['dryRun'] == true;
       classes = _normalizeClasses(payload['customClasses']);
       verification = normalizeVerification(payload['verification']);
@@ -86,19 +103,64 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
+    // The client generates the run id so a 404 on /runStatus proves the
+    // request never arrived. It becomes a document id in Firestore, so it is
+    // constrained to characters that are safe there (letters, digits, - and _).
+    if (runId.isNotEmpty && !RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(runId)) {
+      await channel.result(HttpStatus.badRequest, {
+        'success': false,
+        'error': 'Invalid runId.',
+        'preWrite': true,
+      });
+      return;
+    }
+
+    // A run record lets a client whose connection dropped or whose wait expired
+    // ask what actually happened instead of re-reading the project and
+    // guessing. Older clients send no runId; for them nothing is recorded and
+    // the deploy behaves exactly as before.
+    late RunRecorder recorder;
+    final recordRun = runId.isNotEmpty;
+    if (recordRun) {
+      recorder = RunRecorder(
+        FirestoreRunStore(
+          project:
+              Platform.environment['FIRESTORE_PROJECT'] ??
+              defaultFirestoreProject,
+        ),
+        runId: runId,
+        projectId: projectId,
+        keyHash: sha256Hex(utf8.encode(apiKey)),
+        classNames: classes.map((entry) => entry.className).toList(),
+      );
+    }
+
     // Only stream for callers that asked for it, so older clients keep getting
     // the single JSON response they parse.
     if (payload['stream'] == true) {
       channel.beginStream();
     }
-    channel.phase('connected', 'Connected to the FlutterFlow deploy runner.');
+    _phase(channel, recordRun ? recorder : null, 'connected',
+        'Connected to the FlutterFlow deploy runner.');
 
     final workspace = Directory(
       Platform.environment['FFAI_WORKSPACE'] ??
           '/workspace/custom_code_connect',
     );
-    final initResult = await _ensureWorkspace(workspace, apiKey, channel);
+    final initResult = await _ensureWorkspace(
+      workspace,
+      apiKey,
+      channel,
+      recordRun ? recorder : null,
+    );
     if (initResult != null) {
+      if (recordRun) {
+        await recorder.recordFailed(
+          initResult.timedOut
+              ? 'Preparing the FlutterFlow AI workspace timed out.'
+              : 'FlutterFlow AI workspace initialization failed.',
+        );
+      }
       await channel.result(HttpStatus.badGateway, {
         'success': false,
         'error':
@@ -118,8 +180,18 @@ Future<void> _handle(HttpRequest request) async {
     // accepts a call to a named argument the package never declared - exactly
     // the class of error that otherwise lands in the project and breaks every
     // custom widget or action importing it.
-    final analysis = await _verifyCustomCode(workspace, verification, channel);
+    final analysis = await _verifyCustomCode(
+      workspace,
+      verification,
+      channel,
+      recordRun ? recorder : null,
+    );
     if (analysis != null && analysis.hasErrors) {
+      if (recordRun) {
+        await recorder.recordFailed(
+          'The generated custom code does not compile.',
+        );
+      }
       await channel.result(HttpStatus.unprocessableEntity, {
         'success': false,
         'error':
@@ -157,7 +229,9 @@ Future<void> _handle(HttpRequest request) async {
       args.addAll(['--commit-message', commitMessage]);
     }
 
-    channel.phase(
+    _phase(
+      channel,
+      recordRun ? recorder : null,
       'deploy_start',
       classes.length == 1
           ? 'Deploying ${classes.single.className} to FlutterFlow...'
@@ -169,10 +243,14 @@ Future<void> _handle(HttpRequest request) async {
       workingDirectory: workspace.path,
       apiKey: apiKey,
       channel: channel,
+      recorder: recordRun ? recorder : null,
       timeout: _deployTimeout(classes.length),
     );
 
     if (result.timedOut) {
+      if (recordRun) {
+        await recorder.recordFailed('FlutterFlow AI DSL deploy timed out.');
+      }
       await channel.result(HttpStatus.gatewayTimeout, {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy timed out.',
@@ -184,6 +262,9 @@ Future<void> _handle(HttpRequest request) async {
     }
 
     if (result.exitCode != 0) {
+      if (recordRun) {
+        await recorder.recordFailed('FlutterFlow AI DSL deploy failed.');
+      }
       await channel.result(HttpStatus.badGateway, {
         'success': false,
         'error': 'FlutterFlow AI DSL deploy failed.',
@@ -194,18 +275,25 @@ Future<void> _handle(HttpRequest request) async {
       return;
     }
 
+    final deployed = classes
+        .map(
+          (entry) => {
+            'artifactId': entry.artifactId,
+            'className': entry.className,
+          },
+        )
+        .toList();
+
+    // The terminal write is awaited (bounded and error-swallowed in the
+    // recorder) so a client whose response was lost can learn the run finished.
+    if (recordRun) {
+      await recorder.recordDone(deployed, dryRun);
+    }
+
     await channel.result(HttpStatus.ok, {
       'success': true,
       'message': 'Custom classes upserted through FlutterFlow AI DSL.',
-      'deployed':
-          classes
-              .map(
-                (entry) => {
-                  'artifactId': entry.artifactId,
-                  'className': entry.className,
-                },
-              )
-              .toList(),
+      'deployed': deployed,
       'dryRun': dryRun,
       'verified': analysis?.verifiedFiles ?? const <String>[],
       'verificationSkipped': analysis?.skippedReason,
@@ -213,6 +301,9 @@ Future<void> _handle(HttpRequest request) async {
   } catch (error, stackTrace) {
     stderr.writeln(error);
     stderr.writeln(stackTrace);
+    // Never allow a run-record write that follows the catch to take down the
+    // response - it is best effort, and no runId is parsed for a request that
+    // threw before it (request body/format errors).
     await channel.result(HttpStatus.internalServerError, {
       'success': false,
       'error': '$error',
@@ -224,20 +315,35 @@ Future<void> _handle(HttpRequest request) async {
   }
 }
 
+/// Reports a phase to the streaming channel and, when a run is being recorded,
+/// persists it to the run record so a disconnected client can later ask what
+/// happened.
+void _phase(
+  _ResponseChannel channel,
+  RunRecorder? recorder,
+  String id,
+  String message,
+) {
+  channel.phase(id, message);
+  recorder?.recordPhase(id, message);
+}
+
 Future<_RunOutcome?> _ensureWorkspace(
   Directory workspace,
   String apiKey,
   _ResponseChannel channel,
+  RunRecorder? recorder,
 ) async {
   final packageConfig = File(
     '${workspace.path}/.dart_tool/package_config.json',
   );
   if (packageConfig.existsSync()) {
-    channel.phase('workspace_ready', 'Build environment is ready.');
+    _phase(channel, recorder, 'workspace_ready', 'Build environment is ready.');
     return null;
   }
 
-  channel.phase('workspace_init', 'Preparing the FlutterFlow AI workspace...');
+  _phase(channel, recorder, 'workspace_init',
+      'Preparing the FlutterFlow AI workspace...');
   final parent = workspace.parent;
   await parent.create(recursive: true);
   final workspaceName = workspace.path.split(Platform.pathSeparator).last;
@@ -252,13 +358,14 @@ Future<_RunOutcome?> _ensureWorkspace(
     workingDirectory: parent.path,
     apiKey: apiKey,
     channel: channel,
+    recorder: recorder,
   );
 
   if (result.timedOut || result.exitCode != 0) {
     return result;
   }
 
-  channel.phase('workspace_ready', 'Build environment is ready.');
+  _phase(channel, recorder, 'workspace_ready', 'Build environment is ready.');
   return null;
 }
 
@@ -283,6 +390,7 @@ Future<_RunOutcome> _runFlutterFlow(
   required String workingDirectory,
   required String apiKey,
   required _ResponseChannel channel,
+  RunRecorder? recorder,
   Duration timeout = const Duration(minutes: 5),
 }) async {
   final process = await Process.start(
@@ -315,7 +423,7 @@ Future<_RunOutcome> _runFlutterFlow(
     // Markers are progress reporting, not output worth showing in an error.
     final marker = _readPhaseMarker(line);
     if (marker != null) {
-      channel.phase(marker.phase, marker.message);
+      _phase(channel, recorder, marker.phase, marker.message);
       return;
     }
 
@@ -459,8 +567,10 @@ void _writeCorsHeaders(HttpResponse response) {
   final allowedOrigin = Platform.environment['ALLOWED_ORIGIN'] ?? '*';
   response.headers
     ..set('Access-Control-Allow-Origin', allowedOrigin)
-    ..set('Access-Control-Allow-Methods', 'POST, OPTIONS')
-    ..set('Access-Control-Allow-Headers', 'Content-Type')
+    ..set('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+    // x-ff-api-key lets the browser present the deploy key on GET /runStatus so
+    // a run id is never a bearer capability on its own.
+    ..set('Access-Control-Allow-Headers', 'Content-Type, x-ff-api-key')
     ..set('Vary', 'Origin');
 }
 
@@ -498,6 +608,45 @@ Future<String> _installedCliVersion() async {
 
 Future<void> _writeJsonBody(HttpResponse response, Object body) async {
   response.statusCode = HttpStatus.ok;
+  response.headers.contentType = ContentType.json;
+  response.write(jsonEncode(body));
+  try {
+    await response.close();
+  } catch (_) {}
+}
+
+/// Serves `GET /runStatus/<runId>`: looks up the run record and enforces that
+/// the caller presents the same API key the run started with.
+Future<void> _handleRunStatus(HttpRequest request, String runId) async {
+  final store = FirestoreRunStore(
+    project:
+        Platform.environment['FIRESTORE_PROJECT'] ?? defaultFirestoreProject,
+  );
+  final lookup = await fetchRunStatus(
+    runId: runId,
+    presentedKey: _apiKeyFromRequest(request),
+    store: store,
+  );
+  await _writeJsonResponse(request.response, lookup.statusCode, lookup.body);
+}
+
+/// The API key the caller must present to read a run. Read from a header
+/// (preferred, to keep it out of URLs and access logs) with a query-parameter
+/// fallback for callers that cannot set a custom header.
+String? _apiKeyFromRequest(HttpRequest request) {
+  final header = request.headers.value('x-ff-api-key')?.trim();
+  if (header != null && header.isNotEmpty) return header;
+  final query = request.uri.queryParameters['key']?.trim();
+  if (query != null && query.isNotEmpty) return query;
+  return null;
+}
+
+Future<void> _writeJsonResponse(
+  HttpResponse response,
+  int statusCode,
+  Object body,
+) async {
+  response.statusCode = statusCode;
   response.headers.contentType = ContentType.json;
   response.write(jsonEncode(body));
   try {
@@ -566,6 +715,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   Directory workspace,
   VerificationRequest? verification,
   _ResponseChannel channel,
+  RunRecorder? recorder,
 ) async {
   if (verification == null) return null;
   if (verification.unavailableReason != null) {
@@ -573,7 +723,7 @@ Future<_AnalysisOutcome?> _verifyCustomCode(
   }
   if (verification.sources.isEmpty) return null;
 
-  channel.phase('verifying', 'Compiling your custom code...');
+  _phase(channel, recorder, 'verifying', 'Compiling your custom code...');
 
   final packageDir = Directory('${workspace.parent.path}/custom_code_analysis');
   final libDir = Directory('${packageDir.path}/lib');

@@ -39,6 +39,10 @@ import {
 } from "./src/flutterFlowCodeFileProvisioning.js";
 import { buildReviewPresentation } from "./src/reviewPresentation.js";
 import {
+  generateDeployRunId,
+  queryRunStatusWithinBudget,
+} from "./src/runStatus.js";
+import {
   expectedWidgetClassFromFileName,
   findUnbalancedBracketError,
   getDeclaredWidgetClasses,
@@ -3261,6 +3265,15 @@ async function provisionMissingCodeFiles(
     return { remoteFiles, syncFileMap: fileMap, unverified: [], approximate: [] };
   }
 
+  // The client generates the run id so that, if this response is ever lost,
+  // a 404 on GET /runStatus/<runId> is proof the request never reached the
+  // runner (nothing written, retry safe) rather than an ambiguous "unknown".
+  const runId = generateDeployRunId();
+
+  // True once the run-status lookup has decided this attempt's real outcome,
+  // so the late-arriving provision stream cannot double-credit its writes.
+  let runStatusResolved = false;
+
   // The runner compiles these against the project's own package versions
   // before it writes anything, so an API the generated code invented - a named
   // argument the package never declared - stops the deploy instead of landing
@@ -3317,6 +3330,7 @@ async function provisionMissingCodeFiles(
             projectId: apiClient.projectId,
             baseUrl: apiClient.baseUrl,
             commitMessage,
+            runId,
             customClasses: missingCodeFiles,
             verification,
             stream: true,
@@ -3429,6 +3443,9 @@ async function provisionMissingCodeFiles(
       // retires them outright.
       provisionWork?.then(
         (late) => {
+          // When the run-status lookup already decided this attempt's real
+          // outcome, the late stream must not double-credit its writes.
+          if (runStatusResolved) return;
           if (late?.finalResultReceived && late.success) {
             adjustProjectSourceDirty(apiClient, missingCodeFiles, {
               uncertain: -1,
@@ -3445,6 +3462,49 @@ async function provisionMissingCodeFiles(
         },
         () => {},
       );
+      // The record is the authority here: ask the runner what actually
+      // happened instead of re-reading the project and guessing. Only when the
+      // answer is definitive does it replace the estimate; a 404, a 5xx or an
+      // unrecognised body (an older runner) falls through to the reconcile.
+      let statusOutcome = { definitive: null };
+      try {
+        statusOutcome = await queryRunStatusWithinBudget({
+          provisionEndpoint: FLUTTERFLOW_CLASS_PROVISION_ENDPOINT,
+          runId,
+          apiKey: apiClient.apiKey,
+        });
+      } catch {
+        // The status query must fail closed: any unexpected throw from it (a
+        // browser abort surfacing unusually, a half-updated bundle) falls back
+        // to the existing reconcile instead of fabricating a new failure.
+        statusOutcome = { definitive: null };
+      }
+      if (statusOutcome.definitive === "success") {
+        // The runner confirms every class it was asked to write landed, so the
+        // provision succeeds and step 3 (the pubspec push) runs as usual — this
+        // is a known success, not an estimate.
+        runStatusResolved = true;
+        adjustProjectSourceDirty(apiClient, missingCodeFiles, {
+          uncertain: -1,
+          verified: 1,
+        });
+        return {
+          remoteFiles,
+          syncFileMap: excludeProvisionedCodeFiles(fileMap, missingCodeFiles),
+          unverified,
+          approximate,
+          provisionSucceeded: true,
+        };
+      }
+      if (statusOutcome.definitive === "failed") {
+        // A provable pre-write refusal: nothing could have been written, so it
+        // is a real failure, not an unknown outcome.
+        runStatusResolved = true;
+        throw new Error(
+          statusOutcome.error || "The deploy failed before writing anything.",
+        );
+      }
+
       const reconciled = await reconcileUnconfirmedProvision(
         apiClient,
         missingCodeFiles,
