@@ -64,6 +64,11 @@ async function main() {
       dependencies: {},
       dependencyOverrides: {},
       sdkPackages: ["flutter_web_plugins"],
+      // The runner hard-requires this array: without it _normalizeVerification
+      // throws and returns HTTP 400 before anything runs. It is also what the
+      // compile gate compiles - an empty sources list skips _verifyCustomCode
+      // entirely, so this canary would detect nothing.
+      sources: [{ fileName: "canary_probe.dart", content: CANARY_SOURCE }],
     },
   };
 
