@@ -210,10 +210,10 @@ test("the image copies every directory the entrypoint imports", () => {
   }
 });
 
-// The runner reports minFlutterflowCli at /healthz so a version drift is visible.
-// If the two ever disagree, /healthz reports a minimum the image does not
+// The runner reports minFlutterflowCli at its health route so a version drift is
+// visible. If the two ever disagree, it reports a minimum the image does not
 // actually satisfy, which is worse than not reporting one at all.
-test("/healthz reports the same required CLI version the image pins", () => {
+test("the health route reports the same required CLI version the image pins", () => {
   const pinned = dockerfile.match(
     /^ARG FLUTTERFLOW_CLI_VERSION=(\d+\.\d+\.\d+)$/m,
   )?.[1];
@@ -231,7 +231,7 @@ test("/healthz reports the same required CLI version the image pins", () => {
   );
 });
 
-// A merged runner fix that never shipped is the failure this guards: /healthz
+// A merged runner fix that never shipped is the failure this guards: the health route
 // has to be able to answer which revision is live, so the deploy must actually
 // pass the SHA through.
 test("the deploy passes the built revision to the runner for /healthz", () => {
@@ -243,6 +243,25 @@ test("the deploy passes the built revision to the runner for /healthz", () => {
   assert.match(
     deployScript,
     /--set-env-vars "[^"]*RUNNER_GIT_SHA=\$RUNNER_GIT_SHA/,
-    "RUNNER_GIT_SHA must reach the service, or /healthz reports an empty SHA",
+    "RUNNER_GIT_SHA must reach the service, or the health route reports an empty SHA",
+  );
+});
+
+// Cloud Run's front end answers /healthz itself, so the request never reaches
+// the container. That shipped once: the endpoint was dead in production
+// however well it worked locally. The path is therefore checked, not assumed.
+test("the health route is not a path Cloud Run reserves", () => {
+  const path = runnerSource.match(/const healthPath = '([^']+)'/)?.[1];
+
+  assert.ok(path, "the runner must declare the health route it serves");
+  assert.notEqual(
+    path,
+    "/healthz",
+    "Cloud Run's front end answers /healthz, so the container never sees it",
+  );
+  assert.match(
+    runnerSource,
+    /request\.uri\.path == healthPath/,
+    "the route must be matched through the shared constant, not a literal",
   );
 });
