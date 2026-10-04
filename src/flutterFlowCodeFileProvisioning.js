@@ -47,6 +47,23 @@ export function findMissingCodeFiles(fileMap, remoteFiles = new Map()) {
   return missing;
 }
 
+/**
+ * Splits the entries a provisioning request was writing by whether a fresh
+ * project export now contains them. Used after a lost or expired response to
+ * say what actually happened instead of leaving the outcome unknown.
+ * @param {Array<{path: string}>} entries - Entries the request attempted
+ * @param {Map<string, string>} remoteFiles - Fresh project export, by path
+ * @returns {{landed: Array, notLanded: Array}}
+ */
+export function partitionProvisionedCodeFiles(entries, remoteFiles = new Map()) {
+  const landed = [];
+  const notLanded = [];
+  for (const entry of entries) {
+    (remoteFiles.has(entry.path) ? landed : notLanded).push(entry);
+  }
+  return { landed, notLanded };
+}
+
 export function excludeProvisionedCodeFiles(fileMap, entries) {
   const provisionedPaths = new Set(entries.map((entry) => entry.path));
   return new Map(

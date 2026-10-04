@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   excludeProvisionedCodeFiles,
   findMissingCodeFiles,
+  partitionProvisionedCodeFiles,
 } from "./flutterFlowCodeFileProvisioning.js";
 
 test("plans provisioning for a standalone code file missing from FlutterFlow", () => {
@@ -111,5 +112,22 @@ test("excludes provisioned code files from the subsequent custom-code sync", () 
   assert.deepEqual(
     Array.from(excludeProvisionedCodeFiles(fileMap, entries).keys()),
     ["read_nfc_tag.dart"],
+  );
+});
+
+test("partitionProvisionedCodeFiles splits attempted entries by fresh export", () => {
+  const attempted = [
+    { className: "Alpha", path: "lib/custom_code/alpha.dart" },
+    { className: "Beta", path: "lib/custom_code/beta.dart" },
+  ];
+  const remote = new Map([["lib/custom_code/alpha.dart", "class Alpha {}"]]);
+
+  const { landed, notLanded } = partitionProvisionedCodeFiles(attempted, remote);
+
+  assert.deepEqual(landed.map((e) => e.className), ["Alpha"]);
+  assert.deepEqual(notLanded.map((e) => e.className), ["Beta"]);
+  assert.deepEqual(
+    partitionProvisionedCodeFiles(attempted).notLanded.length,
+    2,
   );
 });

@@ -33,6 +33,7 @@ import { buildBundleDeployPlan } from "./src/bundleDeployPlanner.js";
 import {
   excludeProvisionedCodeFiles,
   findMissingCodeFiles,
+  partitionProvisionedCodeFiles,
 } from "./src/flutterFlowCodeFileProvisioning.js";
 import { buildReviewPresentation } from "./src/reviewPresentation.js";
 import {
@@ -3180,6 +3181,59 @@ async function pushCodeWithUiTimeout(
   );
 }
 
+/**
+ * After a lost or expired provisioning response, reads the project back and
+ * says which classes actually landed, so the user is never left with only
+ * "go check FlutterFlow yourself". The read is its own bounded request: if it
+ * cannot be made, the original unconfirmed error stands unchanged.
+ *
+ * "Not found" is reported as "not there yet", never as "failed": the runner
+ * may still be writing, and a retry re-reads the project first so already
+ * landed classes are skipped rather than duplicated.
+ * @param {FlutterFlowApiClient} apiClient
+ * @param {Array<{className: string, path: string}>} attempted
+ * @param {UnconfirmedDeployError} original
+ * @returns {Promise<UnconfirmedDeployError>}
+ */
+async function reconcileUnconfirmedProvision(apiClient, attempted, original) {
+  let fresh;
+  try {
+    fresh = await Promise.race([
+      apiClient.fetchProjectSource(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("read timed out")), 20_000),
+      ),
+    ]);
+  } catch {
+    return original;
+  }
+
+  const { landed, notLanded } = partitionProvisionedCodeFiles(
+    attempted,
+    fresh.files,
+  );
+  const names = (entries) => entries.map((entry) => entry.className).join(", ");
+
+  let message;
+  if (notLanded.length === 0) {
+    message =
+      `Checked FlutterFlow just now: all ${landed.length} custom class(es) are in the project (${names(landed)}). ` +
+      "The final step, pushing your pubspec.yaml dependencies, did not run. " +
+      "Deploy again to finish it - classes already there are skipped, not duplicated.";
+  } else if (landed.length === 0) {
+    message =
+      `Checked FlutterFlow just now: none of the ${notLanded.length} custom class(es) are in the project yet (${names(notLanded)}). ` +
+      "The server may still be writing them. Wait a minute, then deploy again - " +
+      "the project is re-read first, so nothing is duplicated.";
+  } else {
+    message =
+      `Checked FlutterFlow just now: ${landed.length} of ${attempted.length} custom class(es) are in the project (${names(landed)}); ` +
+      `not there yet: ${names(notLanded)}. Wait a minute, then deploy again - ` +
+      "classes already there are skipped, and the rest are written.";
+  }
+  return new UnconfirmedDeployError(message);
+}
+
 async function provisionMissingCodeFiles(
   apiClient,
   fileMap,
@@ -3367,6 +3421,11 @@ async function provisionMissingCodeFiles(
           }
         },
         () => {},
+      );
+      throw await reconcileUnconfirmedProvision(
+        apiClient,
+        missingCodeFiles,
+        error,
       );
     }
     throw error;
