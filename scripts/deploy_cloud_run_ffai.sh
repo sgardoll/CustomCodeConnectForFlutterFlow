@@ -16,6 +16,12 @@ TIMEOUT="${TIMEOUT:-900}"
 # a warm instance does that once at container boot instead of per request. The
 # tradeoff is a small always-on instance cost for a much shorter deploy.
 MIN_INSTANCES="${MIN_INSTANCES:-1}"
+# Reported by the runner's /healthz, so which revision is live - and therefore
+# whether a merged fix actually shipped - is answerable in seconds instead of
+# guessed at. This is exactly how a merged-but-never-deployed runner fix went
+# unnoticed for months. Taken from the build's own checkout; empty (never
+# wrong) if git is unavailable.
+RUNNER_GIT_SHA="${RUNNER_GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || true)}"
 
 if [[ -z "$PROJECT_ID" ]]; then
   PROJECT_ID="$(gcloud config get-value project 2>/dev/null || true)"
@@ -35,7 +41,10 @@ gcloud run deploy "$SERVICE" \
   --concurrency "$CONCURRENCY" \
   --min-instances "$MIN_INSTANCES" \
   --timeout "$TIMEOUT" \
-  --set-env-vars "ALLOWED_ORIGIN=$ALLOWED_ORIGIN"
+  --set-env-vars "ALLOWED_ORIGIN=$ALLOWED_ORIGIN,RUNNER_GIT_SHA=$RUNNER_GIT_SHA"
+
+echo
+echo "Deployed revision reports RUNNER_GIT_SHA=${RUNNER_GIT_SHA:-<unset>}"
 
 echo
 echo "Set VITE_FLUTTERFLOW_DSL_DEPLOY_ENDPOINT to:"

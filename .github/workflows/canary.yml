@@ -17,21 +17,37 @@ permissions:
 
 jobs:
   canary:
-    # Skip (rather than fail noisily) until the FlutterFlow API key secret
-    # exists, so scheduled runs before one-time setup complete are quiet. The
-    # script itself also fails clearly if the key ever comes back empty.
-    if: secrets.CANARY_FF_API_KEY != ''
     runs-on: ubuntu-latest
     steps:
+      # Skip (rather than fail noisily) until the FlutterFlow API key secret
+      # exists, so scheduled runs before one-time setup complete are quiet. The
+      # gate has to be a step: the `secrets` context is not available in a
+      # job-level `if`, and using it there makes the workflow file invalid. The
+      # script itself also fails clearly if the key ever comes back empty.
+      - name: Check for canary credentials
+        id: creds
+        env:
+          CANARY_KEY: ${{ secrets.CANARY_FF_API_KEY }}
+        run: |
+          if [ -n "$CANARY_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CANARY_FF_API_KEY is not set, so the canary did not run. See DEPLOYMENT.md for the one-time setup."
+          fi
+
       - name: Checkout
+        if: steps.creds.outputs.present == 'true'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
+        if: steps.creds.outputs.present == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: ".nvmrc"
 
       - name: Run the dry-run canary
+        if: steps.creds.outputs.present == 'true'
         run: node scripts/canary-deploy.mjs
         env:
           CANARY_FF_API_KEY: ${{ secrets.CANARY_FF_API_KEY }}

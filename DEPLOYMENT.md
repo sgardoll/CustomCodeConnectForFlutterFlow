@@ -196,6 +196,12 @@ on any non-200 response, on `success:false`, or if the runner rejects the
 `flutter_web_plugins` SDK package, and also reports the runner's `/healthz`
 versions when that endpoint is deployed - without failing when it is not yet.
 
+`GET /healthz` answers `{sha, flutterflowCli, minFlutterflowCli}`. The deploy
+script passes the checkout's short SHA as `RUNNER_GIT_SHA`, so comparing `sha`
+against `git log -1 --format=%h` tells you whether a merged runner fix is
+actually live. That question is what a months-long stall in a merged-but-never-
+deployed fix looked like; it is now one request.
+
 Until the FlutterFlow API key secret exists the canary job skips cleanly, so it
 never fails noisily before setup:
 
