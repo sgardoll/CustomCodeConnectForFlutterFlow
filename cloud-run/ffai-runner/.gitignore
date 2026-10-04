@@ -1,0 +1,4 @@
+# `dart pub get` output. The image is built from the Dockerfile, which runs
+# pub get itself, so neither of these belongs in the repository.
+.dart_tool/
+pubspec.lock
