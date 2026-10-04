@@ -33,6 +33,7 @@ RUN dart pub get
 RUN mkdir -p /workspace
 
 COPY bin/ ./bin/
+COPY lib/ ./lib/
 
 EXPOSE 8080
 
