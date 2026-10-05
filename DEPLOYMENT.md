@@ -186,14 +186,16 @@ changes will deploy nothing:
    | `roles/iam.serviceAccountUser` | act as the runtime service account |
    | `roles/cloudbuild.builds.editor` | run the build |
    | `roles/artifactregistry.writer` | push the built image (else `artifactregistry.repositories.get` is denied) |
-   | `roles/storage.objectAdmin` | read/write the objects in the source bucket `run-sources-<project>-<region>` |
-   | `roles/storage.legacyBucketReader` | read the bucket's own metadata (else `storage.buckets.get` is denied) |
+   | `roles/storage.admin` | the source bucket: read its metadata (`storage.buckets.get`, `storage.buckets.list`) and write the objects in it |
 
-   `storage.objectAdmin` is **not** sufficient on its own: it grants object permissions only and contains no `storage.buckets.*` at all, while the deploy reads the bucket before it writes anything. Granting the pair scoped to the bucket is the narrow option; `roles/storage.admin` covers both if you would rather grant once.
-
-   Scope the last two to the repository and bucket if you prefer, but a partial
-   set fails at deploy time with a message naming only the next missing
-   permission — which is how this list was corrected twice.
+   `roles/storage.admin` is the one to grant, and the narrower storage roles do
+   **not** compose into a substitute. Measured against the live role definitions:
+   `storage.objectAdmin` has 32 permissions and not one is `storage.buckets.*`;
+   `storage.legacyBucketReader` supplies `storage.buckets.get` but not
+   `storage.buckets.list`. A source deploy needs `buckets.get`, `buckets.list`
+   and `objects.create`, and only `storage.admin` supplies all three — so the
+   failures arrive one permission at a time and each looks like the last one
+   being wrong.
 2. In **Settings → Secrets and variables → Actions**, create a repository secret
    named `CCC_FFAI_RUNNER_SA_KEY_JSON` whose value is the key's full JSON
    (including the surrounding `{ }`).
