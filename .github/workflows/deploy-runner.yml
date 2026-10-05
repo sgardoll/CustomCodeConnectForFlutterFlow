@@ -10,6 +10,10 @@ on:
     branches: [main]
     paths:
       - "cloud-run/**"
+  # Deploys can fail for reasons outside the code (a missing IAM grant, a Cloud
+  # Build outage). Without this the only way to retry was to push a no-op
+  # commit, which is worse than useless on the branch that deploys production.
+  workflow_dispatch:
 
 # The deploy script needs `gcloud` (auth + setup-gcloud below). No write access
 # to this repository itself is required.
