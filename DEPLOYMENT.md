@@ -186,7 +186,10 @@ changes will deploy nothing:
    | `roles/iam.serviceAccountUser` | act as the runtime service account |
    | `roles/cloudbuild.builds.editor` | run the build |
    | `roles/artifactregistry.writer` | push the built image (else `artifactregistry.repositories.get` is denied) |
-   | `roles/storage.objectAdmin` | read/write the source bucket `run-sources-<project>-<region>` (else `storage.buckets.get` is denied) |
+   | `roles/storage.objectAdmin` | read/write the objects in the source bucket `run-sources-<project>-<region>` |
+   | `roles/storage.legacyBucketReader` | read the bucket's own metadata (else `storage.buckets.get` is denied) |
+
+   `storage.objectAdmin` is **not** sufficient on its own: it grants object permissions only and contains no `storage.buckets.*` at all, while the deploy reads the bucket before it writes anything. Granting the pair scoped to the bucket is the narrow option; `roles/storage.admin` covers both if you would rather grant once.
 
    Scope the last two to the repository and bucket if you prefer, but a partial
    set fails at deploy time with a message naming only the next missing
