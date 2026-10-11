@@ -88,16 +88,6 @@ async function framesIn(page, ms) {
 
 const currentTime = (page) => page.evaluate(() => window.__pipelineLogo?.currentTime() ?? -1);
 
-// Painted frames over `ms` measured from a steady state: a fresh loop is given
-// a warm-up before the window opens, so two rate measurements are comparable.
-// A leaked second loop would paint ~2x the frames in the same window.
-async function steadyFramesIn(page, ms = 500) {
-  await page.waitForTimeout(250);
-  const before = await page.evaluate(() => window.__pipelineLogo?.frameCount() ?? 0);
-  await page.waitForTimeout(ms);
-  const after = await page.evaluate(() => window.__pipelineLogo?.frameCount() ?? 0);
-  return after - before;
-}
 
 // Measures the logo's painted frames against the number of actual display
 // frames over the SAME wall-clock window. A single loop paints at most once per
@@ -107,6 +97,19 @@ async function steadyFramesIn(page, ms = 500) {
 // counts, which is how a slower CI runner stalls the baseline and trips a
 // `framesB < framesA * c` style assertion. This is the load-robust spelling of
 // "the loop resumed without accumulating a second loop."
+// "The loop is running", spelled against display frames from the SAME window.
+// A running loop paints once per display frame (measured: exactly equal, 3-11
+// frames under 12-worker load) and a stopped one paints none, so this
+// separates the two states on any machine. An absolute floor — `frames > 5` in
+// a fixed 500ms window — instead measures how busy the machine is: a loaded
+// runner renders 4 frames in that window with the loop turning over normally.
+function expectRunning(measured, label = "the loop") {
+  expect(measured.display, "the window should contain real display frames").toBeGreaterThan(0);
+  expect(measured.logo, `${label} should keep painting`).toBeGreaterThan(0);
+  // A leaked second loop would paint ~2x per display frame.
+  expect(measured.logo, `${label} should stay a single loop`).toBeLessThan(measured.display * 1.6);
+}
+
 async function framesPerDisplayFrame(page, ms = 500) {
   await page.evaluate(() => {
     if (!window.__displayFrames) {
@@ -174,8 +177,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
 
     await revealPipeline(page);
     // While visible it actively renders: a genuine frame metric from the module.
-    const frames = await framesIn(page, 500);
-    expect(frames, "the mark should animate while its arena is on screen").toBeGreaterThan(5);
+    expectRunning(await framesPerDisplayFrame(page, 500), "the mark");
   });
 
   test("hidden browser tab stops rendering and returning resumes a single loop", async ({ page }) => {
@@ -183,8 +185,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     await openHome(page);
     await revealPipeline(page);
 
-    const framesOn = await steadyFramesIn(page);
-    expect(framesOn).toBeGreaterThan(5);
+    expectRunning(await framesPerDisplayFrame(page), "a visible loop");
 
     // Simulate the tab being hidden (document.hidden + visibilitychange).
     await page.evaluate(() => {
@@ -201,13 +202,8 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
-    const reenter = await framesPerDisplayFrame(page, 500);
-    expect(reenter.logo, "a restored loop should stay a single loop").toBeGreaterThan(5);
-    expect(reenter.display, "the window should contain real display frames").toBeGreaterThan(0);
     // If a second loop had leaked in, it would paint ~2x per display frame.
-    // Measured against display frames in the same window, so a loaded machine
-    // can't stall an earlier baseline and fake a doubling.
-    expect(reenter.logo).toBeLessThan(reenter.display * 1.6);
+    expectRunning(await framesPerDisplayFrame(page, 500), "a restored loop");
   });
 
   test("CSS-hidden pipeline (display:none) stops rendering with no raf leak", async ({ page }) => {
@@ -215,8 +211,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     await openHome(page);
     await revealPipeline(page);
     await expect.poll(() => running(page)).toBe(true);
-    const framesOn = await steadyFramesIn(page);
-    expect(framesOn).toBeGreaterThan(5);
+    expectRunning(await framesPerDisplayFrame(page), "a visible loop");
 
     // display:none -> offsetParent null. This is the CSS-hidden case.
     await hidePipeline(page);
@@ -227,10 +222,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     // per display frame in one window, as above.
     await revealPipeline(page);
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
-    const back = await framesPerDisplayFrame(page, 500);
-    expect(back.logo).toBeGreaterThan(5);
-    expect(back.display).toBeGreaterThan(0);
-    expect(back.logo).toBeLessThan(back.display * 1.6);
+    expectRunning(await framesPerDisplayFrame(page, 500), "a re-entered loop");
   });
 
   test("viewport-offscreen arena stops rendering even though it is not display:none", async ({ page }) => {
@@ -254,7 +246,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
       document.getElementById("pipeline-progress").style.transform = "none";
     });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
-    expect(await framesIn(page, 500)).toBeGreaterThan(5);
+    expectRunning(await framesPerDisplayFrame(page, 500), "a restored loop");
   });
 
   test("live reduced-motion toggle freezes to the static rest frame and stops the loop", async ({ page }) => {
@@ -290,8 +282,7 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
     const resumed = await framesPerDisplayFrame(page, 500);
-    expect(resumed.logo, "the loop should have resumed painting").toBeGreaterThan(5);
-    expect(resumed.display, "the window should contain real display frames").toBeGreaterThan(0);
+    expectRunning(resumed, "the resumed loop");
     // One loop paints at most once per display frame; a doubled loop would ~2x.
     expect(resumed.logo).toBeLessThan(resumed.display * 1.6);
   });
