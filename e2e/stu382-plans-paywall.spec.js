@@ -8,6 +8,7 @@ import {
   ENDPOINTS,
   checkoutSession,
 } from "./fixtures/apiFixtures.js";
+import { PLAN_LIMITS } from "../src/plansSurface.js";
 
 /**
  * STU-382 — the plans surface and paywall states must be backed by real
@@ -70,6 +71,50 @@ test.describe("STU-382 plans surface and paywall states", () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hasSeenWalkthrough", "true"));
+  });
+
+  test("an out-of-runs user writes their prompt first; the paywall answers the submit", async ({ page }) => {
+    const pipelineRequests = [];
+    page.on("request", (request) => {
+      if (request.url().startsWith(ENDPOINTS.pipeline)) pipelineRequests.push(request.url());
+    });
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: identityWithUsage({ count: PLAN_LIMITS.free, status: "guest" }),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+    });
+    await page.goto("/");
+
+    // Wait for the startup usage decision to land at the limit: the page still
+    // opens on the composer, not the exhausted screen.
+    await page.waitForFunction(
+      (limit) => JSON.parse(localStorage.getItem("ccc_usage") || "{}").count >= limit,
+      PLAN_LIMITS.free,
+      { timeout: 8000 },
+    );
+    const field = page.locator("#pipeline-input");
+    await expect(field).toBeVisible();
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+
+    // Submitting the prompt is what surfaces the paywall, with the prompt in
+    // the recap and pricing open — and no generation request leaves.
+    const prompt = "A habit tracker heatmap with streak counts";
+    await field.fill(prompt);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await expect(page.locator("#paywall-exhausted-text")).toContainText(
+      `You've used all ${PLAN_LIMITS.free} free generations this month.`,
+    );
+    await expect(page.locator("#pipeline-submitted-prompt")).toHaveText(prompt);
+    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
+
+    // Edit prompt goes back to the composer holding what the user wrote.
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
+    await page.locator("#pipeline-edit-prompt").click();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+    await expect(field).toHaveValue(prompt);
+    expect(pipelineRequests).toEqual([]);
   });
 
   test("C1: professional labels and current-plan indicators agree across surfaces", async ({ page }) => {

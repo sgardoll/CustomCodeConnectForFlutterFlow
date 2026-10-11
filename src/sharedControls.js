@@ -110,10 +110,6 @@ export function closeModal(modalOrId, options = {}) {
   return true;
 }
 
-export function hasActiveModal() {
-  return Boolean(activeModal);
-}
-
 export function setModalPending(modalOrId, pending, message = "Operation in progress") {
   const modal = typeof modalOrId === "string" ? document.getElementById(modalOrId) : modalOrId;
   if (!modal) return;

@@ -1,7 +1,6 @@
 import posthog from "posthog-js";
 import {
   closeModal,
-  hasActiveModal,
   initializeModalShells,
   openModal,
   setModalPending,
@@ -5550,7 +5549,7 @@ async function runThinkingPipeline() {
     }
     if (!isCurrentPipelineRun(runId)) return;
 
-    if (!(await canRunPipeline())) return;
+    if (!(await canRunPipeline(userInput))) return;
     if (!isCurrentPipelineRun(runId)) return;
 
     await ensureIdentityReady();
@@ -6547,7 +6546,7 @@ function getRunLimit() {
   return TIER_LIMITS[subscriptionState.tier] ?? TIER_LIMITS.free
 }
 
-async function canRunPipeline() {
+async function canRunPipeline(prompt) {
   if (authState.isVerified && (!isSubscriptionResolved() || isSubscriptionLoading())) {
     await fetchSubscription({ force: true })
     updateSubscriptionUI()
@@ -6561,7 +6560,7 @@ async function canRunPipeline() {
   const { count } = getUsage()
   const limit = getRunLimit()
   if (count >= limit) {
-    showPaywallExhausted(count, limit, { openModal: true })
+    showPaywallExhausted(count, limit, { openModal: true, prompt })
     return false
   }
   const warningThreshold = Math.floor(limit * 0.8)
@@ -6617,6 +6616,14 @@ function showPaywallExhausted(count, limit, options = {}) {
 
   const signInBtn = document.getElementById('paywall-signin-btn')
   if (signInBtn) signInBtn.classList.toggle('hidden', authState.isVerified)
+
+  // The paywall answers a submitted prompt: the recap shows it beside the
+  // upgrade path, and Edit prompt returns to it rather than an earlier run's.
+  if (options.prompt != null) {
+    pipelineState.submittedPrompt = options.prompt
+    const promptEl = document.getElementById('pipeline-submitted-prompt')
+    if (promptEl) promptEl.textContent = options.prompt
+  }
 
   paywall.classList.remove('hidden')
   if (options.openModal) openPricingModal()
@@ -6885,16 +6892,13 @@ function updateUsageDisplay() {
     return
   }
 
+  // The paywall answers a generation attempt — canRunPipeline shows it when
+  // a prompt is submitted at the limit — so a usage update never surfaces it
+  // on its own: an out-of-runs user still lands on the composer and writes
+  // their prompt first. An update only clears it once the limit no longer
+  // applies (an upgrade, a sign-in, a new month).
   const { count } = getUsage()
-  const limit = getRunLimit()
-  // Auto-surfacing the paywall swaps the stage and closes the walkthrough, so
-  // defer it while a dialog is open; the next usage update or run attempt
-  // still gates on the limit.
-  if (count >= limit && !pipelineState.isRunning && !hasActiveModal()) {
-    showPaywallExhausted(count, limit)
-  } else {
-    hidePaywallExhausted()
-  }
+  if (count < getRunLimit()) hidePaywallExhausted()
 }
 
 function updateGuestUsageCounter() {
