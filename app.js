@@ -6560,7 +6560,7 @@ async function canRunPipeline(prompt) {
   const { count } = getUsage()
   const limit = getRunLimit()
   if (count >= limit) {
-    showPaywallExhausted(count, limit, { openModal: true, prompt })
+    showPaywallExhausted(count, limit, { prompt })
     return false
   }
   const warningThreshold = Math.floor(limit * 0.8)
@@ -6625,8 +6625,9 @@ function showPaywallExhausted(count, limit, options = {}) {
     if (promptEl) promptEl.textContent = options.prompt
   }
 
+  // Only the screen: its View Plans button opens pricing when the user
+  // chooses, rather than a dialog stacked over it.
   paywall.classList.remove('hidden')
-  if (options.openModal) openPricingModal()
 }
 
 function getEffectiveModel(selectedModel) {

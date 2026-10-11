@@ -357,8 +357,8 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
   // observed, not assumed: resolveIdentity writes it and calls
   // updateUsageDisplay in one synchronous block, so the key reappearing at the
   // limit means the decision has fully run. A run attempt is not passive: an
-  // out-of-runs run surfaces the paywall with the submitted prompt, takes the
-  // tour with it, and opens pricing.
+  // out-of-runs run surfaces the paywall screen with the submitted prompt and
+  // takes the tour with it; pricing waits for the screen's View Plans.
   test("an out-of-runs startup never surfaces the paywall; a run attempt does, with the prompt", async ({ page }) => {
     let releaseIdentity;
     const identityGate = new Promise((resolve) => {
@@ -439,7 +439,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator("#generation-stage")).toBeHidden();
 
     // A run attempt is not passive: an out-of-runs run must surface the paywall
-    // in place of the tour, and open pricing so the user can act on it.
+    // screen in place of the tour — only the screen, no pricing dialog over it.
     await reopenWalkthrough(page);
     await expect(page.locator(WALKTHROUGH)).toHaveClass(/open/);
 
@@ -450,7 +450,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).not.toHaveClass(/open/);
     await expect(page.locator(WALKTHROUGH)).toHaveAttribute("aria-hidden", "true");
     await expect(page.locator("#paywall-exhausted")).toBeVisible();
-    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
     // The paywall answers the submitted prompt: it sits in the recap.
     await expect(page.locator("#pipeline-submitted-prompt")).toHaveText(
       "A circular progress gauge",

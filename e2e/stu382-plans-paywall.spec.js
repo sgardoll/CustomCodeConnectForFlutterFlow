@@ -96,8 +96,9 @@ test.describe("STU-382 plans surface and paywall states", () => {
     await expect(page.locator("#paywall-exhausted")).toBeHidden();
     await expect(page.locator("#generation-stage")).toBeHidden();
 
-    // Submitting the prompt is what surfaces the paywall, with the prompt in
-    // the recap and pricing open — and no generation request leaves.
+    // Submitting the prompt is what surfaces the paywall — only the screen,
+    // with the prompt in the recap and no pricing dialog stacked over it — and
+    // no generation request leaves.
     const prompt = "A habit tracker heatmap with streak counts";
     await field.fill(prompt);
     await page.locator("#hero-send").click();
@@ -106,11 +107,16 @@ test.describe("STU-382 plans surface and paywall states", () => {
       `You've used all ${PLAN_LIMITS.free} free generations this month.`,
     );
     await expect(page.locator("#pipeline-submitted-prompt")).toHaveText(prompt);
-    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
 
-    // Edit prompt goes back to the composer holding what the user wrote.
+    // Pricing opens when the user asks for it, from the screen's View Plans.
+    const viewPlans = page.locator("#paywall-exhausted").getByRole("button", { name: "View Plans" });
+    await viewPlans.click();
+    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
     await page.keyboard.press("Escape");
     await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
+
+    // Edit prompt goes back to the composer holding what the user wrote.
     await page.locator("#pipeline-edit-prompt").click();
     await expect(page.locator("#generation-stage")).toBeHidden();
     await expect(field).toHaveValue(prompt);
