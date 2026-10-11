@@ -24,10 +24,12 @@
 .shell-stage .composer { margin-top:46px; width:760px; height:148px; flex:none; }
 .shell-stage .composer .field, .shell-stage .composer .ghost { left:23px; right:23px; top:19px; width:auto; height:58px; min-height:0; font-size:18px; line-height:1.5; }
 .shell-stage .composer .field { overflow-y:auto; box-shadow:none; }
+.shell-stage .composer .ghost .suggest { color:var(--muted); }
 .shell-stage .composer .tools { left:15px; bottom:12px; }
 .shell-stage .icon-btn, .shell-stage .send { width:44px; height:44px; min-width:44px; min-height:44px; }
 .shell-stage .send { right:15px; bottom:15px; }
 .shell-stage .send:disabled { opacity:1; }
+.shell-stage .composer .tab-hint { right:74px; bottom:13px; min-height:44px; margin:-4px -6px; }
 .shell-stage .chips { max-width:none; }
 .shell-stage .chip { min-height:44px; background:oklch(100% 0 0 / .7); }
 .composer.is-pointer-focus { outline:none; }
@@ -134,6 +136,7 @@ body[data-shell-view="account"] .viewport, body[data-shell-view="plans"] .viewpo
   .shell-stage .composer .field, .shell-stage .composer .ghost { left:18px; right:18px; top:16px; height:94px; font-size:16px; line-height:1.45; }
   .shell-stage .composer .tools { left:10px; bottom:12px; }
   .shell-stage .send { right:10px; bottom:10px; }
+  .shell-stage .composer .tab-hint { right:63px; bottom:12px; }
   .shell-stage .chips { max-width:520px; }
   .shell-stage .chips .chip { height:auto; padding-block:10px; }
   .glow { width:140vw; height:60vh; top:48%; filter:blur(40px); }
