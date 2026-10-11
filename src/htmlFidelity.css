@@ -33,7 +33,6 @@
 .shell-stage .chips { max-width:none; }
 .shell-stage .chip { min-height:44px; background:oklch(100% 0 0 / .7); }
 .composer.is-pointer-focus { outline:none; }
-.composer.is-demo-streaming .ghost .typed::after { content:""; display:inline-block; width:2px; height:1.05em; margin-right:-2px; vertical-align:-.15em; background:var(--accent); box-shadow:0 0 7px 1px var(--accent-soft); animation:caret-blink 1.05s step-end infinite; }
 #generation-stage { position:absolute; inset:164px auto auto 50%; width:1420px; transform:translateX(-50%); padding:0; background:transparent; opacity:1; transition:none; }
 #generation-stage.is-active, body.results-fullscreen #generation-stage { display:block; }
 #generation-stage.is-active #main-stage-container { opacity:1; pointer-events:auto; }
@@ -158,5 +157,5 @@ body[data-shell-view="account"] .viewport, body[data-shell-view="plans"] .viewpo
   body[data-shell-view="account"] .viewport, body[data-shell-view="plans"] .viewport { padding-top:0; }
 }
 @media (prefers-reduced-motion:reduce) {
-  .panel-in, .code-line.is-in, .composer.is-demo-streaming .ghost .typed::after { animation:none; }
+  .panel-in, .code-line.is-in { animation:none; }
 }

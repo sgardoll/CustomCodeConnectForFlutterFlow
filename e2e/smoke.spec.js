@@ -10,7 +10,6 @@ import {
 } from "./fixtures/apiFixtures.js";
 
 const COMPOSER_PLACEHOLDER = /Describe the widget or action you need/i;
-const COMPOSER_DEFAULT_PROMPT = "A circular progress gauge with a gradient stroke";
 
 /**
  * Baseline smoke test for the redesigned hero landing and composer state.
@@ -43,8 +42,8 @@ test.describe("Redesigned hero landing and composer", () => {
   });
 
   test("shows the hero landing and the composer", async ({ page }) => {
-    // Reduced motion presents the completed example immediately; normal
-    // motion is verified against the source's 5200ms hold + 73ms characters.
+    // Reduced motion lands the hero demo's end state immediately; the motion
+    // itself is verified in the STU-445 composer suite.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await applyDefaultRoutes(page, {
       [ENDPOINTS.identity]: guestIdentity(),
@@ -59,15 +58,14 @@ test.describe("Redesigned hero landing and composer", () => {
     await expect(heading).toBeVisible();
     await expect(heading).toContainText("FlutterFlow custom code.");
 
-    // Composer is present with its shipped example prompt. The hero demo
-    // types it in on load, so wait for the demo's end state rather than
-    // polling the prefix.
+    // Composer is present, empty on its hint: the hero demo's example is
+    // illustration only and never stays in the field.
     const composer = page.locator("#pipeline-input");
     await expect(composer).toBeVisible();
     await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/, {
       timeout: 15000,
     });
-    await expect(composer).toHaveValue(COMPOSER_DEFAULT_PROMPT);
+    await expect(composer).toHaveValue("");
     await expect(composer).toHaveAttribute(
       "placeholder",
       COMPOSER_PLACEHOLDER,

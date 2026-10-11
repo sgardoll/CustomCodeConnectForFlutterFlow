@@ -170,6 +170,8 @@ test.describe("the dialog stays wired to the generation request", () => {
     await page.locator(MODEL_SELECT).selectOption("anthropic/claude-opus-5");
     await closeSettings(page, { via: "done" });
 
+    // The composer rests empty on its hint; give the run a prompt to send.
+    await page.locator("#pipeline-input").fill("A circular progress gauge with a gradient stroke");
     await page.locator("#hero-send").click();
     await expect(page.locator("#generation-stage")).toBeVisible({ timeout: 30000 });
     // The stage is visible before the pipeline reaches its generator step, so
