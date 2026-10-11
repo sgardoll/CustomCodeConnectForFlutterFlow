@@ -2857,14 +2857,10 @@
         color: transparent;
       }
       .composer .ghost .typed { color: transparent; }
-      .composer .ghost .suggest {
-        color: oklch(80% 0.012 260);
-        opacity: 0;
-        transition: opacity var(--t-fast) var(--ease);
-      }
-      .composer.has-suggest .ghost .suggest { opacity: 1; }
       /* Demo caret (prototype): a real text cursor — hard blink on a 1.05s cadence
-         with a soft brand afterglow. Shown while a chip fills the prompt. */
+         with a soft brand afterglow. Shown while the hero demo or a chip writes
+         the prompt; held solid while characters land (is-demo-keying), so it
+         only blinks while the field is idle, like a real cursor. */
       @keyframes caret-blink { 0%,45% { opacity:1; } 46%,100% { opacity:0; } }
       .composer.is-demo-typing .ghost .typed::after {
         content:""; display:inline-block; width:2px; height:1.05em; margin-right:-2px; vertical-align:-.15em;
@@ -2872,40 +2868,7 @@
         box-shadow:0 0 7px 1px oklch(from var(--accent) l c h / .5);
         animation:caret-blink 1.05s step-end infinite;
       }
-      .composer .tab-hint {
-        position: absolute;
-        right: 64px;
-        bottom: 22px;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 6px;
-        border: 0;
-        background: transparent;
-        border-radius: 6px;
-        cursor: pointer;
-        font-family: var(--font-mono);
-        font-size: 11px;
-        letter-spacing: 0.02em;
-        color: var(--muted);
-        opacity: 0;
-        transform: translateY(2px);
-        transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
-        pointer-events: none;
-      }
-      .composer .tab-hint kbd {
-        font: inherit;
-        padding: 1px 6px;
-        border: 1px solid var(--border);
-        border-bottom-width: 2px;
-        border-radius: 5px;
-        background: var(--surface);
-        color: var(--fg);
-      }
-      .composer.has-suggest .tab-hint { opacity: 1; transform: none; pointer-events: auto; }
-      .composer .tab-hint[hidden] { display: none; }
-      .composer .tab-hint:hover { color: var(--fg); background: oklch(96% 0.01 260); }
-      .composer .tab-hint:hover kbd { border-color: oklch(80% 0.02 260); }
+      .composer.is-demo-keying .ghost .typed::after { animation: none; }
       .composer:focus-within {
         border-color: var(--accent);
         box-shadow:
@@ -3310,8 +3273,8 @@
         .send.is-busy .send-spin { animation: none; opacity: 0.6; }
       }
     </style>
-    <script type="module" crossorigin src="/assets/index-D2LZqiXQ.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DbG5mQ4q.css">
+    <script type="module" crossorigin src="/assets/index-DYbo9B-C.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BeVS7Wr2.css">
   </head>
   <body>
   <div class="shell-frame"><div class="shell-stage" id="shell-stage">
@@ -3350,10 +3313,8 @@
 
         <div class="composer" id="composer">
           <label class="sr-only" for="pipeline-input">Describe the widget or action you need</label>
-          <div class="ghost" aria-hidden="true"><span class="typed"></span><span class="suggest"></span></div>
-          <textarea id="pipeline-input" class="field" rows="3" spellcheck="false" aria-describedby="suggest-status" placeholder="Describe the widget or action you need" data-demo-prompt="A circular progress gauge with a gradient stroke"></textarea>
-          <span id="suggest-status" class="sr-only" aria-live="polite"></span>
-          <button class="tab-hint" type="button" id="tab-hint" tabindex="-1" hidden=""><kbd aria-hidden="true">Tab</kbd><span class="tab-hint-label">to accept</span></button>
+          <div class="ghost" aria-hidden="true"><span class="typed"></span></div>
+          <textarea id="pipeline-input" class="field" rows="3" spellcheck="false" placeholder="Describe the widget or action you need" data-demo-prompt="A circular progress gauge with a gradient stroke"></textarea>
           <div class="tools">
             <div id="prompt-image-upload" class="prompt-image-upload">
               <button class="icon-btn" type="button" id="btn-add-images" aria-label="Attach reference image" onclick="document.getElementById('prompt-image-input').click()">
