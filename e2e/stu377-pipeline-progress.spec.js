@@ -75,6 +75,9 @@ async function openHome(page, overrides = {}) {
   });
   await page.goto("/");
   await expect(page.locator("#pipeline-input")).toBeVisible();
+  // The hero demo leaves the composer empty on its hint, so give every run a
+  // prompt to send; tests that need their own prompt fill over it.
+  await page.locator("#pipeline-input").fill("A circular progress gauge with a gradient stroke");
 }
 
 const stage = (page, step) => page.locator(`#pdot-${step}`);
