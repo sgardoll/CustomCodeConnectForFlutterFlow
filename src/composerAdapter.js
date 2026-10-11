@@ -16,10 +16,13 @@
  * typed prompt rests long enough to read, then backspaces out at a held-key
  * pace and leaves the empty field on its hint text.
  */
-const HERO_DEMO_HOLD_MS = 5200;
-const HERO_DEMO_TYPE_MS = 73;
-const HERO_DEMO_READ_MS = 1600;
-const HERO_DEMO_ERASE_MS = 35;
+export const HERO_DEMO_HOLD_MS = 5200;
+export const HERO_DEMO_TYPE_MS = 73;
+export const HERO_DEMO_READ_MS = 1600;
+export const HERO_DEMO_ERASE_MS = 35;
+
+/** A chip fill types its prompt at this pace (prototype fillChip). */
+const CHIP_TYPE_MS = 22;
 
 // The hero demo's media-query listener is tracked per composer element so a
 // repeat initComposer on the same DOM replaces the previous instance's
@@ -29,6 +32,39 @@ const demoMotionRegistrations = new WeakMap();
 /** A prompt can only submit when it has non-whitespace text and the pipeline is idle. */
 export function canSubmit(value, isBusy) {
   return Boolean(value && value.trim()) && !isBusy;
+}
+
+/**
+ * The hero demo as a timeline: what shows `elapsed` ms after the demo starts,
+ * for an example `length` characters long. Like a GSAP timeline or a Remotion
+ * typewriter, every frame is derived from the clock rather than from how many
+ * timer callbacks have run, so a late tick lands everything already due — a
+ * busy main thread drops frames, never stretches the demo.
+ *
+ * Character k types in at hold + (k-1)·type; the full example then rests for
+ * the read beat; character k erases at erase + (k-1)·erase. Returns the
+ * characters showing, whether a key just landed (`keying`: the caret holds
+ * solid) or the field is idle (it blinks), whether the demo is over, and the
+ * ms until the next change.
+ */
+export function heroDemoFrame(elapsed, length) {
+  const typedAt = HERO_DEMO_HOLD_MS + (length - 1) * HERO_DEMO_TYPE_MS;
+  const eraseAt = typedAt + HERO_DEMO_READ_MS;
+  if (elapsed < HERO_DEMO_HOLD_MS) {
+    return { chars: 0, keying: false, done: false, next: HERO_DEMO_HOLD_MS - elapsed };
+  }
+  if (elapsed < typedAt) {
+    const chars = Math.floor((elapsed - HERO_DEMO_HOLD_MS) / HERO_DEMO_TYPE_MS) + 1;
+    const next = HERO_DEMO_HOLD_MS + chars * HERO_DEMO_TYPE_MS - elapsed;
+    return { chars, keying: true, done: false, next };
+  }
+  if (elapsed < eraseAt) {
+    return { chars: length, keying: false, done: false, next: eraseAt - elapsed };
+  }
+  const erased = Math.min(length, Math.floor((elapsed - eraseAt) / HERO_DEMO_ERASE_MS) + 1);
+  const done = erased === length;
+  const next = done ? 0 : eraseAt + erased * HERO_DEMO_ERASE_MS - elapsed;
+  return { chars: length - erased, keying: true, done, next };
 }
 
 /**
@@ -147,31 +183,20 @@ export function initComposer({ onSubmit }) {
     mirrorTyped();
     syncSend();
     composer.classList.add("is-demo-typing");
-    let index = 0;
-    const step = (delta, keying) => {
-      index += delta;
-      field.value = demoPrompt.slice(0, index);
+    // Each tick renders the timeline frame due now (heroDemoFrame) and sleeps
+    // until the next change. Erasing the last character retires the caret and
+    // restores the hint.
+    const startedAt = performance.now();
+    const tick = () => {
+      if (!heroDemoTyping) return;
+      const frame = heroDemoFrame(performance.now() - startedAt, demoPrompt.length);
+      field.value = demoPrompt.slice(0, frame.chars);
       mirrorTyped();
-      composer.classList.toggle("is-demo-keying", keying);
+      composer.classList.toggle("is-demo-keying", frame.keying);
+      if (frame.done) cancelHeroDemo();
+      else heroDemoTimer = setTimeout(tick, frame.next);
     };
-    // Erasing the last character retires the caret and restores the hint.
-    const eraseNext = () => {
-      if (!heroDemoTyping) return;
-      step(-1, true);
-      if (index > 0) heroDemoTimer = setTimeout(eraseNext, HERO_DEMO_ERASE_MS);
-      else cancelHeroDemo();
-    };
-    // The last character lands idle, so the caret blinks while the full
-    // example rests.
-    const typeNext = () => {
-      if (!heroDemoTyping) return;
-      const more = index + 1 < demoPrompt.length;
-      step(1, more);
-      heroDemoTimer = more
-        ? setTimeout(typeNext, HERO_DEMO_TYPE_MS)
-        : setTimeout(eraseNext, HERO_DEMO_READ_MS);
-    };
-    heroDemoTimer = setTimeout(typeNext, HERO_DEMO_HOLD_MS);
+    heroDemoTimer = setTimeout(tick, HERO_DEMO_HOLD_MS);
   }
 
   // End a running demo early by landing its end state — the empty field on
@@ -263,9 +288,14 @@ export function initComposer({ onSubmit }) {
     chipTyping = true;
     syncSend();
     composer.classList.add("is-demo-typing", "is-demo-keying");
-    let index = 0;
+    // Like the hero demo, the fill reads its progress off the clock: a late
+    // tick lands every character already due instead of stretching the fill.
+    const startedAt = performance.now();
     chipTimer = setInterval(() => {
-      index += 1;
+      const index = Math.min(
+        text.length,
+        Math.floor((performance.now() - startedAt) / CHIP_TYPE_MS),
+      );
       field.value = text.slice(0, index);
       mirrorTyped();
       if (index >= text.length) {
@@ -274,7 +304,7 @@ export function initComposer({ onSubmit }) {
       } else {
         syncSend();
       }
-    }, 22);
+    }, CHIP_TYPE_MS);
   }
 
   chips.forEach((chip) => {
