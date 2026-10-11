@@ -6896,7 +6896,8 @@ function updateUsageDisplay() {
   // cannot confirm it.
   const subscriptionUncertain = authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())
   if (subscriptionUncertain || getUsage().count < getRunLimit()) {
-    const paywallWasVisible = !document.getElementById('paywall-exhausted')?.classList.contains('hidden')
+    const paywallEl = document.getElementById('paywall-exhausted')
+    const paywallWasVisible = !!paywallEl && !paywallEl.classList.contains('hidden')
     hidePaywallExhausted()
     // A correction that lands while the paywall is up (a stale stored count
     // replaced by a smaller authoritative one) frees runs: with nothing else
