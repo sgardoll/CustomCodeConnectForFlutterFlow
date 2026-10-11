@@ -140,10 +140,12 @@ test('morph keyframes, opaque ghost, hidden destination and reading-order reveal
   await expect(page.locator('.composer-morph')).toHaveCount(1);
   expect(await page.locator('.composer-morph').evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
   await expect(page.locator('#main-stage-container')).toHaveCSS('visibility','hidden');
-  await page.waitForTimeout(1250);
-  const reveal = await page.locator('#progress-title-text').evaluate(el => ({ name:getComputedStyle(el).animationName, delay:getComputedStyle(el).animationDelay, duration:getComputedStyle(el).animationDuration }));
-  expect(reveal).toEqual({ name:'fidelity-rise', delay:'0.32s', duration:'0.5s' });
-  await page.waitForTimeout(300);
+  // Wait for the reveal and the last motion sample themselves, not for
+  // wall-clock sleeps: under load the 1120ms morph and the sampling timers
+  // land late, and a fixed sleep then reads the panel before it reveals.
+  const reveal = () => page.locator('#progress-title-text').evaluate(el => ({ name:getComputedStyle(el).animationName, delay:getComputedStyle(el).animationDelay, duration:getComputedStyle(el).animationDuration }));
+  await expect.poll(reveal).toEqual({ name:'fidelity-rise', delay:'0.32s', duration:'0.5s' });
+  await page.waitForFunction(() => window.motionEvidence[0]?.samples.some(s => s.t === 1400));
   const [motion] = await page.evaluate(() => window.motionEvidence);
   expect(motion.options.duration).toBe(1120);
   expect(motion.frames.map(f => f.offset)).toEqual([0,.14,.28,1]);

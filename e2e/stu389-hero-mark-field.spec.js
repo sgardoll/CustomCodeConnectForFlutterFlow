@@ -273,7 +273,9 @@ test.describe("frame measurements before and after disabling the effect", () => 
 
     // A genuine frame metric: count requestAnimationFrame callbacks the field
     // drives over a fixed window. A module that never renders yields 0 here.
-    const framesOn = await countRafFrames(page, 500);
+    // The window is long enough that a loaded machine's dropped frames can't
+    // push a field that is running under the bar.
+    const framesOn = await countRafFrames(page, 1500);
     expect(framesOn, "with the effect enabled the field should animate, not sit idle").toBeGreaterThan(5);
 
     await page.emulateMedia({ reducedMotion: "reduce" });

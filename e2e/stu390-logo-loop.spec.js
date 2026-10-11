@@ -201,10 +201,13 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
-    const framesReenter = await steadyFramesIn(page);
-    expect(framesReenter, "a restored loop should stay a single loop").toBeGreaterThan(5);
-    // If a second loop had leaked in, the painted-frame rate would ~double.
-    expect(framesReenter).toBeLessThan(framesOn * 1.6);
+    const reenter = await framesPerDisplayFrame(page, 500);
+    expect(reenter.logo, "a restored loop should stay a single loop").toBeGreaterThan(5);
+    expect(reenter.display, "the window should contain real display frames").toBeGreaterThan(0);
+    // If a second loop had leaked in, it would paint ~2x per display frame.
+    // Measured against display frames in the same window, so a loaded machine
+    // can't stall an earlier baseline and fake a doubling.
+    expect(reenter.logo).toBeLessThan(reenter.display * 1.6);
   });
 
   test("CSS-hidden pipeline (display:none) stops rendering with no raf leak", async ({ page }) => {
@@ -220,11 +223,14 @@ test.describe("Decorative mark lifecycle in the pipeline arena", () => {
     const framesHidden = await framesIn(page, 500);
     expect(framesHidden, "no logo frames once the pipeline is display:none").toBe(0);
 
-    // Re-enter: still a single loop, never a doubled one.
+    // Re-enter: still a single loop, never a doubled one — painted frames
+    // per display frame in one window, as above.
     await revealPipeline(page);
-    const framesBack = await steadyFramesIn(page);
-    expect(framesBack).toBeGreaterThan(5);
-    expect(framesBack).toBeLessThan(framesOn * 1.7);
+    await expect.poll(() => running(page), { timeout: 3000 }).toBe(true);
+    const back = await framesPerDisplayFrame(page, 500);
+    expect(back.logo).toBeGreaterThan(5);
+    expect(back.display).toBeGreaterThan(0);
+    expect(back.logo).toBeLessThan(back.display * 1.6);
   });
 
   test("viewport-offscreen arena stops rendering even though it is not display:none", async ({ page }) => {
