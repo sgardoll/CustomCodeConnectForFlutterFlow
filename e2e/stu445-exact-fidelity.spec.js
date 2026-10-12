@@ -24,17 +24,37 @@ async function open(page, { reducedMotion = 'no-preference' } = {}) {
     localStorage.setItem('hasSeenWalkthrough', 'true');
     localStorage.setItem('ccc_auth_session', JSON.stringify({ email:'test@example.com', sessionToken:'test-session-token-0001' }));
     window.motionEvidence = [];
+    // The title's reveal lasts only its 0.82s animation (panel-in comes off at
+    // animationend), so record it the moment the class lands instead of
+    // racing it from outside the page.
+    window.revealEvidence = null;
+    new MutationObserver((mutations) => {
+      for (const { target } of mutations) {
+        if (window.revealEvidence || target.id !== 'progress-title-text' || !target.classList.contains('panel-in')) continue;
+        const style = getComputedStyle(target);
+        window.revealEvidence = { name:style.animationName, delay:style.animationDelay, duration:style.animationDuration };
+      }
+    }).observe(document, { subtree:true, attributes:true, attributeFilter:['class'] });
     const animate = Element.prototype.animate;
     Element.prototype.animate = function(frames, options) {
       const animation = animate.call(this, frames, options);
       if (this.classList.contains('composer-morph')) {
-        const record = { frames, options, samples:[] };
+        const record = { frames, options, samples:[], ghosts:document.querySelectorAll('.composer-morph').length, ghostBackground:getComputedStyle(this).backgroundColor };
         window.motionEvidence.push(record);
-        for (const t of [0,157,314,560,1400]) setTimeout(() => {
-          const panel = document.getElementById('main-stage-container');
-          const title = panel.querySelector('#progress-title-text');
+        const panel = document.getElementById('main-stage-container');
+        const title = panel.querySelector('#progress-title-text');
+        for (const t of [0,157,314,560]) setTimeout(() => {
           record.samples.push({ t, visibility:getComputedStyle(panel).visibility, titleVisibility:getComputedStyle(title).visibility, ghost:this.isConnected });
         }, t);
+        // The handoff is recorded the frame the ghost leaves — the moment the
+        // destination is revealed — rather than at a fixed wall-clock time a
+        // loaded machine can reach before the morph's finish fires.
+        const started = performance.now();
+        const watch = () => {
+          if (this.isConnected) return requestAnimationFrame(watch);
+          record.handoff = { t:performance.now() - started, visibility:getComputedStyle(panel).visibility, titleVisibility:getComputedStyle(title).visibility };
+        };
+        requestAnimationFrame(watch);
       }
       return animation;
     };
@@ -83,6 +103,12 @@ async function box(page, selector, expected) {
 // selectors/styles: reference SHA 548e628f…91dc, preflight geometry JSON.
 for (const width of [1920,1440,1366,921,920,390]) {
   test(`reference stage and panel geometry at ${width}px`, async ({ page }) => {
+    // Six of these run in parallel, and each drives a whole gated pipeline
+    // (~5.3s of authored-pacing sleeps alone) plus ten geometry reads. The 30s
+    // default is a budget for one small test, not for one of six concurrent
+    // full-flow runs, so a saturated machine trips it on the sleeps rather
+    // than on a geometry mismatch.
+    test.setTimeout(60_000);
     await page.setViewportSize({ width, height:width === 390 ? 844 : width === 1366 ? 768 : width === 1440 ? 900 : 1080 });
     await open(page);
     const run = await gates(page);
@@ -137,23 +163,31 @@ test('morph keyframes, opaque ghost, hidden destination and reading-order reveal
   await open(page);
   const run = await gates(page);
   await submit(page);
-  await expect(page.locator('.composer-morph')).toHaveCount(1);
-  expect(await page.locator('.composer-morph').evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
-  await expect(page.locator('#main-stage-container')).toHaveCSS('visibility','hidden');
-  await page.waitForTimeout(1250);
-  const reveal = await page.locator('#progress-title-text').evaluate(el => ({ name:getComputedStyle(el).animationName, delay:getComputedStyle(el).animationDelay, duration:getComputedStyle(el).animationDuration }));
-  expect(reveal).toEqual({ name:'fidelity-rise', delay:'0.32s', duration:'0.5s' });
-  await page.waitForTimeout(300);
+  // The ghost, the hidden destination and the reveal are all transient — the
+  // 1120ms morph, then a 0.82s reveal — so open() records them inside the
+  // page as they happen. Checked from outside, a loaded machine can finish
+  // the morph before the check runs.
+  await page.waitForFunction(() => window.revealEvidence && window.motionEvidence[0]?.handoff);
   const [motion] = await page.evaluate(() => window.motionEvidence);
+  expect(motion.ghosts).toBe(1);
+  expect(motion.ghostBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(await page.evaluate(() => window.revealEvidence)).toEqual({ name:'fidelity-rise', delay:'0.32s', duration:'0.5s' });
   expect(motion.options.duration).toBe(1120);
   expect(motion.frames.map(f => f.offset)).toEqual([0,.14,.28,1]);
   expect(motion.frames[2].easing).toBe('cubic-bezier(.32,1.38,.5,1)');
   const initial = motion.frames[0].transform.match(/scale\(([^,]+),([^\)]+)\)/).slice(1).map(Number);
   const shrink = motion.frames[2].transform.match(/scale\(([^,]+),([^\)]+)\)/).slice(1).map(Number);
   shrink.forEach((v,i) => expect(v/initial[i]).toBeCloseTo(.93,6));
-  expect(motion.samples.filter(s => s.t <= 560).map(s => s.visibility)).toEqual(['hidden','hidden','hidden','hidden']);
-  expect(motion.samples.filter(s => s.t <= 560).map(s => s.titleVisibility)).toEqual(['hidden','hidden','hidden','hidden']);
-  expect(motion.samples.find(s => s.t === 1400)).toMatchObject({ visibility:'visible',ghost:false });
+  // Every sample taken while the ghost was still morphing saw the destination
+  // and its title hidden (on an unloaded machine, all four do)...
+  const during = motion.samples.filter(s => s.ghost);
+  expect(during.length).toBeGreaterThan(0);
+  expect(during.map(s => s.visibility)).toEqual(during.map(() => 'hidden'));
+  expect(during.map(s => s.titleVisibility)).toEqual(during.map(() => 'hidden'));
+  // ...and the handoff reveals it as the ghost leaves — never before the
+  // 1120ms morph has run.
+  expect(motion.handoff).toMatchObject({ visibility:'visible', titleVisibility:'visible' });
+  expect(motion.handoff.t).toBeGreaterThanOrEqual(1120);
   run.release('architect'); run.release('generator'); run.release('review');
   await expect(page.locator('#results-view')).toBeVisible();
   await page.waitForTimeout(1500);

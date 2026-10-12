@@ -8,6 +8,7 @@ import {
   ENDPOINTS,
   checkoutSession,
 } from "./fixtures/apiFixtures.js";
+import { PLAN_LIMITS } from "../src/plansSurface.js";
 
 /**
  * STU-382 — the plans surface and paywall states must be backed by real
@@ -70,6 +71,128 @@ test.describe("STU-382 plans surface and paywall states", () => {
 
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem("hasSeenWalkthrough", "true"));
+  });
+
+  test("an out-of-runs user writes their prompt first; the paywall answers the submit", async ({ page }) => {
+    const pipelineRequests = [];
+    page.on("request", (request) => {
+      if (request.url().startsWith(ENDPOINTS.pipeline)) pipelineRequests.push(request.url());
+    });
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: identityWithUsage({ count: PLAN_LIMITS.free, status: "guest" }),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+    });
+    await page.goto("/");
+
+    // Wait for the startup usage decision to land at the limit: the page still
+    // opens on the composer, not the exhausted screen.
+    await page.waitForFunction(
+      (limit) => JSON.parse(localStorage.getItem("ccc_usage") || "{}").count >= limit,
+      PLAN_LIMITS.free,
+      { timeout: 8000 },
+    );
+    const field = page.locator("#pipeline-input");
+    await expect(field).toBeVisible();
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+
+    // Submitting the prompt is what surfaces the paywall — only the screen,
+    // with the prompt in the recap and no pricing dialog stacked over it — and
+    // no generation request leaves.
+    const prompt = "A habit tracker heatmap with streak counts";
+    await field.fill(prompt);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await expect(page.locator("#paywall-exhausted-text")).toContainText(
+      `You've used all ${PLAN_LIMITS.free} free generations this month.`,
+    );
+    await expect(page.locator("#pipeline-submitted-prompt")).toHaveText(prompt);
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
+
+    // Pricing opens when the user asks for it, from the screen's View Plans.
+    const viewPlans = page.locator("#paywall-exhausted").getByRole("button", { name: "View Plans" });
+    await viewPlans.click();
+    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
+
+    // Edit prompt goes back to the composer holding what the user wrote.
+    await page.locator("#pipeline-edit-prompt").click();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+    await expect(field).toHaveValue(prompt);
+    expect(pipelineRequests).toEqual([]);
+  });
+
+  test("a usage correction landing on the paywall hands the composer back with the draft", async ({ page }) => {
+    // A stale stored count greets the submit before the authoritative
+    // identity response lands with the real, lower count.
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "ccc_usage",
+        JSON.stringify({ count: 2, month: new Date().toISOString().slice(0, 7) }),
+      );
+    });
+    let releaseIdentity;
+    const identityGate = new Promise((resolve) => { releaseIdentity = resolve; });
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+    });
+    // Registered after applyDefaultRoutes so it wins the match: the identity
+    // response is held until the paywall is up, then reports one used run.
+    await page.route(ENDPOINTS.identity, async (route) => {
+      await identityGate;
+      await route.fulfill(identityWithUsage({ count: 1, status: "guest" }));
+    });
+    await page.goto("/");
+
+    // The stale count is enough to gate the submit while identity is pending.
+    const prompt = "A countdown timer with lap history";
+    const field = page.locator("#pipeline-input");
+    await field.fill(prompt);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+
+    // The authoritative count lands below the limit: the paywall leaves and
+    // the composer comes back holding the draft — not an empty stage.
+    releaseIdentity();
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+    await expect(field).toBeVisible();
+    await expect(field).toHaveValue(prompt);
+  });
+
+  test("Edit prompt keeps Home on the composer after a Plans trip", async ({ page }) => {
+    await applyDefaultRoutes(page, {
+      [ENDPOINTS.identity]: identityWithUsage({ count: PLAN_LIMITS.free, status: "guest" }),
+      [ENDPOINTS.getSubscription]: freeSubscription(),
+    });
+    await page.goto("/");
+    await page.waitForFunction(
+      (limit) => JSON.parse(localStorage.getItem("ccc_usage") || "{}").count >= limit,
+      PLAN_LIMITS.free,
+      { timeout: 8000 },
+    );
+
+    const prompt = "A kanban board with drag handles";
+    const field = page.locator("#pipeline-input");
+    await field.fill(prompt);
+    await page.locator("#hero-send").click();
+    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await page.locator("#pipeline-edit-prompt").click();
+    await expect(field).toHaveValue(prompt);
+
+    // Visiting Plans and returning Home must not reopen the answered paywall:
+    // the stage only comes back while a panel inside it is still live.
+    await page.locator("#topbar-plan").click();
+    await expect(page.locator("#plans-view")).toBeVisible();
+    await page.locator("a.brand").click();
+    await expect(page.locator("#plans-view")).toBeHidden();
+    await expect(page.locator("#generation-stage")).toBeHidden();
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
+    await expect(field).toBeVisible();
+    await expect(field).toHaveValue(prompt);
   });
 
   test("C1: professional labels and current-plan indicators agree across surfaces", async ({ page }) => {

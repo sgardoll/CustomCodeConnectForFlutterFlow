@@ -9,16 +9,15 @@ import {
 } from "./fixtures/apiFixtures.js";
 
 /**
- * STU-376: the wired prompt composer — ghost suggestions from the 13 local
- * prototype patterns, Tab/Escape state machine, chip fill, whitespace and
- * duplicate-submission guards, and the existing attachment/settings paths.
+ * STU-376: the wired prompt composer — no autocomplete (out until its own
+ * milestone), chip fill, whitespace and duplicate-submission guards, and the
+ * existing attachment/settings paths.
  * Every external endpoint is intercepted with deterministic fixtures, so a
  * stray completion-provider request fails the console assertion loudly.
  */
 
 const COMPOSER_DEFAULT_PROMPT = "A circular progress gauge with a gradient stroke";
 const COMPOSER_PLACEHOLDER = "Describe the widget or action you need";
-const GAUGE_COMPLETION = " and an animated percentage label";
 // Catching a demo window races the demo's real-time clock: the hold alone is
 // ~5s, and page init on a loaded worker adds seconds before the first poll.
 // The catch budget must cover both, not just the window being observed.
@@ -99,105 +98,58 @@ for (const { name, width, height } of viewports) {
       await page.setViewportSize({ width, height });
     });
 
-    test("rests empty on its hint without an active suggestion", async ({ page }) => {
+    test("rests empty on its hint", async ({ page }) => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.goto("/");
 
       const field = page.locator("#pipeline-input");
       // Reduced motion skips the hero demo and lands its end state directly:
-      // the empty field on its hint, nothing to submit, nothing suggested.
+      // the empty field on its hint, nothing to submit.
       await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/, {
         timeout: 15000,
       });
       await expect(field).toHaveValue("");
       await expect(field).toHaveAttribute("placeholder", COMPOSER_PLACEHOLDER);
-      await expect(page.locator(".ghost .suggest")).toHaveText("");
-      await expect(page.locator("#tab-hint")).toBeHidden();
-      await expect(page.locator("#composer")).not.toHaveClass(/has-suggest/);
       await expect(page.locator("#hero-send")).toBeDisabled();
     });
 
-    test("typing surfaces the local suggestion with the tab hint and live announcement", async ({ page }) => {
+    test("typing makes no suggestion", async ({ page }) => {
       const requestedUrls = [];
       page.on("request", (request) => requestedUrls.push(request.url()));
 
       await page.goto("/");
 
-      await page.locator("#pipeline-input").fill(COMPOSER_DEFAULT_PROMPT);
-
-      const composer = page.locator("#composer");
-      await expect(composer).toHaveClass(/has-suggest/);
-      await expect(page.locator(".ghost .suggest")).toHaveText(GAUGE_COMPLETION);
+      // This prompt used to trigger a ghost completion. Autocomplete is out
+      // until its own milestone: no ghost text, Tab hint or announcement
+      // exists, and waiting past the old 220ms debounce brings none.
+      const field = page.locator("#pipeline-input");
+      await field.fill(COMPOSER_DEFAULT_PROMPT);
+      await page.waitForTimeout(400);
+      await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
       await expect(page.locator(".ghost .typed")).toHaveText(COMPOSER_DEFAULT_PROMPT);
-      await expect(page.locator("#tab-hint")).toBeVisible();
-      await expect(page.locator("#suggest-status")).toContainText(
-        "Suggestion: " + GAUGE_COMPLETION + ". Press Tab to accept.",
-      );
-      await expect(page.locator("#tab-hint")).toHaveAttribute(
-        "aria-label",
-        "Accept suggestion: and an animated percentage label",
-      );
+      await expect(page.locator(".ghost .suggest")).toHaveCount(0);
+      await expect(page.locator("#tab-hint")).toHaveCount(0);
+      await expect(page.locator("#suggest-status")).toHaveCount(0);
+      await expect(field).not.toHaveAttribute("aria-describedby", /.+/);
+      await expect(page.locator("#composer")).not.toHaveClass(/has-suggest/);
 
-      // Suggestions are purely local: no completion provider may be contacted.
+      // No completion provider is contacted either.
       const completionRequests = requestedUrls.filter(
         (url) => /groq|\/chat\/completions/i.test(url),
       );
       expect(completionRequests).toEqual([]);
     });
 
-    test("Tab accepts the active suggestion", async ({ page }) => {
+    test("Tab moves focus to the next control and never changes the prompt", async ({ page }) => {
       await page.goto("/");
 
       const field = page.locator("#pipeline-input");
       await field.fill(COMPOSER_DEFAULT_PROMPT);
-      await expect(page.locator("#composer")).toHaveClass(/has-suggest/);
+      await page.waitForTimeout(400);
 
       await page.keyboard.press("Tab");
-
-      await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT + GAUGE_COMPLETION);
-      await expect(page.locator(".ghost .suggest")).toHaveText("");
-      await expect(page.locator("#composer")).not.toHaveClass(/has-suggest/);
-      await expect(page.locator("#tab-hint")).toBeHidden();
-      await expect(page.locator("#suggest-status")).toHaveText("");
-      await expect(page.locator("#hero-send")).toBeEnabled();
-
-      // Acceptance must not re-trigger a suggestion on the accepted text.
-      await page.waitForTimeout(400);
-      await expect(page.locator(".ghost .suggest")).toHaveText("");
-    });
-
-    test("Escape dismisses the suggestion without changing the prompt", async ({ page }) => {
-      await page.goto("/");
-
-      const field = page.locator("#pipeline-input");
-      await field.fill(COMPOSER_DEFAULT_PROMPT);
-      await expect(page.locator("#composer")).toHaveClass(/has-suggest/);
-
-      await page.keyboard.press("Escape");
 
       await expect(field).toHaveValue(COMPOSER_DEFAULT_PROMPT);
-      await expect(page.locator(".ghost .suggest")).toHaveText("");
-      await expect(page.locator("#composer")).not.toHaveClass(/has-suggest/);
-      await expect(page.locator("#tab-hint")).toBeHidden();
-      await expect(page.locator("#suggest-status")).toHaveText("");
-
-      // With the suggestion dismissed, Tab falls through and moves focus.
-      await page.keyboard.press("Tab");
-      await expect(field).not.toBeFocused();
-    });
-
-    test("Tab without an active suggestion moves focus to the next control", async ({ page }) => {
-      await page.goto("/");
-
-      const field = page.locator("#pipeline-input");
-      await field.fill("Generate some code for me please");
-      // Wait out the suggestion debounce so a late match cannot sneak in.
-      await page.waitForTimeout(400);
-      await expect(page.locator(".ghost .suggest")).toHaveText("");
-      await expect(page.locator("#composer")).not.toHaveClass(/has-suggest/);
-
-      await page.keyboard.press("Tab");
-
       await expect(field).not.toBeFocused();
       await expect(
         page.locator('.tools [aria-label="Attach reference image"]'),
@@ -361,7 +313,7 @@ test.describe("submission wiring at desktop viewport", () => {
 test.describe("touch controls at mobile viewport", () => {
   test.use({ hasTouch: true, viewport: { width: 360, height: 800 } });
 
-  test("tapping a chip, the accept hint and send all work by touch", async ({ page }) => {
+  test("tapping a chip, typing and send all work by touch", async ({ page }) => {
     const counts = await routeCountingPipeline(page);
     await page.goto("/");
 
@@ -371,13 +323,12 @@ test.describe("touch controls at mobile viewport", () => {
     await page.locator("#example-chips .chip", { hasText: "Signature pad" }).tap();
     await expect(field).toHaveValue("A signature pad that exports a transparent PNG");
 
-    // Typing after a touch focus surfaces the suggestion; tapping the hint accepts it.
+    // Typing after a touch focus edits the prompt as typed — nothing is
+    // suggested or appended.
     await field.tap();
     await field.fill("");
     await page.keyboard.type("A signature pad");
-    await expect(page.locator("#composer")).toHaveClass(/has-suggest/);
-    await page.locator("#tab-hint").tap();
-    await expect(field).toHaveValue("A signature pad that exports a transparent PNG");
+    await expect(field).toHaveValue("A signature pad");
 
     // The touch targets meet the 44px minimum from the responsive contract.
     const sendBox = await page.locator("#hero-send").boundingBox();
@@ -411,10 +362,8 @@ test.describe("STU-445 hero composer behaviour", () => {
     // before the first sample.
     await page.goto("/", { waitUntil: "commit" });
 
-    const run = await page.evaluate(async (expected) => {
-      const seen = [];
-      let caretAtFull = "";
-      let suggested = false;
+    const seen = await page.evaluate(async () => {
+      const samples = [];
       let started = false;
       // Canonical HTML: 5200ms hold and 73ms per character, then a 1600ms
       // rest and a 35ms-per-character erase.
@@ -423,50 +372,61 @@ test.describe("STU-445 hero composer behaviour", () => {
         const composer = document.getElementById("composer");
         const typed = document.querySelector(".ghost .typed");
         const typing = composer?.classList.contains("is-demo-typing") ?? false;
-        if (composer?.classList.contains("has-suggest")) suggested = true;
         if (typed && typing) {
           started = true;
           const text = typed.textContent || "";
-          if (seen[seen.length - 1] !== text) seen.push(text);
-          if (text === expected && !caretAtFull) {
-            caretAtFull = getComputedStyle(typed, "::after").animationName;
+          // Record each text the first time it shows, with the caret's live
+          // computed state at that moment.
+          if (samples[samples.length - 1]?.text !== text) {
+            const caret = getComputedStyle(typed, "::after");
+            samples.push({ text, animation: caret.animationName, opacity: caret.opacity });
           }
         } else if (started) {
           break; // the caret class retired: the demo is over
         }
         await new Promise((resolve) => setTimeout(resolve, 15));
       }
-      return { seen, caretAtFull, suggested };
-    }, COMPOSER_DEFAULT_PROMPT);
+      return samples;
+    });
 
     // The visible text CHANGES over time, both ways: strictly longer prefixes
     // up to the full example — real typing — then strictly shorter ones back
     // down — real backspacing, not a field that is cleared in one step.
-    const { seen } = run;
-    const peak = seen.indexOf(COMPOSER_DEFAULT_PROMPT);
+    const texts = seen.map((sample) => sample.text);
+    const peak = texts.indexOf(COMPOSER_DEFAULT_PROMPT);
     expect(peak).toBeGreaterThan(1);
     for (let index = 1; index <= peak; index += 1) {
-      expect(seen[index].length).toBeGreaterThan(seen[index - 1].length);
-      expect(seen[index].startsWith(seen[index - 1])).toBe(true);
+      expect(texts[index].length).toBeGreaterThan(texts[index - 1].length);
+      expect(texts[index].startsWith(texts[index - 1])).toBe(true);
     }
-    expect(seen.length - peak).toBeGreaterThan(2);
-    for (let index = peak + 1; index < seen.length; index += 1) {
-      expect(seen[index].length).toBeLessThan(seen[index - 1].length);
-      expect(seen[index - 1].startsWith(seen[index])).toBe(true);
+    expect(texts.length - peak).toBeGreaterThan(2);
+    for (let index = peak + 1; index < texts.length; index += 1) {
+      expect(texts[index].length).toBeLessThan(texts[index - 1].length);
+      expect(texts[index - 1].startsWith(texts[index])).toBe(true);
     }
-    // The orange caret blinks while the full example rests before the erase.
-    expect(run.caretAtFull).toBe("caret-blink");
-    // The demo makes no suggestion at any point.
-    expect(run.suggested).toBe(false);
+
+    // The orange caret behaves like a real cursor: it blinks while the field
+    // is idle — the empty hold and the rest on the full example — and holds
+    // solid, fully visible, on every character typed or erased.
+    expect(texts[0]).toBe("");
+    expect(seen[0].animation).toBe("caret-blink");
+    expect(seen[peak].animation).toBe("caret-blink");
+    const keyed = seen.filter((sample, index) => index !== peak && sample.text !== "");
+    expect(keyed.length).toBeGreaterThan(10);
+    for (const sample of keyed) {
+      expect(sample, `caret while "${sample.text}" shows`).toMatchObject({
+        animation: "none",
+        opacity: "1",
+      });
+    }
 
     // The demo retires cleanly: caret gone, field empty on its grey hint,
     // nothing to submit.
     const field = page.locator("#pipeline-input");
     await expect(page.locator("#composer")).not.toHaveClass(/is-demo-typing/);
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-keying/);
     await expect(field).toHaveValue("");
     await expect(field).toHaveAttribute("placeholder", COMPOSER_PLACEHOLDER);
-    await expect(page.locator(".ghost .suggest")).toHaveText("");
-    await expect(page.locator("#tab-hint")).toBeHidden();
     await expect(page.locator("#hero-send")).toBeDisabled();
     const caretAfter = await page.evaluate(
       () =>
@@ -474,6 +434,33 @@ test.describe("STU-445 hero composer behaviour", () => {
           .animationName,
     );
     expect(caretAfter).toBe("none");
+  });
+
+  test("a chip types its prompt behind a solid caret", async ({ page }) => {
+    await page.goto("/");
+    const chip = page.locator("#example-chips .chip", { hasText: "Signature pad" });
+    const prompt = await chip.getAttribute("data-prompt");
+    await chip.click();
+
+    // Characters land the whole time a chip fills, so the caret never blinks
+    // off mid-fill: every sample sees it solid and fully visible.
+    const samples = await page.evaluate(async () => {
+      const seen = [];
+      const composer = document.getElementById("composer");
+      const typed = document.querySelector(".ghost .typed");
+      while (composer.classList.contains("is-demo-typing")) {
+        const caret = getComputedStyle(typed, "::after");
+        seen.push({ animation: caret.animationName, opacity: caret.opacity });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      return seen;
+    });
+    expect(samples.length).toBeGreaterThan(3);
+    for (const sample of samples) {
+      expect(sample).toEqual({ animation: "none", opacity: "1" });
+    }
+    await expect(page.locator("#pipeline-input")).toHaveValue(prompt);
+    await expect(page.locator("#composer")).not.toHaveClass(/is-demo-keying/);
   });
 
   test("a mid-demo click lands the empty field — the example never becomes the prompt", async ({

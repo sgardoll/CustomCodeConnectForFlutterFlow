@@ -1,7 +1,6 @@
 import posthog from "posthog-js";
 import {
   closeModal,
-  hasActiveModal,
   initializeModalShells,
   openModal,
   setModalPending,
@@ -5550,7 +5549,7 @@ async function runThinkingPipeline() {
     }
     if (!isCurrentPipelineRun(runId)) return;
 
-    if (!(await canRunPipeline())) return;
+    if (!(await canRunPipeline(userInput))) return;
     if (!isCurrentPipelineRun(runId)) return;
 
     await ensureIdentityReady();
@@ -6547,7 +6546,7 @@ function getRunLimit() {
   return TIER_LIMITS[subscriptionState.tier] ?? TIER_LIMITS.free
 }
 
-async function canRunPipeline() {
+async function canRunPipeline(prompt) {
   if (authState.isVerified && (!isSubscriptionResolved() || isSubscriptionLoading())) {
     await fetchSubscription({ force: true })
     updateSubscriptionUI()
@@ -6561,7 +6560,7 @@ async function canRunPipeline() {
   const { count } = getUsage()
   const limit = getRunLimit()
   if (count >= limit) {
-    showPaywallExhausted(count, limit, { openModal: true })
+    showPaywallExhausted(count, limit, { prompt })
     return false
   }
   const warningThreshold = Math.floor(limit * 0.8)
@@ -6618,8 +6617,17 @@ function showPaywallExhausted(count, limit, options = {}) {
   const signInBtn = document.getElementById('paywall-signin-btn')
   if (signInBtn) signInBtn.classList.toggle('hidden', authState.isVerified)
 
+  // The paywall answers a submitted prompt: the recap shows it beside the
+  // upgrade path, and Edit prompt returns to it rather than an earlier run's.
+  if (options.prompt != null) {
+    pipelineState.submittedPrompt = options.prompt
+    const promptEl = document.getElementById('pipeline-submitted-prompt')
+    if (promptEl) promptEl.textContent = options.prompt
+  }
+
+  // Only the screen: its View Plans button opens pricing when the user
+  // chooses, rather than a dialog stacked over it.
   paywall.classList.remove('hidden')
-  if (options.openModal) openPricingModal()
 }
 
 function getEffectiveModel(selectedModel) {
@@ -6880,20 +6888,24 @@ function renderAccountOverview() {
 function updateUsageDisplay() {
   renderUsageSurfaces()
 
-  if (authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())) {
+  // The paywall answers a generation attempt — canRunPipeline shows it when
+  // a prompt is submitted at the limit — so a usage update never surfaces it
+  // on its own: an out-of-runs user still lands on the composer and writes
+  // their prompt first. An update only clears it once the limit no longer
+  // applies (an upgrade, a sign-in, a new month) or while the subscription
+  // cannot confirm it.
+  const subscriptionUncertain = authState.isVerified && (isSubscriptionLoading() || !isSubscriptionResolved())
+  if (subscriptionUncertain || getUsage().count < getRunLimit()) {
+    const paywallEl = document.getElementById('paywall-exhausted')
+    const paywallWasVisible = !!paywallEl && !paywallEl.classList.contains('hidden')
     hidePaywallExhausted()
-    return
-  }
-
-  const { count } = getUsage()
-  const limit = getRunLimit()
-  // Auto-surfacing the paywall swaps the stage and closes the walkthrough, so
-  // defer it while a dialog is open; the next usage update or run attempt
-  // still gates on the limit.
-  if (count >= limit && !pipelineState.isRunning && !hasActiveModal()) {
-    showPaywallExhausted(count, limit)
-  } else {
-    hidePaywallExhausted()
+    // A correction that lands while the paywall is up (a stale stored count
+    // replaced by a smaller authoritative one) frees runs: with nothing else
+    // live in the stage, hand the composer back with its draft intact rather
+    // than leave an empty panel.
+    if (paywallWasVisible && !generationStageHasLivePanel()) {
+      setGenerationStageVisible(false)
+    }
   }
 }
 
@@ -8984,6 +8996,9 @@ function editPipelinePrompt() {
   hidePipelineFailure();
   const progress = document.getElementById("pipeline-progress");
   if (progress) progress.classList.remove("visible");
+  // Editing abandons the gated submit as well: the paywall it opened must not
+  // be left live inside the stage for the next return Home to reopen.
+  hidePaywallExhausted();
   setGenerationStageVisible(false);
   const input = document.getElementById("pipeline-input");
   if (input) {
@@ -9917,6 +9932,22 @@ function initExactShell() {
   mobile.addEventListener("change", order);
 }
 
+// The stage only deserves the home surface while a panel inside it is still
+// live — running progress or a failure, results, the paywall, or the ready
+// state. Everything the stage can hold hides once Edit prompt returns to the
+// composer, and the stage's bare latch must not reopen an empty panel.
+function generationStageHasLivePanel() {
+  const progress = document.getElementById("pipeline-progress");
+  if (progress?.classList.contains("visible")) return true;
+  const results = document.getElementById("results-view");
+  if (results?.classList.contains("visible")) return true;
+  const paywall = document.getElementById("paywall-exhausted");
+  if (paywall && !paywall.classList.contains("hidden")) return true;
+  const ready = document.getElementById("ready-state");
+  if (ready && !ready.classList.contains("hidden")) return true;
+  return false;
+}
+
 function setGenerationStageVisible(visible) {
   const stage = document.getElementById("generation-stage");
   if (!stage) return;
@@ -10024,9 +10055,12 @@ function switchView(view, pushState = true, moveFocus = true) {
     }
   });
 
-  // Generation overlay only belongs to the home surface.
-  if (view !== "home") setGenerationStageVisible(false);
-  else {
+  // Generation overlay only belongs to the home surface — and only while a
+  // panel inside it is still live. Its latch marks that it took over once;
+  // after Edit prompt returned to the composer there is nothing to reopen.
+  if (view !== "home" || !generationStageHasLivePanel()) {
+    setGenerationStageVisible(false);
+  } else {
     const stage = document.getElementById("main-stage-container");
     if (stage && stage.classList.contains("visible")) setGenerationStageVisible(true);
   }

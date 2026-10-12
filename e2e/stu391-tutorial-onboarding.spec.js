@@ -108,9 +108,9 @@ async function clickInsideWalkthrough(page, selector) {
 // so a returning-user reopen goes through the app's own modal function. On a
 // cold start the deferred app.js module may not have wired openWalkthroughModal
 // yet — wait for the wire-up first. The startup usage pass is awaited only so
-// usage state settles: an exhausted allowance is suppressed while a dialog is
-// open (updateUsageDisplay gates on !hasActiveModal()), so it can no longer
-// close a walkthrough opened mid-flight. Then wait for the open animation.
+// usage state settles: a usage update never surfaces the paywall (only a run
+// attempt does), so it can't close a walkthrough opened mid-flight. Then wait
+// for the open animation.
 async function reopenWalkthrough(page) {
   await page.waitForFunction(
     () => typeof window.openWalkthroughModal === "function",
@@ -347,22 +347,19 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
   });
 
   // Contract: the startup usage decision is PASSIVE, and a passive exhausted
-  // decision must never take a tour the user is reading away from them.
-  // resolveIdentity lands its metered count asynchronously and, when that count
-  // is exhausted, renders the paywall state through updateUsageDisplay ->
-  // showPaywallExhausted. updateUsageDisplay defers the ENTIRE paywall while
-  // any dialog is open, so the exhausted surface is held back — it is not
-  // rendered alongside the tour, and the tour is not closed either. The identity
-  // response is gated so the tour is guaranteed open when the decision arrives
-  // (the exact sequence the original flake pinned), and the persisted metered
-  // count is cleared first so "the decision landed" is observed, not assumed:
-  // resolveIdentity writes it and calls updateUsageDisplay in one synchronous
-  // block, so the key reappearing at the limit means the decision has fully run.
-  // Once no dialog is open, the very next usage decision DOES surface the
-  // paywall — the deferral is a delay, never a suppression. A run attempt is not
-  // passive: an out-of-runs run must still surface the paywall, take the tour
-  // with it, and open pricing.
-  test("the startup paywall decision defers the paywall while a tour is open; an out-of-runs run attempt still surfaces it", async ({ page }) => {
+  // decision never surfaces the paywall at all. resolveIdentity lands its
+  // metered count asynchronously and calls updateUsageDisplay, which only ever
+  // clears the paywall: an out-of-runs user lands on the composer and writes
+  // their prompt first, and a tour they are reading is never taken away. The
+  // identity response is gated so the tour is guaranteed open when the
+  // decision arrives (the exact sequence the original flake pinned), and the
+  // persisted metered count is cleared first so "the decision landed" is
+  // observed, not assumed: resolveIdentity writes it and calls
+  // updateUsageDisplay in one synchronous block, so the key reappearing at the
+  // limit means the decision has fully run. A run attempt is not passive: an
+  // out-of-runs run surfaces the paywall screen with the submitted prompt and
+  // takes the tour with it; pricing waits for the screen's View Plans.
+  test("an out-of-runs startup never surfaces the paywall; a run attempt does, with the prompt", async ({ page }) => {
     let releaseIdentity;
     const identityGate = new Promise((resolve) => {
       releaseIdentity = resolve;
@@ -411,7 +408,7 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
       { timeout: 8000 },
     );
 
-    // The passive decision defers the paywall entirely while the tour is open:
+    // The passive decision leaves the paywall alone while the tour is open:
     // the exhausted surface is not rendered, and the tour the user is reading
     // is neither hidden nor closed.
     await expect(page.locator("#paywall-exhausted")).toBeHidden();
@@ -425,14 +422,24 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await clickInsideWalkthrough(page, ".wt-gotit-btn");
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
 
-    // Deferral is a delay, not a suppression: the next passive usage decision
-    // with nothing open renders the exhausted surface.
+    // With nothing open, the passive decision still leaves the user on the
+    // composer: they write their prompt before they learn they are out of runs.
+    // Clear the persisted count first so the reloaded page's own decision is
+    // what the wait observes.
+    await page.evaluate(() => localStorage.removeItem("ccc_usage"));
     await page.reload();
     await expect(page.locator(WALKTHROUGH)).toBeHidden();
-    await expect(page.locator("#paywall-exhausted")).toBeVisible();
+    await page.waitForFunction(
+      (limit) => JSON.parse(localStorage.getItem("ccc_usage") || "{}").count >= limit,
+      PLAN_LIMITS.free,
+      { timeout: 8000 },
+    );
+    await expect(page.locator("#pipeline-input")).toBeVisible();
+    await expect(page.locator("#paywall-exhausted")).toBeHidden();
+    await expect(page.locator("#generation-stage")).toBeHidden();
 
     // A run attempt is not passive: an out-of-runs run must surface the paywall
-    // in place of the tour, and open pricing so the user can act on it.
+    // screen in place of the tour — only the screen, no pricing dialog over it.
     await reopenWalkthrough(page);
     await expect(page.locator(WALKTHROUGH)).toHaveClass(/open/);
 
@@ -443,6 +450,10 @@ test.describe("STU-391 tutorial + connection onboarding", () => {
     await expect(page.locator(WALKTHROUGH)).not.toHaveClass(/open/);
     await expect(page.locator(WALKTHROUGH)).toHaveAttribute("aria-hidden", "true");
     await expect(page.locator("#paywall-exhausted")).toBeVisible();
-    await expect(page.locator("#pricing-modal")).toHaveClass(/open/);
+    await expect(page.locator("#pricing-modal")).not.toHaveClass(/open/);
+    // The paywall answers the submitted prompt: it sits in the recap.
+    await expect(page.locator("#pipeline-submitted-prompt")).toHaveText(
+      "A circular progress gauge",
+    );
   });
 });
