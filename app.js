@@ -9621,7 +9621,7 @@ function initExactShell() {
   mobile.addEventListener("change", order);
 }
 
-function setGenerationStageVisible(visible) {
+function setGenerationStageVisible(visible, { preservePanel = false } = {}) {
   const stage = document.getElementById("generation-stage");
   if (!stage) return;
   const hero = document.getElementById("hero");
@@ -9632,6 +9632,9 @@ function setGenerationStageVisible(visible) {
     stage.classList.add("is-active");
   } else {
     cancelPipelineMorph();
+    // Returning to the composer retires the Home restoration marker, even
+    // after a run has settled. Only navigation preserves a hidden panel.
+    if (!preservePanel) document.getElementById("main-stage-container")?.classList.remove("visible");
     document.body.classList.remove("results-fullscreen", "results-with-sidebar");
     stage.classList.remove("is-active");
     stage.inert = true;
@@ -9705,6 +9708,7 @@ function switchView(view, pushState = true, moveFocus = true) {
       } else {
         document.getElementById("results-view")?.classList.remove("visible");
         document.getElementById("ready-state")?.classList.remove("hidden");
+        document.getElementById("main-stage-container")?.classList.remove("visible");
       }
     }
   }
@@ -9729,10 +9733,16 @@ function switchView(view, pushState = true, moveFocus = true) {
   });
 
   // Generation overlay only belongs to the home surface.
-  if (view !== "home") setGenerationStageVisible(false);
+  if (view !== "home") setGenerationStageVisible(false, { preservePanel: true });
   else {
     const stage = document.getElementById("main-stage-container");
-    if (stage && stage.classList.contains("visible")) setGenerationStageVisible(true);
+    if (stage && stage.classList.contains("visible")) {
+      // Navigation hides the surface, not the retained result or selected tab.
+      if (document.getElementById("results-view")?.classList.contains("visible")) {
+        document.body.classList.add("results-fullscreen", "results-with-sidebar");
+      }
+      setGenerationStageVisible(true);
+    }
   }
 
   if (pushState) {
