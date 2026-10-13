@@ -1,0 +1,2537 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Custom Code Connect — FlutterFlow custom code, minus the code.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+  @font-face {
+    font-family: "Delight";
+    src: url("fonts/Delight-VF.ttf") format("truetype");
+    font-weight: 100 900;
+    font-display: swap;
+  }
+
+  /* Bound from the Custom Code Connect design system (colors_and_type.css). Every value below is
+     the system's own token — no raw hex, no invented shade. */
+  :root {
+    /* Surfaces */
+    --bg: oklch(96.65% 0.0074 260.73);
+    --surface: oklch(100% 0 0);
+    --surface-translucent: oklch(100% 0 0 / 0.65);
+    --surface-glass: oklch(100% 0 0 / 0.72);
+    --surface-sunken: oklch(98.4% 0.004 260);
+    /* Ink */
+    --fg: oklch(20.77% 0.0398 265.75);
+    --muted: oklch(48% 0.02 260);
+    --muted-2: oklch(68% 0.018 260);
+    --on-dark: oklch(100% 0 0);
+    /* Hairlines and interaction greys */
+    --border: oklch(90% 0.012 260);
+    --border-strong: oklch(80% 0.02 260);
+    --fill-hover: color-mix(in oklch, var(--fg) 5%, var(--surface));
+    --fill-subtle: color-mix(in oklch, var(--fg) 6%, var(--surface));
+    --fill-selected: color-mix(in oklch, var(--fg) 4%, var(--surface));
+    --track: color-mix(in oklch, var(--fg) 7%, var(--surface));
+    --avatar: oklch(88% 0.02 260);
+    /* Accent: hot coral-orange, at most twice per screen */
+    --accent: oklch(63% 0.22 32);
+    --accent-soft: oklch(from var(--accent) l c h / 0.18);
+    --accent-ring: oklch(from var(--accent) l c h / 0.45);
+    /* Interactive field ink — a light blue, laid down semi-transparently. */
+    --fx-ink: oklch(70% 0.13 250);
+    /* State palette */
+    --ok: oklch(52% 0.11 165);
+    --ok-soft: oklch(52% 0.11 165 / 0.12);
+    --warn: oklch(66% 0.13 70);
+    --warn-soft: oklch(66% 0.13 70 / 0.14);
+    --bad: oklch(55% 0.19 25);
+    --bad-soft: oklch(55% 0.19 25 / 0.1);
+    --disabled-bg: oklch(88% 0.015 260);
+    --disabled-fg: oklch(58% 0.02 260);
+    /* Type */
+    --font-display: "Delight", "Outfit", "DM Sans", system-ui, sans-serif;
+    --font-body: "Delight", "Outfit", "DM Sans", system-ui, sans-serif;
+    --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --fw-ui: 560;
+    --fw-bold: 620;
+    --fw-black: 700;
+    --ls-display: -0.04em;
+    --ls-heading: -0.03em;
+    --ls-mono: 0.13em;
+    --fs-display: 54px;
+    --fs-h2: 28px;
+    --fs-h3: 22px;
+    --fs-h4: 18px;
+    --fs-lead: 17px;
+    --fs-body: 14.5px;
+    --fs-small: 13.5px;
+    --fs-caption: 12.5px;
+    --fs-mono: 11.5px;
+    --fs-micro: 10.5px;
+    --lh-display: 1.04;
+    --lh-heading: 1.15;
+    --lh-body: 1.6;
+    /* Radius */
+    --radius-xl: 22px;
+    --radius-lg: 20px;
+    --radius-md: 16px;
+    --radius-sm: 14px;
+    --radius-control: 12px;
+    --radius-nav: 11px;
+    --radius-icon: 10px;
+    --radius-chip: 999px;
+    --radius-badge: 7px;
+    /* Shadows */
+    --shadow-sm: 0 1px 2px oklch(20% 0.03 260 / 0.06);
+    --shadow-md: 0 1px 2px oklch(20% 0.03 260 / 0.06), 0 18px 46px -22px oklch(20% 0.03 260 / 0.3);
+    --shadow-control: 0 2px 6px oklch(20% 0.03 260 / 0.22);
+    --shadow-composer: 0 0 0 3px var(--accent-soft), 0 1px 2px oklch(20% 0.03 260 / 0.06), 0 0 44px -8px oklch(63% 0.22 32 / 0.16), 0 20px 52px -20px oklch(63% 0.22 32 / 0.18);
+    --blur-chrome: 14px;
+    /* Motion: one easing, three durations, plus the authored clocks */
+    --ease: cubic-bezier(0.2, 0, 0, 1);
+    --ease-overshoot: cubic-bezier(0.32, 1.38, 0.5, 1);
+    --t-fast: 150ms;
+    --t-enter: 220ms;
+    --t-reveal: 500ms;
+    --t-progress: 700ms;
+    --t-ring: 900ms;
+    --t-morph: 1120ms;
+    /* Layout */
+    --touch: 44px;
+    --control-h: 46px;
+    --stage-w: 1920px;
+    --stage-h: 1080px;
+    --measure-prose: 62ch;
+    --measure-lead: 68ch;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); height: 100%; }
+  body {
+    font-family: var(--font-display);
+    color: var(--fg);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  /* Fixed 1920x1080 canvas, scaled uniformly to fit narrower viewports */
+  .viewport {
+    width: 100%;
+    display: flex; justify-content: center; align-items: flex-start;
+  }
+  .stage {
+    position: relative;
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    background: var(--bg);
+    flex: none;
+    transform-origin: top center;
+    transform: scale(var(--fit, 1));
+    margin-bottom: calc(1080px * (var(--fit, 1) - 1));
+  }
+
+  /* Diffuse reference-inspired light, concentrated behind the composer. */
+  .glow {
+    position: absolute;
+    left: 50%; top: 55%;
+    width: 1360px; height: 760px;
+    transform: translate(-50%, -50%);
+    background:
+      radial-gradient(ellipse at 28% 46%,
+        oklch(from var(--bg) calc(l - 0.07) calc(c + 0.035) h / 0.42),
+        transparent 62%),
+      radial-gradient(ellipse at 72% 56%,
+        oklch(from var(--accent) l c h / 0.09),
+        transparent 58%);
+    filter: blur(64px);
+    pointer-events: none;
+  }
+
+  /* ----- Interactive WebGL field -----
+     A faint grid of the FlutterFlow mark rendered on the GPU. Each mark grows
+     and darkens with pointer proximity, then recedes again. It sits behind the
+     diffuse glow and carries no colour of its own beyond its light-blue ink token. */
+  .fx-grid {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: -2;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--t-reveal) var(--ease);
+  }
+  .fx-grid.is-ready { opacity: 1; }
+
+  /* Soft background-coloured halo hugging the chrome and the hero, so the
+     field never reads under live content. Rendered beneath all content, above
+     the canvas, so it can never cover the chrome or block a control. */
+  .fx-mask {
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+    background: var(--bg);
+    filter: blur(46px);
+  }
+  .fx-mask-hero {
+    left: 50%; top: 50%;
+    width: 980px; height: 520px;
+    transform: translate(-50%, -54%);
+  }
+  .fx-mask-top { left: -48px; right: -48px; top: -48px; height: 132px; }
+  .fx-mask-bottom { left: -48px; right: -48px; bottom: -48px; height: 132px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .fx-grid, .fx-mask { display: none; }
+  }
+
+  /* ----- Top chrome ----- */
+  .topbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 88px;
+    padding: 0 40px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 1;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 12px;
+    color: var(--fg);
+    text-decoration: none;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .brand .mark {
+    width: 28px; height: 28px;
+    border-radius: 8px;
+    background: var(--fg);
+    display: grid; place-items: center;
+    color: var(--surface);
+  }
+  .brand .mark svg { width: 16px; height: 16px; }
+  .brand .wordmark { display: flex; flex-direction: column; line-height: 1.15; }
+  .brand .wordmark span { color: var(--muted); font-weight: 500; font-size: 12px; letter-spacing: 0.01em; }
+
+  .account {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .credits {
+    display: inline-flex; align-items: center; gap: 5px;
+    height: 32px; padding: 0 10px 0 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: oklch(100% 0 0 / 0.6);
+    color: var(--muted);
+    font-size: 13px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .credits svg { width: 13px; height: 13px; color: var(--muted); }
+  .pro {
+    height: 22px; padding: 0 8px;
+    border-radius: 6px;
+    display: inline-flex; align-items: center;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    background: oklch(100% 0 0 / 0.6);
+  }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center;
+    background: oklch(88% 0.02 260);
+    border: 1px solid var(--border);
+    color: var(--fg);
+    font-size: 13px; font-weight: 600;
+  }
+
+  /* ----- Hero ----- */
+  .hero {
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -52%);
+    width: 1280px;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+    z-index: 1;
+  }
+  .headline {
+    font-family: var(--font-display);
+    font-size: 80px;
+    line-height: 1.05;
+    font-weight: 560;
+    letter-spacing: -0.035em;
+    color: var(--fg);
+  }
+  .headline em {
+    font-style: normal;
+    color: var(--accent);
+  }
+  .headline .headline-sub {
+    display: block;
+    margin-top: 2px;
+    font-size: inherit;
+    font-weight: inherit;
+    letter-spacing: inherit;
+    line-height: inherit;
+  }
+  .sub {
+    margin-top: 28px;
+    font-size: 20px;
+    line-height: 1.45;
+    font-weight: 400;
+    color: var(--muted);
+    max-width: 680px;
+  }
+
+  /* Prompt composer */
+  .composer {
+    position: relative;
+    margin-top: 46px;
+    width: 760px; height: 160px;
+    background: var(--surface);
+    border-radius: 20px;
+    border: 2px solid oklch(from var(--accent) l c h / 0.85);
+    box-shadow: var(--shadow-composer);
+    text-align: left;
+  }
+  .composer .field {
+    position: absolute;
+    left: 23px; right: 23px; top: 19px;
+    height: 72px;
+    padding: 0; margin: 0;
+    border: 0; outline: 0; background: transparent;
+    resize: none;
+    font: inherit;
+    font-size: 18px; line-height: 1.5;
+    color: var(--fg);
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    caret-color: var(--accent);
+    overflow: hidden;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    z-index: 1;
+  }
+  .composer .field::placeholder { color: var(--muted-2); }
+
+  /* Ghost completion: mirrors the typed text invisibly, then continues in light grey */
+  .composer .ghost {
+    position: absolute;
+    left: 23px; right: 23px; top: 19px;
+    height: 72px;
+    overflow: hidden;
+    font: inherit;
+    font-size: 18px; line-height: 1.5;
+    font-weight: 500;
+    letter-spacing: -0.005em;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    pointer-events: none;
+    color: transparent;
+  }
+  .composer .ghost .typed { color: transparent; }
+  .composer .ghost .suggest {
+    color: oklch(80% 0.012 260);
+    opacity: 0;
+    transition: opacity var(--t-fast) var(--ease);
+  }
+  .composer.has-suggest .ghost .suggest { opacity: 1; }
+
+  .composer .tab-hint {
+    position: absolute;
+    right: 71px; bottom: 25px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 6px; margin: -4px -6px;
+    border: 0; background: transparent; border-radius: 6px;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11px; letter-spacing: 0.02em;
+    color: var(--muted);
+    opacity: 0; transform: translateY(2px);
+    transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+    pointer-events: none;
+  }
+  .composer .tab-hint kbd {
+    font: inherit;
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--fg);
+  }
+  .composer.has-suggest .tab-hint { opacity: 1; transform: none; pointer-events: auto; }
+  .composer .tab-hint[hidden] { display: none; }
+  .composer .tab-hint:hover { color: var(--fg); background: oklch(96% 0.01 260); }
+  .composer .tab-hint:hover kbd { border-color: oklch(80% 0.02 260); }
+  @media (hover: none) {
+    .composer .tab-hint kbd { display: none; }
+    .composer .tab-hint .tab-hint-label { display: none; }
+    .composer .tab-hint::before { content: "Use suggestion"; }
+    .composer .tab-hint {
+      right: 62px; bottom: 16px;
+      height: 32px; padding: 0 12px; margin: 0;
+      font-family: inherit; font-size: 13px; font-weight: 500; letter-spacing: 0;
+      color: var(--fg);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+    }
+  }
+  /* The composer card carries the focus ring for the field inside it */
+  .composer:focus-within {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 3px var(--accent-soft),
+      0 1px 2px oklch(20% 0.03 260 / 0.06),
+      0 0 48px -8px oklch(from var(--accent) l c h / 0.2),
+      0 20px 52px -20px oklch(from var(--accent) l c h / 0.22);
+  }
+
+  .composer .tools {
+    position: absolute;
+    left: 15px; bottom: 15px;
+    display: flex; gap: 4px;
+  }
+  .icon-btn {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    border: 0; background: transparent;
+    display: grid; place-items: center;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .icon-btn svg { width: 18px; height: 18px; }
+  .icon-btn:hover { background: oklch(95% 0.01 260); color: var(--fg); }
+  .icon-btn:focus-visible, .send:focus-visible, .chip:focus-visible, .tutorials:focus-visible, .brand:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .send {
+    position: absolute;
+    right: 15px; bottom: 15px;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    border: 0;
+    background: var(--fg);
+    color: var(--surface);
+    display: grid; place-items: center;
+    cursor: pointer;
+    box-shadow: 0 2px 6px oklch(20% 0.03 260 / 0.25);
+  }
+  .send svg { width: 18px; height: 18px; }
+  .send .send-spin { display: none; }
+  .send:hover:not(:disabled) { background: oklch(from var(--fg) calc(l + 0.08) c h); }
+  .send:disabled {
+    background: oklch(88% 0.015 260);
+    color: oklch(60% 0.02 260);
+    box-shadow: none;
+    cursor: not-allowed;
+  }
+  .send:disabled:hover { transform: none; }
+  .send.is-busy .send-arrow { display: none; }
+  .send.is-busy .send-spin { display: block; animation: spin 900ms linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .composer.is-busy .field { pointer-events: none; }
+
+  .steps .step { transition: color var(--t-enter) var(--ease); }
+  .steps .step.is-active { color: var(--fg); font-weight: 500; }
+  .steps .step.is-done { color: var(--fg); }
+
+  /* Chips */
+  .chips {
+    margin-top: 18px;
+    display: flex; gap: 8px;
+  }
+  .chip {
+    height: 32px; padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: oklch(100% 0 0 / 0.7);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 13px; font-weight: 500;
+    cursor: pointer;
+  }
+  .chip:hover {
+    color: var(--fg);
+    border-color: oklch(80% 0.02 260);
+    background: var(--surface);
+  }
+  /* The chosen chip keeps the field's prompt visible as a settled selection, not just a hover. */
+  .chip.is-active {
+    color: var(--fg);
+    border-color: var(--fg);
+    background: var(--surface);
+  }
+  .chip.is-active:hover { border-color: var(--fg); }
+
+  .steps {
+    margin-top: 22px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+  }
+  .steps span.sep { margin: 0 6px; }
+
+  .sr-only {
+    position: absolute; width: 1px; height: 1px;
+    padding: 0; margin: -1px; overflow: hidden;
+    clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  /* Footer */
+  .footer {
+    position: absolute;
+    left: 0; right: 0; bottom: 36px;
+    display: flex; justify-content: center;
+    z-index: 1;
+  }
+  .tutorials {
+    font-size: 13px; font-weight: 500;
+    color: var(--muted);
+    text-decoration: none;
+    border-bottom: 1px solid transparent;
+    padding-bottom: 1px;
+  }
+  .tutorials:hover { color: var(--fg); border-bottom-color: var(--fg); }
+
+  /* ----- Motion ----- */
+
+  /* Entry: one staged reveal, top to bottom, transform + opacity only */
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fade {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+  @keyframes glow-in {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(0.92); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  @keyframes ring-in {
+    from { box-shadow:
+      0 0 0 0 var(--accent-soft),
+      0 1px 2px oklch(20% 0.03 260 / 0.06),
+      0 0 0 -4px oklch(from var(--accent) l c h / 0),
+      0 12px 32px -12px oklch(from var(--accent) l c h / 0.1); }
+  }
+
+  .glow { animation: glow-in 900ms var(--ease) both; }
+  .topbar, .footer { animation: fade var(--t-reveal) var(--ease) both; }
+  .topbar { animation-delay: 60ms; }
+  .footer { animation-delay: 520ms; }
+
+  .reveal { animation: rise var(--t-reveal) var(--ease) both; }
+  .headline  { animation-delay: 80ms; }
+  .sub       { animation-delay: 160ms; }
+  .composer  { animation: rise var(--t-reveal) var(--ease) 240ms both,
+                          ring-in var(--t-reveal) var(--ease) 460ms both; }
+  .chips     { animation-delay: 340ms; }
+  .steps     { animation-delay: 400ms; }
+  /* The panel's own elements rise in on the same keyframes, duration and easing as the
+     first-load reveal; the stagger delay is set per element when the box appears. */
+  .panel-in { animation: rise var(--t-reveal) var(--ease) both; }
+
+  /* Feedback: quick, physical, confirming */
+  .icon-btn, .send, .chip, .tutorials, .credits, .pro, .avatar {
+    transition:
+      background-color var(--t-fast) var(--ease),
+      color var(--t-fast) var(--ease),
+      border-color var(--t-fast) var(--ease),
+      box-shadow var(--t-fast) var(--ease),
+      transform var(--t-fast) var(--ease);
+  }
+  .icon-btn:active { transform: scale(0.94); }
+
+  .send:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px oklch(20% 0.03 260 / 0.3);
+  }
+  .send:active:not(:disabled) {
+    transform: translateY(0) scale(0.96);
+    box-shadow: 0 1px 3px oklch(20% 0.03 260 / 0.25);
+  }
+  .send .send-arrow { transition: transform var(--t-fast) var(--ease); }
+  .send:hover:not(:disabled) .send-arrow { transform: translateY(-1px); }
+
+  .chip:hover { transform: translateY(-1px); }
+  .chip:active { transform: translateY(0) scale(0.97); }
+
+  .tutorials { transition-property: color, border-color; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .glow, .topbar, .footer, .reveal, .composer, .panel-in {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+    .glow { transform: translate(-50%, -50%); }
+    .composer-morph { display: none; }
+    .send.is-busy .send-spin { animation: none; opacity: 0.6; }
+    .icon-btn, .send, .chip, .tutorials, .credits, .pro, .avatar, .send svg {
+      transition-property: background-color, color, border-color, box-shadow;
+    }
+    .icon-btn:active, .send:hover, .send:active, .send:hover .send-arrow,
+    .chip:hover, .chip:active { transform: none; }
+  }  /* ----- Mobile: a redesigned layout, not a scaled-down stage ----- */
+  @media (max-width: 920px) {
+    html, body { height: auto; }
+    .viewport { display: block; }
+    .stage {
+      width: 100%;
+      min-height: 100svh;
+      height: auto;
+      transform: none;
+      margin-bottom: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .glow {
+      width: 140vw; height: 60vh;
+      top: 48%;
+      filter: blur(40px);
+    }
+    .fx-mask { filter: blur(36px); }
+    .fx-mask-hero {
+      width: 92%; height: 62%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+    }
+    .fx-mask-top { height: 104px; }
+    .fx-mask-bottom { height: 124px; }
+
+    .topbar {
+      position: relative;
+      height: 64px;
+      padding: 0 20px;
+    }
+    .brand { gap: 10px; }
+    .brand .wordmark span { font-size: 11px; }
+    .brand .wordmark { font-size: 15px; }
+    .credits { height: 30px; padding: 0 9px 0 7px; font-size: 12px; }
+    .avatar { width: 30px; height: 30px; }
+
+    .hero {
+      position: relative;
+      left: auto; top: auto;
+      transform: none;
+      width: 100%;
+      padding: 24px 20px 32px;
+      flex: 1;
+      justify-content: center;
+    }
+    .headline {
+      font-size: clamp(34px, 6.8vw, 56px);
+      line-height: 1.08;
+      letter-spacing: -0.03em;
+      text-wrap: balance;
+    }
+    .headline .headline-sub {
+      margin-top: 2px;
+      font-size: inherit;
+    }
+    .sub {
+      margin-top: 18px;
+      font-size: 16px;
+      max-width: 34ch;
+    }
+
+    .composer {
+      margin-top: 32px;
+      width: 100%;
+      max-width: 520px;
+      height: 148px;
+      border-radius: 16px;
+    }
+    .composer .field, .composer .ghost {
+      left: 18px; right: 18px; top: 16px;
+      height: 68px;
+      font-size: 16px;
+      line-height: 1.45;
+    }
+    .composer .tools { left: 10px; bottom: 10px; }
+    .icon-btn { width: 44px; height: 44px; }
+    .send { right: 10px; bottom: 10px; width: 44px; height: 44px; }
+
+    .chips {
+      margin-top: 18px;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+      max-width: 520px;
+    }
+    .chip { height: 36px; }
+
+    .steps { margin-top: 18px; font-size: 11px; }
+
+    .footer {
+      position: relative;
+      bottom: auto;
+      padding: 0 20px 28px;
+    }
+    .tutorials { padding: 12px 0; }
+  }
+
+  /* Walkthrough: prompt completion, then one continuous pipeline-to-result surface. */
+  [hidden] { display:none !important; }
+  /* The staged load reveal plays once on its own; the walkthrough's entries and
+     exits are Web-Animations calls, so the two never contend for the same property. */
+  .composer .ghost .suggest { color:var(--muted); }
+  /* Demo caret: a real text cursor — hard blink on a 1.05s cadence with a soft brand afterglow.
+     Coral while the AI is working (idle, typing, streaming); navy once Tab has accepted the text. */
+  @keyframes caret-blink { 0%,45% { opacity:1; } 46%,100% { opacity:0; } }
+  /* The caret always holds at the end of the user's own prompt. The grey text is an AI
+     extension they can adopt with Tab, so the caret stops before it, not after it. */
+  .composer.is-demo-typing .ghost .typed::after,
+  .composer.is-demo-streaming .ghost .typed::after,
+  .composer.is-demo-accepted .ghost .typed::after {
+    content:""; display:inline-block; width:2px; height:1.05em; margin-right:-2px; vertical-align:-.15em;
+    background:var(--accent); border-radius:1px;
+    box-shadow:0 0 7px 1px oklch(from var(--accent) l c h / .5);
+    animation:caret-blink 1.05s step-end infinite;
+  }
+  .composer.is-demo-accepted .ghost .typed::after {
+    background:var(--fg);
+    box-shadow:0 0 7px 1px oklch(from var(--fg) l c h / .38);
+  }
+  /* Hero polish: a one-line prompt no longer leaves a tall void; the field holds two lines and scrolls beyond. */
+  .composer .field, .composer .ghost { height:58px; }
+  .composer { height:148px; }
+  .composer .field { overflow-y:auto; }
+  .send, .icon-btn, .chip, .composer .tab-hint { min-width:44px; min-height:44px; }
+  .composer .tab-hint { bottom:13px; right:74px; }
+  .composer .tab-hint kbd.is-pressed { background:var(--fg); color:var(--surface); border-color:var(--fg); }
+  .composer .tools { bottom:12px; }
+  :focus-visible { outline:2px solid var(--fg); outline-offset:4px; }
+  .composer .field:focus-visible { outline:0; }
+  /* Pointer-driven fills (chips, Edit prompt) focus the field programmatically, so the keyboard ring is suppressed until the user actually types. */
+  .composer:not(.is-pointer-focus):has(.field:focus-visible) { outline:2px solid var(--fg); outline-offset:5px; }
+  /* Submit morph: a transient card that lifts the composer's orange outline, gives one
+     small anticipatory shrink, then grows into the panel with a soft overshoot. Position,
+     size, border width and radius are taken from the live rects in script. */
+  .composer-morph {
+    position: fixed;
+    z-index: 80;
+    pointer-events: none;
+    background: var(--surface);
+    border-style: solid;
+    border-color: oklch(from var(--accent) l c h / .85);
+    box-shadow: var(--shadow-composer);
+    transform-origin: center center;
+    will-change: transform, opacity;
+  }
+  .walkthrough-workspace { position:absolute; top:164px; left:50%; width:1420px; transform:translateX(-50%); text-align:left; z-index:1; }
+  /* The kicker is still used by the sidebar's "Your prompt" label. */
+  .walkthrough-kicker { font:12px/1.5 var(--font-mono); letter-spacing:.09em; text-transform:uppercase; color:var(--muted); }
+  /* The composer's orange outline continues into the panel, so the send morph reads as
+     one box growing rather than a crossfade into a different surface. */
+  /* The panel carries the composer's shadow, layer for layer: the accent ring, a hairline contact
+     line, a soft accent bloom and the downward lift. The old third layer was a navy tint
+     (--fg 7%), which is the one thing on this surface that wasn't the brand's shadow. */
+  .walkthrough-layout { display:grid; grid-template-columns:310px minmax(0,1fr); min-height:590px; border:2px solid oklch(from var(--accent) l c h / .85); border-radius:var(--radius-lg); background:var(--surface); box-shadow:var(--shadow-composer); }
+  .walkthrough-sidebar { padding:30px; border-right:1px solid var(--border); display:flex; flex-direction:column; }
+  .walkthrough-prompt { font-size:17px; line-height:1.5; margin:12px 0 32px; overflow-wrap:anywhere; max-height:146px; overflow:auto; }
+  /* The prompt's edit control closes the prompt, at the bottom-left of the panel. */
+  #edit-prompt { margin-top:auto; align-self:flex-start; }
+  /* In the full-screen result the sidebar's 30px inset leaves this control 10px lower than
+     the action bar, which sits on the results view's 40px inset. Lift it to match, so both
+     button bottoms share one baseline. */
+  .walkthrough-workspace.is-results #edit-prompt { margin-bottom:10px; }
+  .pipeline-list { list-style:none; display:grid; gap:26px; margin-top:20px; }
+  .pipeline-step { display:grid; grid-template-columns:30px 1fr; gap:12px; align-items:start; color:var(--muted); }
+  .pipeline-number { width:28px; height:28px; display:grid; place-items:center; border:1px solid var(--border); border-radius:50%; font:12px var(--font-mono); }
+  .pipeline-step strong { display:block; font-size:15px; font-weight:550; line-height:28px; }
+  .pipeline-step small { font-size:12px; }
+  .pipeline-step.is-active, .pipeline-step.is-done { color:var(--fg); }
+  .pipeline-step.is-active .pipeline-number { border-color:var(--fg); background:var(--fg); color:var(--surface); }
+  .pipeline-step.is-done .pipeline-number { border-color:var(--fg); }
+  .walkthrough-main { min-width:0; display:grid; grid-template-columns:minmax(0,1fr); grid-template-areas:"stack"; }
+  /* Both surfaces share one grid area so progress → result is a dissolve, never a blank gap. */
+  .pipeline-view, .results-view { grid-area:stack; }
+  .pipeline-view { align-self:center; padding:48px 64px; }
+  .pipeline-glyph { width:56px; height:56px; margin-bottom:32px; color:var(--muted); }
+  /* The paired-C mark, animated as two characters. Pieces rotate about the logo centre (22,22),
+     so a rotation reads as them orbiting each other and a translation as pulling apart. */
+  /* The mark now runs the 120-second, twelve-beat logo loop across a wide arena: the strip
+     replaces the 56px glyph box and takes the same vertical footprint (64 + 24 = 56 + 32). */
+  .pipeline-glyph.logo-loop { position:relative; width:100%; height:88px; margin-bottom:24px; overflow:hidden; }
+  /* The mark rests at the panel's left edge — aligned with the copy below it — and sweeps
+     rightward across the strip, so its travel is one-sided (0 → full width). */
+  .loop-mark, .loop-shadow { position:absolute; }
+  .loop-mark { left:0; top:50%; width:52px; height:52px; margin:-26px 0 0 0; will-change:transform; }
+  .loop-piece { position:absolute; inset:0; display:block; will-change:transform,opacity; }
+  .loop-piece svg { display:block; width:100%; height:100%; overflow:visible; }
+  .loop-halo { position:absolute; left:50%; top:50%; width:74px; height:74px; margin:-37px 0 0 -37px; border-radius:50%; background:radial-gradient(circle, color-mix(in oklch,var(--accent) 60%,transparent), transparent 64%); filter:blur(5px); opacity:.09; will-change:transform,opacity; }
+  .loop-shadow { left:var(--mark-c,26px); bottom:13px; width:46px; height:6px; margin-left:-23px; border-radius:50%; background:color-mix(in oklch,var(--fg) 26%,transparent); opacity:0; will-change:transform,opacity; }
+  .pipeline-view h3 { font:500 34px/1.2 var(--font-display); letter-spacing:-.025em; margin-bottom:12px; }
+  .pipeline-view p { color:var(--muted); font-size:16px; line-height:1.6; max-width:44ch; }
+  /* One element paints the whole bar, so the filled and empty halves can never disagree. The
+     track is tinted from --fg rather than --border: at 3px against white a near-white track read
+     as a thinner hairline than the near-black fill beside it, which is what looked off. */
+  .pipeline-track { height:4px; border-radius:999px; margin:34px 0 16px; background-color:var(--track); background-image:linear-gradient(var(--fg),var(--fg)); background-repeat:no-repeat; background-position:left center; background-size:var(--p,0%) 100%; }
+  .pipeline-fill { display:none; }
+  .pipeline-meta { display:flex; justify-content:space-between; font:12px var(--font-mono); color:var(--muted); }
+  .results-view { padding:26px 28px; min-width:0; }
+  .results-topline { display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom:22px; }
+  .results-topline h3 { font:550 25px/1.2 var(--font-display); letter-spacing:-.02em; }
+  .results-count { font:12px var(--font-mono); color:var(--muted); white-space:nowrap; }
+  /* Artifact strip, carried over from the live app: Summary pill, divider, then a
+     file chip per generated artifact with its review status and custom-code type. */
+  .result-tabs { display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--border); margin-bottom:22px; padding-bottom:14px; overflow-x:auto; }
+  .result-tab { background:transparent; border:0; padding:0; font:inherit; cursor:pointer; }
+  .result-tab-summary { display:inline-flex; align-items:center; gap:8px; min-height:38px; padding:0 13px; border:1px solid var(--border); border-radius:9px; color:var(--muted); background:var(--surface); font:700 13px var(--font-display); transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+  .result-tab-summary:hover { color:var(--fg); border-color:var(--fg); }
+  .result-tab-summary:active { transform:scale(.98); }
+  .result-tab-summary[aria-selected="true"] { color:var(--surface); border-color:var(--fg); background:var(--fg); }
+  .result-tab-icon { width:16px; height:16px; }
+  .result-tab-divider { width:1px; height:34px; background:var(--border); flex:none; }
+  .result-tab-file { display:inline-flex; align-items:center; gap:9px; min-width:172px; max-width:260px; padding:8px 11px; border:1px solid var(--border); border-radius:9px; background:var(--surface); color:var(--fg); text-align:left; transition:border-color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease),background var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+  .result-tab-file:hover { border-color:var(--fg); }
+  .result-tab-file:active { transform:scale(.985); }
+  .result-tab-file[aria-selected="true"] { border-color:var(--fg); box-shadow:inset 0 0 0 1px var(--fg); }
+  .result-tab-status { width:26px; height:26px; flex:0 0 26px; display:grid; place-items:center; border-radius:var(--radius-badge); color:var(--ok); background:var(--ok-soft); }
+  .result-tab-status svg { width:15px; height:15px; }
+  .result-tab-text { min-width:0; }
+  .result-tab-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:700 13px var(--font-display); }
+  .result-tab-meta { display:block; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:11px var(--font-mono); color:var(--muted); }
+  .result-split { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:22px; }
+  .code-panel { min-width:0; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-sunken); }
+  .code-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; border-bottom:1px solid var(--border); padding:2px 12px; font-size:12px; }
+  .result-code { margin:0; padding:18px; height:290px; overflow:auto; font:12px/1.8 var(--font-mono); white-space:pre-wrap; overflow-wrap:anywhere; tab-size:2; color:var(--fg);
+    /* Code-view palette, derived from the system's own inks: brand navy for the source,
+       --muted for comments, and the single accent (its chroma scaled so it stays in sRGB
+       once darkened) for keywords. No off-system hues. Every value clears 6.1:1 on --bg. */
+    --tok-comment:oklch(from var(--muted) 47% c h);
+    --tok-meta:oklch(from var(--accent) 46% calc(c * 0.7) h);
+    --tok-keyword:oklch(from var(--accent) 46% calc(c * 0.7) h);
+    --tok-type:oklch(from var(--fg) 45% c h);
+    --tok-string:var(--fg);
+    --tok-number:oklch(from var(--fg) 45% c h);
+    --code-wash:color-mix(in oklch,var(--accent) 14%,transparent); }
+  .result-code .code-line { display:block; }
+  .result-code .code-line:empty { min-height:1.8em; }
+  .tok-comment { color:var(--tok-comment); }
+  .tok-meta { color:var(--tok-meta); }
+  .tok-keyword { color:var(--tok-keyword); }
+  .tok-type { color:var(--tok-type); }
+  .tok-string { color:var(--tok-string); }
+  .tok-number { color:var(--tok-number); }
+  /* The source lands line by line with a short accent wash, so it reads as written.
+     The stagger rides on --d, so no per-line timers are needed. */
+  .result-code.is-writing .code-line { opacity:0; }
+  .result-code.is-writing .code-line.is-in { animation:code-land 520ms var(--ease) both; animation-delay:var(--d,0ms); }
+  @keyframes code-land {
+    0% { opacity:0; transform:translateY(6px); background-color:var(--code-wash); }
+    42% { opacity:1; transform:translateY(0); background-color:var(--code-wash); }
+    100% { opacity:1; transform:none; background-color:transparent; }
+  }
+  .file-review h4 { font:550 17px/1.3 var(--font-display); margin:4px 0 14px; }
+  .review-verdict { display:inline-flex; gap:8px; align-items:center; border:1px solid var(--border); border-radius:6px; padding:6px 9px; font:12px var(--font-mono); margin-bottom:16px; }
+  .file-review p, .result-summary p { color:var(--muted); font-size:14px; line-height:1.6; }
+  /* The summary column spans the panel so the spec rows use the width, but the lead itself keeps
+     the system's prose measure — uncapped it ran to ~150 characters in one line. */
+  .summary-copy p { max-width:var(--measure-prose); }
+  /* Manual-step values are a real ordered list, not a run of text with line breaks in it. */
+  .summary-copy dd ol { margin:0; padding-left:1.4em; display:grid; gap:4px; }
+  .summary-copy dd li { overflow-wrap:anywhere; }
+  .review-checks { list-style:none; margin:18px 0; display:grid; gap:12px; font-size:13px; line-height:1.5; }
+  .review-checks li { display:grid; grid-template-columns:16px 1fr; gap:8px; }
+  .review-note { border-top:1px solid var(--border); padding-top:14px; }
+  /* The copy takes the full width and the score card pins to the panel's right edge, rather than
+     the copy stopping at a prose measure and leaving the card stranded in the middle. */
+  .result-summary { display:flex; align-items:flex-start; justify-content:space-between; gap:32px; min-height:338px; padding:16px 4px; }
+  .summary-copy { flex:1; min-width:0; }
+  .result-summary h4 { font:500 28px/1.2 var(--font-display); margin-bottom:16px; }
+  .result-summary dl { margin-top:24px; display:grid; gap:16px; }
+  .result-summary dl div { display:flex; gap:20px; justify-content:space-between; border-top:1px solid var(--border); padding-top:12px; font-size:14px; }
+  .result-summary dt { color:var(--muted); }
+  /* Audit score card, carried over from the live app's review panel. */
+  .review-score-column { width:184px; flex:none; }
+  .review-score { display:flex; width:100%; min-height:164px; padding:18px 16px; flex-direction:column; align-items:center; justify-content:center; border:1px solid; border-radius:12px; text-align:center; }
+  .review-score-label { font:700 11px/1 var(--font-mono); letter-spacing:.1em; text-transform:uppercase; }
+  .review-score strong { margin-top:3px; font:700 58px/0.95 var(--font-display); letter-spacing:-.05em; }
+  .review-score-total { margin-top:5px; font-size:11px; font-weight:600; opacity:.72; }
+  .review-score-status { margin-top:12px; font:800 11px/1 var(--font-mono); letter-spacing:.08em; text-transform:uppercase; }
+  /* Carried over from the live app's green audit card. The system has no state green — its inks
+     are --fg, --muted, --border and one warm accent — so a confirmed result is expressed as the
+     strongest ink on the inset surface instead of a hue that isn't ours. */
+  .review-score-pass { color:var(--ok); border-color:var(--ok-soft); background:var(--surface-sunken); }
+  .review-score-feedback { margin-top:10px; color:var(--muted); font-size:11px; font-weight:600; text-align:center; }
+  .review-score-feedback-controls { display:flex; justify-content:center; gap:7px; margin-top:7px; }
+  .feedback-btn { width:36px; height:36px; border-radius:8px; border:1px solid var(--border); background:var(--surface); display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--muted); transition:background var(--t-fast) var(--ease),color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+  .feedback-btn svg { width:16px; height:16px; }
+  .feedback-btn:hover { background:color-mix(in oklch,var(--fg) 6%,var(--surface)); color:var(--fg); border-color:var(--fg); }
+  .feedback-btn:active { transform:scale(.94); }
+  .feedback-btn.is-up { color:var(--ok); border-color:var(--ok-soft); background:var(--ok-soft); }
+  .feedback-btn.is-down { color:var(--bad); border-color:var(--bad-soft); background:var(--bad-soft); }
+  /* The chosen thumb confirms the choice once, rather than just recolouring. */
+  .feedback-btn.is-up, .feedback-btn.is-down { animation:thumb-pop 240ms var(--ease); }
+  @keyframes thumb-pop { from { transform:scale(.86); } to { transform:scale(1); } }
+  .result-actions { display:flex; flex-wrap:wrap; align-items:center; gap:10px; border-top:1px solid var(--border); margin-top:20px; padding-top:12px; }
+  /* Generation actions, rebuilt on the system rather than the live app's indigo/amber/orange
+     gradients: one solid primary in --fg, then two outlined secondaries — the attention action in
+     the brand's warm ink (deepened from --accent so the label clears 4.5:1), the other neutral.
+     Only the primary is solid, per the one-primary-per-group rule. */
+  .result-action-buttons { flex:1 1 100%; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  .action-btn { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:44px; padding:9px 16px; border:1px solid transparent; border-radius:var(--radius-control); background:var(--surface); color:var(--fg); font:600 12.5px var(--font-display); letter-spacing:-.01em; cursor:pointer; transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+  .action-btn:hover { transform:translateY(-1px); }
+  .action-btn:active { transform:scale(.97); }
+  .action-btn-icon { width:18px; height:18px; flex:0 0 18px; object-fit:contain; }
+  .action-btn-glyph { width:14px; height:14px; flex:0 0 14px; }
+  /* The button is navy, but its shadow is the brand's warm ink — the same accent that lights
+     every other raised surface here, rather than a navy tint darker than the button itself. */
+  .action-btn-deploy { background:var(--fg); border-color:var(--fg); color:var(--surface); box-shadow:0 2px 8px -2px oklch(from var(--accent) l c h / .4); }
+  .action-btn-deploy:hover { background:color-mix(in oklch,var(--fg) 90%,black); border-color:color-mix(in oklch,var(--fg) 90%,black); box-shadow:0 4px 14px -2px oklch(from var(--accent) l c h / .5); }
+  .action-btn-errors { border-color:color-mix(in oklch,var(--warn) 45%,var(--surface)); color:oklch(from var(--warn) 48% c h); }
+  .action-btn-errors:hover { background:var(--warn-soft); border-color:color-mix(in oklch,var(--warn) 65%,var(--surface)); }
+  .action-btn-refine { border-color:var(--border); }
+  .action-btn-refine:hover { background:color-mix(in oklch,var(--fg) 6%,var(--surface)); border-color:var(--fg); }
+  /* Final result: the walkthrough card grows out of the panel to fill the stage,
+     keeping the composer's orange outline through the same morph. */
+  @media (min-width:921px) {
+    .walkthrough-workspace.is-results { top:104px; left:40px; right:40px; width:auto; transform:none; }
+    .walkthrough-workspace.is-results .walkthrough-layout { height:calc(1080px - 144px); min-height:0; grid-template-rows:1fr; box-shadow:var(--shadow-composer); }
+    .walkthrough-workspace.is-results .walkthrough-main { height:100%; grid-template-rows:1fr; }
+    .walkthrough-workspace.is-results .results-view { display:flex; flex-direction:column; height:calc(1080px - 148px); padding:40px 48px; overflow:hidden; }
+    .walkthrough-workspace.is-results .result-split { flex:1; min-height:0; grid-template-rows:1fr; }
+    .walkthrough-workspace.is-results .code-panel { display:flex; flex-direction:column; min-height:0; }
+    .walkthrough-workspace.is-results .result-code { flex:1; height:auto; min-height:0; }
+    .walkthrough-workspace.is-results .result-summary { min-height:0; flex:1; }
+  }
+  .walkthrough-button { min-height:44px; display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 14px; border:1px solid var(--border); border-radius:9px; background:transparent; color:var(--fg); font:500 13px var(--font-display); cursor:pointer; text-decoration:none; transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+  .walkthrough-button:hover { background:color-mix(in oklch,var(--fg) 6%,var(--surface)); border-color:var(--fg); color:var(--fg); }
+  .walkthrough-button:active:not(:disabled) { transform:scale(.97); }
+  .walkthrough-button:disabled { opacity:.45; cursor:default; }
+  .walkthrough-button.quiet { border-color:transparent; }
+  .footer { flex-direction:column; align-items:center; gap:10px; bottom:27px; }
+  .walkthrough-player { display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; }
+  .walkthrough-caption { font-size:13px; color:var(--muted); min-width:250px; text-align:center; }
+  .walkthrough-player .walkthrough-button { min-width:80px; }
+  .send.is-demo-pressed { transform:scale(.94); box-shadow:none; }
+  .walkthrough-paused .pipeline-fill { transition:none; }
+  @media (max-width:920px) {
+    .walkthrough-workspace { position:relative; top:auto; left:auto; width:100%; transform:none; padding:28px 20px; flex:1; }
+    .walkthrough-layout { grid-template-columns:1fr; min-height:0; border-radius:18px; }
+    /* Stacked layouts lead with the workflow, and the prompt follows beneath it. */
+    .walkthrough-main { order:1; }
+    .walkthrough-sidebar { order:2; padding:22px; border-right:0; border-bottom:0; border-top:1px solid var(--border); }
+    .walkthrough-prompt { font-size:15px; margin:8px 0 20px; max-height:100px; }
+    .pipeline-list { grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:14px; }
+    .pipeline-step { display:flex; flex-direction:column; gap:5px; }
+    .pipeline-step strong { font-size:12px; line-height:1.4; }
+    .pipeline-step small { font-size:11px; }
+    .pipeline-view { padding:34px 24px; min-height:300px; }
+    .pipeline-view h3 { font-size:25px; }
+    .pipeline-glyph { width:40px; height:40px; margin-bottom:20px; }
+    .pipeline-glyph.logo-loop { width:100%; height:66px; margin-bottom:16px; }
+    .loop-mark { width:40px; height:40px; margin:-20px 0 0 0; }
+    .loop-halo { width:58px; height:58px; margin:-29px 0 0 -29px; }
+    .loop-shadow { bottom:6px; }
+    .results-view { padding:22px; }
+    .results-topline { align-items:start; }
+    .results-topline h3 { font-size:22px; }
+    .result-split { grid-template-columns:1fr; }
+    .result-code { height:260px; font-size:12px; }
+    .result-tab-summary { font-size:12px; }
+    .result-tab-file { min-width:0; }
+    .result-actions { align-items:start; }
+    .result-action-buttons { grid-template-columns:1fr; }
+    .result-summary { min-height:0; flex-direction:column; gap:22px; }
+    .summary-copy { max-width:none; }
+    .review-score-column { width:100%; }
+    .result-summary dl div { flex-wrap:wrap; gap:6px; }
+    .footer { padding:0 20px 24px; }
+    .walkthrough-caption { min-width:0; flex-basis:100%; }
+    .composer .field, .composer .ghost { height:94px; }
+    .composer .tab-hint { right:63px; bottom:12px; }
+    .chips .chip { height:auto; padding-block:10px; }
+  }
+  @media (prefers-reduced-motion:reduce) {
+    /* Keep the colour feedback, drop the movement. */
+    .walkthrough-button, .feedback-btn, .result-tab-summary, .result-tab-file,
+    .action-btn, .account > button, .account .account-close, .account .account-action {
+      transition-property: background-color, color, border-color, box-shadow, opacity;
+    }
+    .walkthrough-button:active, .feedback-btn:active, .result-tab-summary:active,
+    .result-tab-file:active, .action-btn:hover, .action-btn:active,
+    .account > button:active, .account .account-close:active, .account .account-action:active { transform:none; }
+    .feedback-btn.is-up, .feedback-btn.is-down { animation:none; }
+    .pipeline-fill, .composer .tab-hint { transition:none; }
+    .send.is-demo-pressed { transform:none; }
+    .result-code.is-writing .code-line { opacity:1; animation:none; }
+    .composer.is-demo-typing .ghost .typed::after,
+    .composer.is-demo-streaming .ghost .typed::after,
+    .composer.is-demo-accepted .ghost .typed::after { animation:none; opacity:1; }
+  }
+
+</style>
+</head>
+<body>
+<div class="viewport">
+<div class="stage" data-od-id="stage">
+  <canvas class="fx-grid" id="fx-grid" aria-hidden="true"></canvas>
+  <div class="fx-mask fx-mask-top" aria-hidden="true"></div>
+  <div class="fx-mask fx-mask-bottom" aria-hidden="true"></div>
+  <div class="fx-mask fx-mask-hero" aria-hidden="true"></div>
+  <div class="glow" aria-hidden="true"></div>
+
+  <header class="topbar" data-od-id="topbar">
+    <a class="brand" href="#" data-od-id="brand" aria-label="Custom Code Connect for FlutterFlow — home" style="width: 246px; max-width: calc(100% - 140px); min-height: 44px; flex-shrink: 0;">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 246 44" width="246" height="44" fill="none" aria-hidden="true" focusable="false" style="display: block; width: 100%; height: auto; overflow: visible;">
+        <!-- Two rotationally paired C ribbons; open counters stay transparent. -->
+        <g fill="currentColor" data-od-id="brand-logomark">
+          <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z"></path>
+          <path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" transform="rotate(180 22 22)"></path>
+        </g>
+      </svg>
+    </a>
+
+    <div class="account" data-od-id="account">
+      <button class="credits" type="button" data-od-id="credits" aria-label="50 credits remaining" aria-haspopup="dialog" aria-controls="credits-dialog" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="color: var(--accent);">
+          <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"></path>
+        </svg>
+        50
+      </button>
+      <button class="pro" type="button" data-od-id="plan-badge" aria-label="View Pro plan" aria-haspopup="dialog" aria-controls="plan-dialog" aria-expanded="false">PRO</button>
+      <button class="avatar" type="button" data-od-id="avatar" aria-label="Open billing" aria-haspopup="dialog" aria-controls="billing-dialog" aria-expanded="false">S</button>
+      <dialog id="credits-dialog" class="account-dialog" aria-labelledby="credits-title" data-od-id="credits-modal">
+        <button type="button" class="account-close" data-account-close="" aria-label="Close credits" data-od-id="close-credits">×</button>
+        <p class="account-kicker">Your workspace</p><h2 id="credits-title" data-od-id="credits-title">Credits</h2>
+        <div class="account-balance"><strong data-account-balance="">50</strong><span>credits remaining</span></div>
+        <p class="account-description">Your available balance for creating custom code.</p>
+        <p class="account-note">This preview shows your current demo balance. Usage history and top-ups are not connected.</p>
+        <button type="button" class="account-action" data-account-close="" data-od-id="credits-done">Back to creating</button>
+      </dialog>
+      <dialog id="plan-dialog" class="account-dialog" aria-labelledby="plan-title" data-od-id="plan-modal">
+        <button type="button" class="account-close" data-account-close="" aria-label="Close plan" data-od-id="close-plan">×</button>
+        <p class="account-kicker">Your workspace</p><h2 id="plan-title" data-od-id="plan-title">Your plan</h2>
+        <div class="plan-grid">
+        <article class="plan-card" data-od-id="plan-free">
+          <p class="plan-name">Free</p>
+          <div class="plan-price"><span class="plan-amount">A$0</span><span class="plan-per">/ month</span></div>
+          <p class="plan-billed">No card required</p>
+          <ul class="plan-list">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span><strong>3 runs</strong> per month</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Custom widgets only</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Copy the Dart by hand</span></li>
+          </ul>
+          <div class="plan-foot"><button type="button" class="plan-action" data-plan-action="free" data-od-id="choose-free">Switch to Free</button></div>
+        </article>
+        <article class="plan-card is-popular" data-od-id="plan-pro">
+          <p class="plan-name">Pro <span class="plan-pop">Most popular</span></p>
+          <div class="plan-price"><span class="plan-amount">A$11</span><span class="plan-per">/ month</span></div>
+          <p class="plan-billed">Billed monthly · cancel anytime</p>
+          <p class="plan-balance"><strong>Your current plan</strong> · 50 credits remaining this month</p>
+          <ul class="plan-list">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span><strong>50 runs</strong> per month</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Every artifact type and model</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Deploy straight to FlutterFlow</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Code review score and manual steps</span></li>
+          </ul>
+          <div class="plan-foot"><button type="button" class="plan-action" id="plan-billing" data-od-id="manage-plan">Manage in Stripe</button></div>
+        </article>
+        <article class="plan-card" data-od-id="plan-power">
+          <p class="plan-name">Power</p>
+          <div class="plan-price"><span class="plan-amount">A$29</span><span class="plan-per">/ month</span></div>
+          <p class="plan-billed">Billed monthly · cancel anytime</p>
+          <ul class="plan-list">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span><strong>Unlimited</strong> runs</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Priority queue</span></li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"></path></svg><span>Multiple FlutterFlow projects</span></li>
+          </ul>
+          <div class="plan-foot"><button type="button" class="plan-action is-primary" data-plan-action="power" data-od-id="upgrade-power">Upgrade to Power</button></div>
+        </article>
+        </div>
+        <p class="account-status" role="status" data-account-status=""></p>
+        <p class="account-note">Subscription changes are not connected in this preview.</p>
+        <button type="button" class="account-action is-secondary" data-account-close="" data-od-id="plan-done">Close</button>
+      </dialog>
+      <dialog id="billing-dialog" class="account-dialog" aria-labelledby="billing-title" data-od-id="billing-modal">
+        <button type="button" class="account-close" data-account-close="" aria-label="Close billing" data-od-id="close-billing">×</button>
+        <p class="account-kicker">Your workspace</p><h2 id="billing-title" data-od-id="billing-title">Billing</h2>
+        <p class="account-description">Manage the subscription and invoices in Stripe.</p>
+        <dl class="account-details">
+          <div><dt>Current plan</dt><dd>Pro · A$11 / mo</dd></div>
+          <div><dt>Payment method</dt><dd>Card held by Stripe</dd></div>
+          <div><dt>Status</dt><dd>Not connected</dd></div>
+        </dl>
+        <p class="account-note">Invoices and payment methods are held by Stripe. Nothing here is connected in this preview.</p>
+        <p class="account-status" role="status" data-account-status=""></p>
+        <button type="button" class="account-action" id="open-billing" data-od-id="open-stripe-portal">Open Stripe portal</button>
+      </dialog>
+      <style>
+        .account > button { position:relative; appearance:none; font-family:inherit; cursor:pointer; transition:color var(--t-fast) var(--ease),background var(--t-fast) var(--ease),box-shadow var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+        .account > .avatar { padding:0; }
+        .account > button::before { content:""; position:absolute; width:100%; height:100%; min-width:44px; min-height:44px; left:50%; top:50%; transform:translate(-50%,-50%); }
+        .account > button:hover { color:var(--fg); background:var(--surface); box-shadow:var(--shadow-composer); }
+        .account > button:active { transform:scale(.96); }
+        .account > button:focus-visible, .account .account-dialog :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+        .account .account-dialog { position:fixed; inset:0; margin:auto; width:min(420px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); padding:32px; border:2px solid oklch(from var(--accent) l c h / .85); border-radius:var(--radius-xl); background:var(--surface); color:var(--fg); font-family:var(--font-display); text-align:left; overflow:auto; box-shadow:var(--shadow-composer); }
+        .account .account-dialog::backdrop { background:color-mix(in oklch,var(--fg) 28%,transparent); }
+        .account .account-close { position:absolute; right:12px; top:12px; width:44px; height:44px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; color:var(--fg); font:26px/1 var(--font-display); cursor:pointer; transition:background var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+        .account .account-close:hover { background:color-mix(in oklch,var(--fg) 7%,var(--surface)); }
+        .account .account-close:active { transform:scale(.94); }
+        .account .account-kicker { margin:0 44px 8px 0; font:11px/1.5 var(--font-mono); letter-spacing:.05em; color:var(--muted); }
+        .account .account-dialog h2 { margin:0 32px 28px 0; font:560 28px/1.2 var(--font-display); letter-spacing:-.025em; }
+        .account .account-balance { display:flex; flex-direction:column; gap:6px; margin-bottom:24px; }
+        .account .account-balance strong { font:500 64px/1 var(--font-display); letter-spacing:-.04em; }
+        .account .account-balance span, .account .account-description { font-size:15px; line-height:1.5; }
+        .account .account-description { margin:0 0 18px; }
+        .account .account-note { font-size:13px; line-height:1.5; color:var(--muted); margin:16px 0; }
+        .account .account-action { display:block; width:100%; min-height:44px; margin-top:24px; padding:11px 16px; border:1px solid var(--fg); border-radius:12px; background:var(--fg); color:var(--surface); font:500 15px/1.4 var(--font-display); cursor:pointer; transition:background var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+        .account .account-action:hover { background:color-mix(in oklch,var(--fg) 92%,black); color:var(--surface); }
+        .account .account-action:active { transform:scale(.98); }
+        .account .account-plan { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:22px 0; border-block:1px solid var(--border); }
+        .account .account-plan strong { font-size:32px; font-weight:560; }.account .account-plan span { font-size:13px; color:var(--muted); }
+        .account .account-details { margin:20px 0; font-size:14px; }.account .account-details > div { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; margin-top:16px; }.account .account-details dt { color:var(--muted); }.account .account-details dd { margin:0; }
+        .account .account-label { display:block; margin-bottom:8px; font-size:14px; }.account .account-input { width:100%; min-height:46px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface); color:var(--fg); font:16px/1.5 var(--font-display); }
+        .account .account-input::placeholder { color:var(--muted); }.account .account-status { min-height:20px; font-size:13px; line-height:1.5; }
+        /* Plan card, ported from the system's plans surface into the modal. The current-plan foot
+           is the system's .current chip rather than a second navy fill — the dialog's Done button
+           is already the one primary in this viewport. */
+        .account .plan-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; align-items:start; }
+        .account #plan-dialog { width:min(1000px,calc(100vw - 32px)); }
+        .account .plan-card { padding:22px; border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--surface); display:flex; flex-direction:column; }
+        .account .plan-card.is-popular { border-color:oklch(from var(--accent) l c h / 0.55); box-shadow:0 0 0 3px var(--accent-soft), var(--shadow-sm); }
+        .account .plan-name { display:flex; align-items:center; gap:10px; font-size:15px; font-weight:620; }
+        .account .plan-pop { display:inline-flex; align-items:center; height:21px; padding:0 8px; border-radius:6px; background:var(--accent); color:var(--surface); font-family:var(--font-mono); font-size:10px; font-weight:500; letter-spacing:0.08em; text-transform:uppercase; }
+        .account .plan-price { display:flex; align-items:baseline; gap:6px; margin:18px 0 6px; }
+        .account .plan-amount { font-size:46px; font-weight:560; letter-spacing:-0.04em; line-height:1; font-variant-numeric:tabular-nums; }
+        .account .plan-per { font-size:14px; color:var(--muted); }
+        .account .plan-billed { font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2); }
+        .account .plan-balance { margin-top:8px; font-family:var(--font-mono); font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+        .account .plan-balance strong { color:var(--fg); font-weight:500; }
+        .account .plan-list { list-style:none; margin:18px 0 22px; display:grid; gap:11px; }
+        .account .plan-list li { display:grid; grid-template-columns:16px 1fr; gap:9px; font-size:13.5px; line-height:1.5; color:var(--muted); }
+        .account .plan-list svg { width:16px; height:16px; margin-top:1px; color:var(--ok); }
+        .account .plan-list strong { color:var(--fg); font-weight:560; }
+        .account .plan-foot { margin-top:auto; }
+        .account .plan-action { display:inline-flex; align-items:center; justify-content:center; width:100%; min-height:44px; padding:0 14px; border:1px solid var(--border); border-radius:var(--radius-control); background:var(--surface); color:var(--fg); font-size:14px; font-weight:550; cursor:pointer; transition:background-color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease),transform var(--t-fast) var(--ease); }
+        .account .plan-action:hover { background:var(--fill-hover); border-color:var(--fg); }
+        .account .plan-action:active { transform:scale(.985); }
+        .account .plan-action.is-primary { border-color:var(--fg); background:var(--fg); color:var(--surface); }
+        .account .plan-action.is-primary:hover { background:color-mix(in oklch,var(--fg) 92%,black); border-color:color-mix(in oklch,var(--fg) 92%,black); }
+        .account .account-action.is-secondary { border-color:var(--border); background:var(--surface); color:var(--fg); }
+        .account .account-action.is-secondary:hover { background:var(--fill-hover); border-color:var(--fg); color:var(--fg); }
+        @media (max-width:920px) { .account .plan-grid { grid-template-columns:1fr; } }
+        @media (max-width:480px) { .account .account-dialog { padding:28px 24px; border-radius:20px; } }
+      </style>
+      <script>
+        (function () {
+          var root = document.querySelector('[data-od-id="account"]');
+          var triggers = Array.from(root.querySelectorAll('button[aria-controls]'));
+          var active = null, origin = null, motion = null, closing = false;
+          var reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+          function originFrame(dialog, button) {
+            var a = button.getBoundingClientRect(), b = dialog.getBoundingClientRect();
+            return { transform:'translate('+(a.left+a.width/2-b.left-b.width/2)+'px,'+(a.top+a.height/2-b.top-b.height/2)+'px) scale('+Math.max(.06,a.width/b.width)+','+Math.max(.06,a.height/b.height)+')', opacity:0, borderRadius:'24px' };
+          }
+          function animate(dialog, button, reverse) {
+            var frames = [originFrame(dialog,button), {transform:'translate(0,0) scale(1,1)',opacity:1,borderRadius:getComputedStyle(dialog).borderRadius}];
+            if(reverse) frames.reverse();
+            return dialog.animate(frames,{duration:reduce.matches?0:(reverse?220:360),easing:'cubic-bezier(0.2,0,0,1)',fill:'both'});
+          }
+          function finishClose() {
+            if (!active) return;
+            var button=origin, dialog=active; active=null; origin=null; closing=false;
+            if(motion) { motion.cancel(); motion=null; }
+            dialog.close(); button.setAttribute('aria-expanded','false'); button.focus({preventScroll:true});
+          }
+          function close() {
+            if(!active || closing) return; closing=true;
+            if(motion) motion.cancel();
+            motion=animate(active,origin,true); motion.onfinish=finishClose;
+          }
+          triggers.forEach(function(button) {
+            button.addEventListener('click',function() {
+              if(active) return;
+              origin=button; active=document.getElementById(button.getAttribute('aria-controls'));
+              root.querySelectorAll('[data-account-balance]').forEach(function(el) { el.textContent=root.querySelector('[data-od-id="credits"]').textContent.trim(); });
+              active.showModal(); button.setAttribute('aria-expanded','true');
+              motion=animate(active,button,false);
+              motion.onfinish=function() { if(motion && !closing) { motion.cancel(); motion=null; } };
+            });
+          });
+          root.querySelectorAll('.account-dialog').forEach(function(dialog) {
+            dialog.addEventListener('cancel',function(event) { event.preventDefault(); close(); });
+            dialog.addEventListener('click',function(event) { if(event.target!==dialog) return; var r=dialog.getBoundingClientRect(); if(event.clientX<r.left || event.clientX>r.right || event.clientY<r.top || event.clientY>r.bottom) close(); });
+            dialog.addEventListener('keydown',function(event) { if(event.key!=='Tab') return; var controls=Array.from(dialog.querySelectorAll('button,input')).filter(function(el){return !el.disabled;}); var first=controls[0],last=controls[controls.length-1]; if(event.shiftKey && document.activeElement===first) {event.preventDefault();last.focus();} else if(!event.shiftKey && document.activeElement===last) {event.preventDefault();first.focus();} });
+          });
+          root.querySelectorAll('[data-account-close]').forEach(function(button) { button.addEventListener('click',close); });
+          window.addEventListener('resize',function() { if(!active) return; if(closing) finishClose(); else if(motion) {motion.cancel();motion=null;} });
+          reduce.addEventListener('change',function() { if(!reduce.matches || !active) return; if(closing) finishClose(); else if(motion) {motion.cancel();motion=null;} });
+          // The account modal is a billing surface, not a name form: its action hands off to Stripe,
+          // which is where subscriptions and invoices actually live. Nothing is connected here, so
+          // the click says so in the dialog's own status line rather than pretending to open it.
+          var billingStatus=root.querySelector('#billing-dialog [data-account-status]'), billingOpen=root.querySelector('#open-billing');
+          if(billingStatus && billingOpen) billingOpen.addEventListener('click',function(){ billingStatus.textContent='Stripe portal is not connected in this preview.'; });
+          // Plan chooser: each card's foot is a real action. "Manage in Stripe" genuinely moves the
+          // user to the billing surface — routed through the avatar trigger so the dialog
+          // bookkeeping (escape, backdrop, focus restore) stays intact — and the two plan changes
+          // say plainly that nothing changes here.
+          var planStatus=root.querySelector('#plan-dialog [data-account-status]'), planBilling=root.querySelector('#plan-billing'), avatarTrigger=root.querySelector('[data-od-id="avatar"]');
+          if(planBilling) planBilling.addEventListener('click',function(){
+            if(planStatus) planStatus.textContent='Opening billing…';
+            close();
+            // Wait for the close to settle rather than guessing at its duration, then hand over.
+            var tries=0;
+            (function openBilling(){
+              if(active){ if(++tries<40) window.setTimeout(openBilling,40); return; }
+              if(avatarTrigger) avatarTrigger.click();
+            })();
+          });
+          root.querySelectorAll('[data-plan-action]').forEach(function(button){
+            button.addEventListener('click',function(){
+              if(planStatus) planStatus.textContent=(button.getAttribute('data-plan-action')==='power'?'Upgrades':'Plan changes')+' are not connected in this preview.';
+            });
+          });
+        })();
+      </script>
+    </div>
+  </header>
+
+  <main class="hero" data-od-id="hero">
+    <h1 class="headline reveal" data-od-id="headline">FlutterFlow custom code.<br><span class="headline-sub">(minus the <em>code</em>)</span></h1>
+    <p class="sub reveal" data-od-id="subheading">Custom widgets and actions, expertly crafted, fully reviewed and 
+ready to deploy to your project in one click.</p>
+
+    <div class="composer" data-od-id="prompt-composer">
+      <label class="sr-only" for="prompt">Describe the widget or action you need</label>
+      <div class="ghost" aria-hidden="true"><span class="typed"></span><span class="suggest"></span></div>
+      <textarea id="prompt" class="field" rows="3" spellcheck="false" aria-describedby="suggest-status" placeholder="Describe the widget or action you need">A circular progress gauge with a gradient stroke</textarea>
+      <span id="suggest-status" class="sr-only" aria-live="polite"></span>
+      <button class="tab-hint" type="button" data-od-id="accept-suggestion" tabindex="-1" hidden=""><kbd aria-hidden="true">Tab</kbd><span class="tab-hint-label">to accept</span></button>
+      <div class="tools">
+        <button class="icon-btn" type="button" aria-label="Attach reference image" data-od-id="attach-image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="4" width="18" height="16" rx="3"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 9"></path>
+          </svg>
+        </button>
+        <button class="icon-btn" type="button" aria-label="Generation settings" data-od-id="settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle>
+          </svg>
+        </button>
+      </div>
+      <button class="send" type="button" aria-label="Generate" data-od-id="send">
+        <svg class="send-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7"></path>
+        </svg>
+        <svg class="send-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 3a9 9 0 0 1 9 9"></path>
+        </svg>
+      </button>
+    </div>
+
+    <div class="chips reveal" data-od-id="example-chips">
+      <button class="chip" type="button" data-od-id="chip-rating-bar" data-prompt="An animated 5-star rating bar with a fill-on-drag gesture">Animated rating bar</button>
+      <button class="chip" type="button" data-od-id="chip-swipe-delete" data-prompt="Implement the 'pdf' pub.dev package">Implement the 'pdf' pub.dev package</button>
+      <button class="chip" type="button" data-od-id="chip-signature-pad" data-prompt="A signature pad that exports a transparent PNG">Signature pad</button>
+    </div>
+
+    
+  </main>
+
+  <section class="walkthrough-workspace" id="walkthrough-workspace" role="main" data-od-id="walkthrough-workspace" hidden="">
+    <div class="walkthrough-layout">
+      <aside class="walkthrough-sidebar" data-od-id="walkthrough-sidebar">
+        <p class="walkthrough-kicker">Your prompt</p>
+        <p class="walkthrough-prompt" id="submitted-prompt"></p>
+        <button class="walkthrough-button" id="edit-prompt" data-od-id="edit-prompt" type="button">Edit prompt</button>
+        
+        
+      </aside>
+      <div class="walkthrough-main">
+        <div class="pipeline-view" id="pipeline-view" data-od-id="pipeline-progress">
+          <div class="pipeline-glyph logo-loop" aria-hidden="true">
+            <span class="loop-shadow"></span>
+            <span class="loop-mark">
+              <span class="loop-halo" style="font-weight: 800;"></span>
+              <span class="loop-piece loop-piece-a"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z"></path></svg></span>
+              <span class="loop-piece loop-piece-b"><svg viewBox="0 0 44 44" fill="currentColor" focusable="false"><path d="M25 5H17C9.82 5 4 10.82 4 18S9.82 31 17 31H24V25H17A7 7 0 0 1 17 11H25Z" transform="rotate(180 22 22)"></path></svg></span>
+            </span>
+          </div>
+          <h3 id="pipeline-title" data-od-id="pipeline-title">Understanding your prompt</h3>
+          <p id="pipeline-description">Turning your idea into a clear FlutterFlow specification.</p>
+          <div class="pipeline-track" aria-hidden="true"><div class="pipeline-fill" id="pipeline-fill"></div></div>
+          <div class="pipeline-meta"><span id="pipeline-count">Step 1 of 3</span></div>
+        </div>
+        <div class="results-view" id="results-view" data-od-id="generation-results" hidden="">
+          
+          <div class="result-tabs" role="tablist" aria-label="Generation results">
+            <button type="button" class="result-tab result-tab-summary" id="summary-tab" role="tab" aria-selected="true" aria-controls="summary-panel" data-od-id="summary-tab">
+              <svg class="result-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5h6M9 9h6M9 13h4"></path><path d="M7 3h10a2 2 0 0 1 2 2v14H5V5a2 2 0 0 1 2-2Z"></path></svg>
+              <span>Summary</span>
+            </button>
+            <span class="result-tab-divider" aria-hidden="true"></span>
+            <button type="button" class="result-tab result-tab-file" id="code-tab" role="tab" aria-selected="false" aria-controls="code-panel" tabindex="-1" data-od-id="code-tab">
+              <span class="result-tab-status" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg></span>
+              <span class="result-tab-text"><span class="result-tab-name">circular_progress_gauge</span><span class="result-tab-meta">Custom Widget</span></span>
+            </button>
+          </div>
+          <div class="result-summary" id="summary-panel" role="tabpanel" aria-labelledby="summary-tab">
+            <div class="summary-copy">
+              <h4 data-od-id="summary-title" style="transform: translate(67px, -304px);">Your gauge, ready to inspect.</h4>
+              <p>This example combines a gradient progress arc with an animated percentage label. Width, height and progress are exposed as FlutterFlow widget parameters.</p>
+              <dl><div><dt>Artifact</dt><dd>Custom Widget</dd></div><div><dt>Parameters</dt><dd>width · height · progress</dd></div><div><dt>Manual Steps Required</dt><dd><ol><li>Add the width, height and progress parameters in FlutterFlow.</li><li>Paste the Dart into the widget as CircularProgressGauge.</li><li>Preview it in FlutterFlow and confirm the gauge fills.</li></ol></dd></div><div><dt>Review</dt><dd>Illustrative, not a live audit</dd></div></dl>
+            </div>
+            <div class="review-score-column">
+              <aside class="review-score review-score-pass" data-od-id="review-score" aria-label="Review score 100 out of 100">
+                <span class="review-score-label">Score</span>
+                <strong>100</strong>
+                <span class="review-score-total">out of 100</span>
+                <span class="review-score-status">Strong</span>
+              </aside>
+              <div class="review-score-feedback">
+                <span>Is the generated code correct?</span>
+                <div class="review-score-feedback-controls">
+                  <button class="feedback-btn" type="button" data-feedback="up" aria-pressed="false" aria-label="Yes, the generated code is correct" title="Yes">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"></path></svg>
+                  </button>
+                  <button class="feedback-btn" type="button" data-feedback="down" aria-pressed="false" aria-label="No, the generated code is not correct" title="No">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"></path></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="result-split" id="code-panel" role="tabpanel" aria-labelledby="code-tab" hidden="">
+            <div class="code-panel" data-od-id="generated-code">
+              <div class="code-toolbar"><span>Generated Dart Code</span><button class="walkthrough-button quiet" type="button" id="copy-code" data-od-id="copy-code">Copy</button></div>
+              <pre class="result-code" tabindex="0" aria-label="Example Dart source"><code id="dart-source"></code></pre>
+            </div>
+            <aside class="file-review" data-od-id="file-review">
+              <h4 data-od-id="review-heading">File Review</h4>
+              <span class="review-verdict">✓ Reviewed · demo</span>
+              <p>A FlutterFlow-compatible widget with a bounded progress value and an animated label.</p>
+              <ul class="review-checks"><li><span aria-hidden="true">✓</span><span>Named width and height parameters</span></li><li><span aria-hidden="true">✓</span><span>Progress clamped between 0 and 1</span></li><li><span aria-hidden="true">✓</span><span>Reduced motion respected</span></li></ul>
+              <p class="review-note">Before deploying: add the widget parameters and test in FlutterFlow preview.</p>
+            </aside>
+          </div>
+          <div class="result-actions">
+            <div class="result-action-buttons">
+              <button type="button" class="action-btn action-btn-deploy" data-od-id="deploy-to-flutterflow"><img class="action-btn-icon" src="assets/flutterflow-icon.svg" alt="" width="18" height="18"> Deploy to FlutterFlow</button>
+              <button type="button" class="action-btn action-btn-errors" data-od-id="fix-build-errors"><svg class="action-btn-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.538-1.333-3.308 0L3.732 16c-.77 1.333.192 3 1.732 3z"></path></svg> Add FlutterFlow Build Errors &amp; Regenerate</button>
+              <button type="button" class="action-btn action-btn-refine" data-od-id="refine-regenerate"><svg class="action-btn-glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> Refine &amp; Regenerate</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+</div>
+</div>
+
+
+<script>
+(function () {
+  "use strict";
+  var DART_SAMPLE = "// Illustrative walkthrough source. Test in FlutterFlow before use.\nimport 'dart:math' as math;\nimport 'package:flutter/material.dart';\n\nclass CircularProgressGauge extends StatelessWidget {\n  const CircularProgressGauge({\n    super.key,\n    this.width,\n    this.height,\n    this.progress = 0.72,\n  });\n\n  final double? width;\n  final double? height;\n  final double progress;\n\n  @override\n  Widget build(BuildContext context) {\n    final value = progress.isFinite\n        ? progress.clamp(0.0, 1.0).toDouble() : 0.0;\n    final colors = [\n      Theme.of(context).colorScheme.primary,\n      Theme.of(context).colorScheme.secondary,\n    ];\n    return SizedBox(\n      width: width ?? 180,\n      height: height ?? 180,\n      child: TweenAnimationBuilder<double>(\n        tween: Tween<double>(begin: 0, end: value),\n        duration: MediaQuery.disableAnimationsOf(context)\n            ? Duration.zero : const Duration(milliseconds: 400),\n        builder: (context, progress, child) {\n          return Semantics(\n            label: 'Progress',\n            value: '${(progress * 100).round()} percent',\n            child: ExcludeSemantics(\n              child: CustomPaint(\n                painter: _GaugePainter(progress, colors),\n                child: Center(\n                  child: Text('${(progress * 100).round()}%',\n                    style: Theme.of(context).textTheme.headlineMedium),\n                ),\n              ),\n            ),\n          );\n        },\n      ),\n    );\n  }\n}\n\nclass _GaugePainter extends CustomPainter {\n  const _GaugePainter(this.progress, this.colors);\n  final double progress;\n  final List<Color> colors;\n\n  @override\n  void paint(Canvas canvas, Size size) {\n    final radius = math.max(0.0, (size.shortestSide - 12) / 2);\n    final rect = Rect.fromCircle(\n      center: size.center(Offset.zero), radius: radius);\n    final track = Paint()\n      ..color = colors.first.withValues(alpha: 0.12)\n      ..style = PaintingStyle.stroke\n      ..strokeWidth = 10;\n    canvas.drawArc(rect, -math.pi / 2, math.pi * 2, false, track);\n    final arc = Paint()\n      ..shader = SweepGradient(\n        colors: colors,\n        transform: const GradientRotation(-math.pi / 2),\n      ).createShader(rect)\n      ..style = PaintingStyle.stroke\n      ..strokeCap = StrokeCap.round\n      ..strokeWidth = 10;\n    if (progress > 0) {\n      canvas.drawArc(rect, -math.pi / 2,\n        math.pi * 2 * progress, false, arc);\n    }\n  }\n\n  @override\n  bool shouldRepaint(covariant _GaugePainter oldDelegate) =>\n      oldDelegate.progress != progress ||\n      oldDelegate.colors[0] != colors[0] ||\n      oldDelegate.colors[1] != colors[1];\n}\n";
+  var $ = function (selector) { return document.querySelector(selector); };
+  var stage=$(".stage"), hero=$(".hero"), field=$("#prompt"), composer=$(".composer"), send=$(".send");
+  var workspace=$("#walkthrough-workspace"), progress=$("#pipeline-view"), results=$("#results-view");
+  var typed=$(".ghost .typed"), ghost=$(".ghost .suggest"), accept=$(".tab-hint"), status=$("#suggest-status");
+  var caption=$("#walkthrough-caption"), play=$("#play-walkthrough"), replay=$("#replay-walkthrough");
+  // The walkthrough chrome is optional. If a control or the heading is missing from the markup,
+  // fall back to detached nodes so one absent element can never abort the wiring below — that is
+  // exactly what previously killed the chip handlers, the send handler and fit().
+  if(!caption)caption=document.createElement("span");
+  if(!play)play=document.createElement("button");
+  if(!replay)replay=document.createElement("button");
+  var walkTitle=$("#walkthrough-title");
+  var stepNodes=Array.from(document.querySelectorAll(".pipeline-step"));
+  var reduce=window.matchMedia("(prefers-reduced-motion: reduce)");
+  var example="A circular progress gauge with a gradient stroke";
+  var completion=" and an animated percentage label";
+  var suggestion="", active=false, paused=false, instant=false, elapsed=0, previous=0, cursor=0, frame=0, events=[], animations=[], morph=null, morphing=false, chipTimer=null, resultsGhost=null;
+  // One clock coordinates fades, reading holds and progress. Times are milliseconds.
+  // type:73 is 3x the original 220ms per character, so the request lands in ~3.4s.
+  var motionEase="cubic-bezier(0.4,0,0.2,1)", pipelineStart=null;
+  // Prompt phase re-timed around the faster typing: the pipeline now starts at 19s, not 29s.
+  var pace={open:5200,type:73,acceptPress:15000,accept:15600,send:17800,pipeline:19000};
+  // The grey completion waits one second after the last typed character, then streams in word by word.
+  pace.suggest=pace.open+(example.length-1)*pace.type+1000;
+  var mode="idle", lastAccepted="", debounce=null, inflight=null, copyVersion=0;
+  var config=Object.assign({url:"https://api.groq.com/openai/v1/chat/completions",model:"llama-3.1-8b-instant",apiKey:"",debounce:220,minChars:6},window.CCC_COMPLETION||{});
+  function fit() { var w=document.documentElement.clientWidth; stage.style.setProperty("--fit",Math.min(1,w/1920)); if(w<=920)stage.style.removeProperty("--fit"); }
+  function announce(text) { caption.textContent=text; }
+  function sync() { send.disabled=!field.value.trim() || mode==="pipeline"; }
+  function cancelCompletion() { clearTimeout(debounce); if(inflight)inflight.abort(); inflight=null; }
+  function clearSuggestion() { suggestion=""; ghost.textContent=""; typed.textContent=field.value; composer.classList.remove("has-suggest","is-demo-streaming","is-demo-accepted"); accept.hidden=true; accept.tabIndex=-1; status.textContent=""; }
+  function showSuggestion(text, stream) {
+    suggestion=text; typed.textContent=field.value;
+    // has-suggest first: the .suggest container is opacity:0 until then, and the word spans fade inside it.
+    composer.classList.add("has-suggest");
+    if(stream && !reduce.matches) {
+      // The words are appended one at a time by the demo clock, so the blinking caret always
+      // sits at the end of what has actually been generated — and a seek lands on the right word.
+      ghost.textContent="";
+      composer.classList.add("is-demo-streaming");
+    } else {
+      ghost.textContent=text;
+    }
+    accept.hidden=false; accept.tabIndex=0; accept.setAttribute("aria-label","Accept suggestion: "+text.trim()); status.textContent="Suggestion: "+text+". Press Tab to accept.";
+  }
+  function appendSuggestionWord(word) {
+    var span=document.createElement("span");
+    span.textContent=word;
+    ghost.appendChild(span);
+    if(instant || reduce.matches || !span.animate) { span.style.opacity="1"; return; }
+    span.style.opacity="0";
+    var a=span.animate([{opacity:0},{opacity:1}],{duration:240,easing:motionEase,fill:"both"});
+    animations.push(a);
+    a.onfinish=function(){animations=animations.filter(function(x){return x!==a;});};
+  }
+  function acceptSuggestion() { field.value+=suggestion; lastAccepted=field.value; clearSuggestion(); sync(); }
+  var local=[
+    [/gradient stroke\s*$/i,completion], [/gauge\s*$/i," with a gradient stroke and animated fill"],
+    [/rating\s*(bar|widget)?\s*$/i," with half-star support and haptic feedback"],
+    [/list\s*$/i," with swipe-to-delete and an undo snackbar"], [/pad\s*$/i," that exports a transparent PNG"],
+    [/carousel\s*$/i," with parallax cards and page indicators"], [/(button|cta)\s*$/i," with a loading spinner and success state"],
+    [/(chart|graph)\s*$/i," that animates from a Firestore stream"], [/action\s*(that|to)?\s*$/i," uploads an image to Firebase Storage and returns the URL"],
+    [/timer\s*$/i," with pause, resume and a completion callback"], [/map\s*$/i," with clustered markers and a custom info window"],
+    [/^a\s+\w*$/i," widget that"], [/(picker|selector)\s*$/i," with search and multi-select"]
+  ];
+  function requestSuggestion() {
+    cancelCompletion(); var text=field.value;
+    if(mode==="pipeline" || text===lastAccepted || text.trim().length<config.minChars || /[.!?]\s*$/.test(text))return;
+    if(!config.apiKey) { var match=local.find(function(item){return item[0].test(text);}); if(match)showSuggestion(match[1]); return; }
+    var controller=new AbortController(); inflight=controller;
+    fetch(config.url,{method:"POST",signal:controller.signal,headers:{"Content-Type":"application/json","Authorization":"Bearer "+config.apiKey},
+      body:JSON.stringify({model:config.model,temperature:.3,max_tokens:24,stop:["\n"],messages:[
+        {role:"system",content:"Complete this FlutterFlow custom widget or action request. Return only a 3 to 12 word continuation, or an empty string if complete."},
+        {role:"user",content:text}]})})
+      .then(function(r){return r.ok?r.json():null;}).then(function(data){
+        if(inflight!==controller)return; inflight=null;
+        var content=data&&data.choices&&data.choices[0]&&data.choices[0].message;
+        var suffix=content?String(content.content||"").replace(/^[\"'\s]+|[\"'\s.]+$/g,""):"";
+        if(suffix&&field.value===text&&mode==="manual")showSuggestion((/\s$/.test(text)?"":" ")+suffix);
+      }).catch(function(){if(inflight===controller)inflight=null;});
+  }
+  function enter(element, distance, duration) {
+    if(reduce.matches || !element.animate)return null;
+    var animation=element.animate([{opacity:0,transform:"translateY("+distance+"px)"},{opacity:1,transform:"translateY(0)"}],{duration:instant?0:(duration||1000),easing:motionEase});
+    animations.push(animation);
+    animation.onfinish=function(){animations=animations.filter(function(a){return a!==animation;});};
+    return animation;
+  }
+  // The panel's elements rise in on the same keyframes, duration and easing as the first-load
+  // reveal, staggered down the box in reading order. The delay rides on an inline style, and the
+  // class is removed then forced back on so a replay restarts it from the top.
+  var panelItems=null;
+  function panelNodes() {
+    if(!panelItems){
+      panelItems=[$(".walkthrough-sidebar .walkthrough-kicker"),$("#submitted-prompt"),$("#edit-prompt"),
+        $(".pipeline-glyph"),$("#pipeline-title"),$("#pipeline-description"),$(".pipeline-track"),$(".pipeline-meta")].filter(Boolean);
+    }
+    return panelItems;
+  }
+  // The result replaces the steps in the same box, so it arrives the same way: the same staggered
+  // rise, over the composition that is actually on screen (the Summary tab opens selected, and the
+  // code panel has its own write-in reveal for when that tab is chosen).
+  var resultItems=null;
+  function resultNodes() {
+    if(!resultItems){
+      resultItems=[$(".result-tabs"),$(".summary-copy h4"),$(".summary-copy p"),$(".summary-copy dl"),
+        $(".review-score-column"),$(".result-actions")].filter(Boolean);
+    }
+    return resultItems;
+  }
+  function runReveal(nodes) {
+    if(reduce.matches || instant || !nodes.length)return;
+    nodes.forEach(function(node,index){ node.classList.remove("panel-in"); node.style.animationDelay=(index*80)+"ms"; });
+    void document.body.offsetWidth;   // force a reflow so a replay restarts the animation
+    nodes.forEach(function(node){ node.classList.add("panel-in"); });
+  }
+  function clearReveal(nodes) {
+    nodes.forEach(function(node){ node.classList.remove("panel-in"); node.style.animationDelay=""; });
+  }
+  function revealPanel() { runReveal(panelNodes()); }
+  function revealResults() { runReveal(resultNodes()); }
+  function clearPanelReveal() { clearReveal(panelNodes()); clearReveal(resultNodes()); }
+  // The compact composer expands into the full surface: one scale-up instead of a second crossfade.
+  function enterExpand(element, duration, delay) {
+    if(reduce.matches || !element.animate)return null;
+    var animation=element.animate([{opacity:0,transform:"scale(.965) translateY(10px)"},{opacity:1,transform:"none"}],{duration:instant?0:(duration||900),delay:instant?0:(delay||0),easing:motionEase,fill:"both"});
+    animations.push(animation);
+    animation.onfinish=function(){animations=animations.filter(function(a){return a!==animation;});};
+    return animation;
+  }
+  // Exit is deliberately brief; opacity only, so the hero's centering transform stays intact.
+  function leave(element, duration) {
+    if(reduce.matches || !element.animate)return null;
+    var animation=element.animate([{opacity:1},{opacity:0}],{duration:instant?0:(duration||460),easing:motionEase,fill:"forwards"});
+    animations.push(animation);
+    return animation;
+  }
+  // The slide transform on .stage means the composer's rect is in screen space; the card is
+  // fixed to the body, so the same screen-space rect maps across without unscaling.
+  function fitScale() {
+    var value=parseFloat(getComputedStyle(stage).getPropertyValue("--fit"));
+    return isFinite(value)&&value>0?value:1;
+  }
+  function startMorph() {
+    if(reduce.matches || instant || morph || !document.body)return;
+    var from=composer.getBoundingClientRect();
+    // Measure the destination panel without revealing it; hidden elements have no rect.
+    workspace.hidden=false; workspace.style.visibility="hidden";
+    var to=$(".walkthrough-layout").getBoundingClientRect();
+    if(!from.width || !from.height || !to.width || !to.height){ workspace.style.visibility=""; workspace.hidden=true; return; }
+    var fit=fitScale();
+    var ghost=document.createElement("div");
+    ghost.className="composer-morph"; ghost.setAttribute("aria-hidden","true");
+    ghost.style.cssText="left:"+to.left+"px;top:"+to.top+"px;width:"+to.width+"px;height:"+to.height+"px;border-width:"+(2*fit)+"px;border-radius:"+(20*fit)+"px;opacity:0;";
+    document.body.appendChild(ghost);
+    var dx=(from.left+from.width/2)-(to.left+to.width/2);
+    var dy=(from.top+from.height/2)-(to.top+to.height/2);
+    var sx=from.width/to.width, sy=from.height/to.height;
+    var base="translate("+dx+"px,"+dy+"px) scale("+sx+","+sy+")";
+    morph=ghost; morphing=true;
+    if(!ghost.animate){ ghost.style.transform="none"; ghost.style.opacity="1"; return; }
+    // 0–14%: the card eases in as the composer fades, so the busy spinner still reads.
+    // 14–28%: the anticipatory shrink. 28–100%: one longer, softer growth that settles with a little weight.
+    var animation=ghost.animate([
+      {transform:base, opacity:0, offset:0, easing:"cubic-bezier(.2,0,0,1)"},
+      {transform:base, opacity:1, offset:.14, easing:"cubic-bezier(.4,0,.2,1)"},
+      {transform:"translate("+dx+"px,"+dy+"px) scale("+(sx*.93)+","+(sy*.93)+")", opacity:1, offset:.28, easing:"cubic-bezier(.32,1.38,.5,1)"},
+      {transform:"translate(0px,0px) scale(1,1)", opacity:1, offset:1}
+    ],{duration:1120,fill:"both"});
+    animations.push(animation);
+  }
+  // The card and the panel are the same surface at the same rect, so this is a swap, not a
+  // crossfade. Crossfading them left ~220ms where both were part-transparent and the page showed
+  // through the middle of the box — a dark wash that then "faded in again". The card is dropped
+  // in one frame and the panel's own contents rise in via revealPanel().
+  function settleMorph() {
+    if(!morph)return;
+    var ghost=morph; morph=null; morphing=false;
+    if(ghost.parentNode)ghost.parentNode.removeChild(ghost);
+    workspace.style.visibility="";
+    revealPanel();
+  }
+  function clearMorph() {
+    if(!morph)return;
+    if(morph.parentNode)morph.parentNode.removeChild(morph);
+    morph=null; morphing=false;
+    // Aborted before the hand-off: the workspace was only un-hidden to be measured.
+    if(mode!=="pipeline"&&mode!=="results"){ workspace.hidden=true; workspace.style.visibility=""; }
+  }
+  function clearResultsGhost() {
+    if(resultsGhost){ if(resultsGhost.parentNode)resultsGhost.parentNode.removeChild(resultsGhost); resultsGhost=null; }
+  }
+  // The same outline morph as the composer hand-off, here growing the panel into the full-screen result.
+  function growOutlineTo(from, to, done) {
+    if(reduce.matches || instant || !document.body || !from.width || !from.height || !to.width || !to.height)return null;
+    var fit=fitScale();
+    var ghost=document.createElement("div");
+    ghost.className="composer-morph"; ghost.setAttribute("aria-hidden","true");
+    ghost.style.cssText="left:"+to.left+"px;top:"+to.top+"px;width:"+to.width+"px;height:"+to.height+"px;border-width:"+(2*fit)+"px;border-radius:"+(20*fit)+"px;opacity:0;";
+    document.body.appendChild(ghost);
+    var dx=(from.left+from.width/2)-(to.left+to.width/2);
+    var dy=(from.top+from.height/2)-(to.top+to.height/2);
+    var sx=from.width/to.width, sy=from.height/to.height;
+    var base="translate("+dx+"px,"+dy+"px) scale("+sx+","+sy+")";
+    if(!ghost.animate){ ghost.style.transform="none"; ghost.style.opacity="1"; return ghost; }
+    var animation=ghost.animate([
+      {transform:base, opacity:0, offset:0, easing:"cubic-bezier(.2,0,0,1)"},
+      {transform:base, opacity:1, offset:.14, easing:"cubic-bezier(.4,0,.2,1)"},
+      {transform:"translate("+dx+"px,"+dy+"px) scale("+(sx*.93)+","+(sy*.93)+")", opacity:1, offset:.28, easing:"cubic-bezier(.32,1.38,.5,1)"},
+      {transform:"translate(0px,0px) scale(1,1)", opacity:1, offset:1}
+    ],{duration:1120,fill:"both"});
+    animations.push(animation);
+    animation.onfinish=function(){
+      animations=animations.filter(function(a){return a!==animation;});
+      if(ghost!==resultsGhost)return;
+      if(done)done();
+      var out=ghost.animate([{opacity:1},{opacity:0}],{duration:260,easing:motionEase,fill:"forwards"});
+      animations.push(out);
+      out.onfinish=function(){animations=animations.filter(function(a){return a!==out;});if(ghost.parentNode)ghost.parentNode.removeChild(ghost);if(resultsGhost===ghost)resultsGhost=null;};
+    };
+    return ghost;
+  }
+  // The generated source reads as written, not dumped: the Dart sample is tokenised into real
+  // syntax classes and each line lands with a short accent wash. Both the colour map and the
+  // reveal are scoped to .result-code, and copying still yields plain text.
+  var codeRevealPending=true, codeRevealTimer=null;
+  var dartToken=/\/\/[^\n]*|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|@\w+|\b\d+(?:\.\d+)?\b|\b_?[A-Z][A-Za-z0-9_]*\b|\b(?:import|export|as|show|hide|class|extends|implements|with|mixin|enum|const|final|var|late|static|super|this|new|return|if|else|for|while|do|switch|case|break|continue|void|bool|int|double|num|dynamic|true|false|null|required|covariant|operator|get|set|factory|abstract|async|await|yield|is|in|when)\b/g;
+  function escapeCode(text) { return text.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  function highlightDart(source) {
+    return source.split("\n").map(function(line){
+      var html="", last=0, match; dartToken.lastIndex=0;
+      while((match=dartToken.exec(line))){
+        var token=match[0], cls;
+        if(token.slice(0,2)==="//")cls="tok-comment";
+        else if(token.charAt(0)==="'"||token.charAt(0)==='"')cls="tok-string";
+        else if(token.charAt(0)==="@")cls="tok-meta";
+        else if(/^\d/.test(token))cls="tok-number";
+        else if(/^_?[A-Z]/.test(token))cls="tok-type";
+        else cls="tok-keyword";
+        html+=escapeCode(line.slice(last,match.index))+'<span class="'+cls+'">'+escapeCode(token)+"</span>";
+        last=match.index+token.length;
+      }
+      return '<span class="code-line">'+html+escapeCode(line.slice(last))+"</span>";
+    }).join("");
+  }
+  // Copy must not see the highlight markup, so reconstruct the plain source from the line nodes.
+  function codeText() {
+    var root=$("#dart-source");
+    if(!root)return DART_SAMPLE;
+    var lines=root.querySelectorAll(".code-line");
+    if(!lines.length)return root.textContent||DART_SAMPLE;
+    return Array.prototype.map.call(lines,function(line){return line.textContent;}).join("\n");
+  }
+  function codeIsVisible() { var panel=$("#code-panel"); return !results.hidden && !!panel && !panel.hidden; }
+  function revealCode() {
+    var root=$("#dart-source");
+    if(!root||!codeRevealPending||!codeIsVisible())return;
+    codeRevealPending=false;
+    var lines=root.querySelectorAll(".code-line");
+    if(!lines.length)return;
+    clearTimeout(codeRevealTimer); root.classList.remove("is-writing");
+    if(reduce.matches||instant){
+      Array.prototype.forEach.call(lines,function(line){line.classList.remove("is-in");line.style.removeProperty("--d");});
+      return;
+    }
+    void root.offsetWidth;
+    root.classList.add("is-writing");
+    Array.prototype.forEach.call(lines,function(line,index){line.style.setProperty("--d",(index*10)+"ms");line.classList.add("is-in");});
+    codeRevealTimer=setTimeout(function(){
+      root.classList.remove("is-writing");
+      Array.prototype.forEach.call(lines,function(line){line.classList.remove("is-in");line.style.removeProperty("--d");});
+      codeRevealTimer=null;
+    },520+lines.length*10+80);
+  }
+  function clearCodeReveal() {
+    clearTimeout(codeRevealTimer); codeRevealTimer=null;
+    var root=$("#dart-source"); if(!root)return;
+    root.classList.remove("is-writing");
+    Array.prototype.forEach.call(root.querySelectorAll(".code-line"),function(line){line.classList.remove("is-in");line.style.removeProperty("--d");});
+  }
+  function stop() { active=false; paused=false; cancelAnimationFrame(frame); animations.forEach(function(a){a.cancel();}); animations=[]; clearMorph(); clearResultsGhost(); clearCodeReveal(); cancelChipTyping(); cancelCompletion(); composer.classList.remove("is-busy","is-demo-typing","is-demo-streaming","is-demo-accepted","is-pointer-focus"); send.classList.remove("is-busy","is-demo-pressed"); accept.querySelector("kbd").classList.remove("is-pressed"); stage.classList.remove("walkthrough-paused"); play.disabled=false; }
+  function reset() {
+    stop(); pipelineStart=null; mode="idle"; hero.hidden=false; workspace.hidden=true; workspace.style.visibility=""; workspace.classList.remove("is-results"); progress.hidden=false; results.hidden=true;
+    field.readOnly=false; field.value=""; field.placeholder="Describe the widget or action you need";
+    lastAccepted=""; clearSuggestion(); clearChipSelection(); send.setAttribute("aria-label","Generate example walkthrough"); sync();
+    stepNodes.forEach(function(node,i){node.classList.remove("is-active","is-done");node.removeAttribute("aria-current");node.querySelector(".pipeline-number").textContent=i+1;node.querySelector("small").textContent="Waiting";});
+    $(".pipeline-track").style.setProperty("--p","0%"); if(walkTitle)walkTitle.textContent="A little idea. Taking shape.";
+    chooseTab("summary",false); codeRevealPending=true; clearCodeReveal(); clearPanelReveal(); $("#copy-code").textContent="Copy"; copyVersion++;
+  }
+  function takeOver() {
+    if(mode==="manual")return;
+    stop(); mode="manual"; field.readOnly=false; clearSuggestion(); sync();
+    play.textContent="Watch demo"; play.setAttribute("aria-label","Watch example walkthrough");
+    announce("Your prompt. Send to preview the workflow.");
+  }
+  function beginPipeline() {
+    cancelCompletion(); mode="pipeline"; clearSuggestion(); composer.classList.remove("is-demo-typing","is-demo-streaming","is-demo-accepted","is-busy"); send.classList.remove("is-busy"); field.readOnly=true; sync();
+    $("#submitted-prompt").textContent=field.value; hero.hidden=true; workspace.hidden=false;
+    // Move focus only if an explicit user action left it inside the hidden composer.
+    if(hero.contains(document.activeElement))$("#edit-prompt").focus({preventScroll:true});
+    setStep(0);
+    // On the morph path the card is already growing into the panel; its content fades in when it lands.
+    if(!morphing){ enterExpand($(".walkthrough-layout"),900); revealPanel(); }
+  }
+  var stageCopy=[
+    ["Understanding your prompt","Turning your idea into a clear FlutterFlow specification.","Prompt Architect is shaping the request."],
+    ["Writing your custom widget","Building the Dart source, widget parameters and animation.","Code Generator is writing the Dart code."],
+    ["Reviewing the details","Checking the generated code and preparing the file review.","Code Review is checking the example."]
+  ];
+  function setStep(index) {
+    stepNodes.forEach(function(node,i){
+      node.classList.toggle("is-active",i===index);node.classList.toggle("is-done",i<index);
+      if(i===index)node.setAttribute("aria-current","step");else node.removeAttribute("aria-current");
+      node.querySelector(".pipeline-number").textContent=i<index?"✓":i+1;
+      node.querySelector("small").textContent=i<index?"Complete":i===index?"In progress":"Waiting";
+    });
+    $("#pipeline-title").textContent=stageCopy[index][0]; $("#pipeline-description").textContent=stageCopy[index][1];
+    $("#pipeline-count").textContent="Step "+(index+1)+" of 3";
+    if(reduce.matches)$(".pipeline-track").style.setProperty("--p",(((index+1)/3)*100)+"%");
+    announce(stageCopy[index][2]);
+    // Reveal title and supporting copy together, after the previous copy fades.
+    if(index>0){enter($("#pipeline-title"),0);enter($("#pipeline-description"),0);}
+  }
+  function showResults(withFade) {
+    mode="results"; results.hidden=false;
+    if(walkTitle)walkTitle.textContent="Your idea. Now in code.";
+    stepNodes.forEach(function(node){node.classList.remove("is-active");node.classList.add("is-done");node.removeAttribute("aria-current");node.querySelector(".pipeline-number").textContent="✓";node.querySelector("small").textContent="Complete";});
+    // The panel grows into the full-screen result through the same orange-outline morph as the send hand-off.
+    var full=document.documentElement.clientWidth>920;
+    if(full){
+      var from=$(".walkthrough-layout").getBoundingClientRect();
+      workspace.style.visibility="hidden";
+      workspace.classList.add("is-results");
+      if(!reduce.matches&&!instant)resultsGhost=growOutlineTo(from,$(".walkthrough-layout").getBoundingClientRect(),function(){ workspace.style.visibility=""; revealCode(); revealResults(); });
+      if(!resultsGhost){ workspace.style.visibility=""; revealCode(); revealResults(); }
+    } else {
+      enterExpand(results,900,withFade?150:0);
+      revealCode();
+      revealResults();
+    }
+    var out=withFade?leave(progress,420):null;
+    if(out&&!instant){out.onfinish=function(){if(mode==="results")progress.hidden=true;};}
+    else progress.hidden=true;
+    announce("Example complete. Take a moment to inspect the code and review.");
+    if(reduce.matches){play.textContent="Play again";play.setAttribute("aria-label","Play walkthrough again");}
+  }
+  function at(time,fn) { events.push({time:time,run:fn}); }
+  function pipelineFill(t) {
+    var bounds=[1200,17000,33000,47000], part=t<17000?0:t<33000?1:2;
+    var fraction=Math.max(0,Math.min(1,(t-bounds[part])/(bounds[part+1]-bounds[part])));
+    $(".pipeline-track").style.setProperty("--p",(((part+fraction)/3)*100).toFixed(2)+"%");
+  }
+  function tick(now) {
+    if(!active||paused)return;
+    elapsed+=Math.max(0,now-previous);previous=now;
+    while(cursor<events.length&&events[cursor].time<=elapsed){events[cursor++].run();}
+    if(pipelineStart!==null&&mode==="pipeline"&&elapsed>pipelineStart)pipelineFill(elapsed-pipelineStart);
+    if(cursor>=events.length){active=false;return;}
+    frame=requestAnimationFrame(tick);
+  }
+  function run() { elapsed=0;cursor=0;active=true;paused=false;previous=performance.now();play.textContent="Pause";play.setAttribute("aria-label","Pause walkthrough");frame=requestAnimationFrame(tick); }
+  function pipelineTimeline(start) {
+    pipelineStart=start;
+    // Brief text exit: the hero clears 460ms after send, then the surface expands straight in behind it.
+    at(Math.max(0,start-200),function(){field.readOnly=true;send.disabled=true;leave(hero,460);startMorph();});
+    at(Math.max(0,start+260),beginPipeline);
+    at(Math.max(0,start+1120),settleMorph);
+    [17000,33000].forEach(function(offset,index){
+      at(start+offset-1200,function(){leave($("#pipeline-title"),420);leave($("#pipeline-description"),420);});
+      at(start+offset,function(){
+        // Release the completed fades before revealing the next step's copy.
+        animations=animations.filter(function(a){if(a.effect&&[ $("#pipeline-title"),$("#pipeline-description") ].includes(a.effect.target)){a.cancel();return false;}return true;});
+        setStep(index+1);
+      });
+    });
+    at(start+47000,function(){$(".pipeline-track").style.setProperty("--p","100%");announce("Review complete. Preparing the result.");});
+    at(start+47120,function(){showResults(true);});
+    at(start+61000,function(){play.textContent="Play again";play.setAttribute("aria-label","Play walkthrough again");announce("Walkthrough complete. Explore the example at your own pace.");});
+  }
+  // The continuous expansion sequence, in order: prompt hold, typing, completion, accept, send,
+  // brief text exit, progress surface, reviewed result.
+  var anchors={prompt:0,architect:pace.pipeline,generator:pace.pipeline+17000,review:pace.pipeline+33000,results:pace.pipeline+47120,end:pace.pipeline+61000};
+  var total=pace.pipeline+61000;
+  function buildDemo() {
+    events=[]; mode="demo"; field.placeholder="";
+    // Applied straight away, not on the clock: the opening hold reads as a focused empty input.
+    composer.classList.add("is-demo-typing");
+    Array.from(example).forEach(function(_,i){at(pace.open+i*pace.type,function(){field.value=example.slice(0,i+1);typed.textContent=field.value;sync();});});
+    at(pace.suggest,function(){composer.classList.remove("is-demo-typing");showSuggestion(completion,true);announce("Autocomplete finishes the thought. Tab to accept.");});
+    completion.split(/(?=\s)/).filter(function(word){return word!=="";}).forEach(function(word,i){
+      at(pace.suggest+i*130,function(){appendSuggestionWord(word);});
+    });
+    at(pace.acceptPress,function(){accept.querySelector("kbd").classList.add("is-pressed");});
+    at(pace.accept,function(){acceptSuggestion();composer.classList.add("is-demo-accepted");announce("The whole idea, ready to send.");});
+    at(pace.send,function(){send.classList.add("is-demo-pressed");announce("Send it into the workflow.");});
+    at(pace.send+600,function(){send.classList.remove("is-demo-pressed");});
+    pipelineTimeline(pace.pipeline);
+  }
+  function startWalkthrough() {
+    reset(); announce("Start with the widget you have in mind.");
+    if(reduce.matches) {
+      mode="manual"; field.value=example;showSuggestion(completion);sync();
+      play.textContent="Next step";play.setAttribute("aria-label","Accept suggestion and show pipeline");
+      announce("Reduced motion: accept the suggestion, then send.");
+      return;
+    }
+    buildDemo(); run();
+  }
+  // Deterministic seeking: replay the sequence to any moment and hold there, paused.
+  function seekTo(ms) {
+    if(reduce.matches) return;
+    ms=Math.max(0,Math.min(total,ms));
+    instant=true;
+    reset();
+    buildDemo();
+    elapsed=ms; previous=performance.now(); cursor=0;
+    while(cursor<events.length && events[cursor].time<=elapsed){events[cursor++].run();}
+    if(pipelineStart!==null && elapsed>pipelineStart)pipelineFill(elapsed-pipelineStart);
+    instant=false;
+    if(ms>=total){active=false;paused=false;play.textContent="Play again";play.setAttribute("aria-label","Play walkthrough again");}
+    else{active=true;paused=true;stage.classList.add("walkthrough-paused");play.textContent="Resume";play.setAttribute("aria-label","Resume walkthrough");}
+    announce("Position set to "+Math.round(ms/1000)+" seconds.");
+  }
+  function generate() {
+    if(send.disabled)return;
+    stop();events=[];pipelineTimeline(0);
+    if(reduce.matches){beginPipeline();play.textContent="Next step";play.setAttribute("aria-label","Show next workflow step");return;}
+    // Immediate post-submission feedback: the send arrow hands over to a busy
+    // spinner for the 260ms hand-off while the hero text fades into the surface.
+    composer.classList.add("is-busy");send.classList.add("is-busy");send.setAttribute("aria-label","Generating");
+    run();
+  }
+  function pause() {
+    if(!active||paused)return;paused=true;cancelAnimationFrame(frame);stage.classList.add("walkthrough-paused");
+    animations.forEach(function(a){a.pause();});play.textContent="Resume";play.setAttribute("aria-label","Resume walkthrough");
+  }
+  play.addEventListener("click",function(){
+    if(reduce.matches){
+      if(mode==="pipeline"){var index=stepNodes.findIndex(function(n){return n.classList.contains("is-active");});if(index<2)setStep(index+1);else showResults();}
+      else if(mode==="manual"&&field.value.trim()){if(suggestion)acceptSuggestion();generate();}else startWalkthrough();return;
+    }
+    if(!active){startWalkthrough();return;}
+    if(paused){paused=false;stage.classList.remove("walkthrough-paused");animations.forEach(function(a){a.play();});previous=performance.now();play.textContent="Pause";play.setAttribute("aria-label","Pause walkthrough");frame=requestAnimationFrame(tick);}else pause();
+  });
+  replay.addEventListener("click",startWalkthrough);
+  $("#edit-prompt").addEventListener("click",function(){var value=field.value;reset();field.value=value;takeOver();composer.classList.add("is-pointer-focus");focusFieldAtEnd();});
+  field.addEventListener("pointerdown",takeOver);
+  field.addEventListener("beforeinput",takeOver);
+  field.addEventListener("keydown",function(e){
+    if(mode==="demo"){var pending=suggestion;takeOver();if(pending)showSuggestion(pending);}
+    if(e.key==="Tab"&&!e.shiftKey&&suggestion){e.preventDefault();acceptSuggestion();}
+    else if(e.key==="Escape")clearSuggestion();
+    else if(e.key==="Enter"&&!e.shiftKey&&!e.isComposing){e.preventDefault();generate();}
+  });
+  field.addEventListener("input",function(){takeOver();cancelChipTyping();clearChipSelection();clearSuggestion();cancelCompletion();sync();debounce=setTimeout(requestSuggestion,config.debounce);});
+  field.addEventListener("scroll",function(){typed.parentNode.scrollTop=field.scrollTop;});
+  accept.addEventListener("click",function(){var pending=suggestion;takeOver();showSuggestion(pending);acceptSuggestion();field.focus({preventScroll:true});});
+  send.addEventListener("click",generate);
+  // Chip fill: the prompt types itself in behind the blinking caret, the chip keeps a settled
+  // selected state, and the keyboard ring stays suppressed because this was a pointer action.
+  function cancelChipTyping() {
+    if(chipTimer){clearInterval(chipTimer);chipTimer=null;}
+    composer.classList.remove("is-demo-typing");
+  }
+  function clearChipSelection() {
+    document.querySelectorAll(".chip").forEach(function(chip){chip.classList.remove("is-active");chip.setAttribute("aria-pressed","false");});
+  }
+  function focusFieldAtEnd() {
+    try{ field.focus({preventScroll:true}); field.setSelectionRange(field.value.length,field.value.length); }catch(_){}
+  }
+  function fillChip(chip) {
+    var text=chip.dataset.prompt||"";
+    takeOver(); cancelChipTyping(); clearSuggestion();
+    document.querySelectorAll(".chip").forEach(function(other){var on=other===chip;other.classList.toggle("is-active",on);other.setAttribute("aria-pressed",String(on));});
+    composer.classList.add("is-pointer-focus");
+    if(reduce.matches || !text){ field.value=text; typed.textContent=text; sync(); focusFieldAtEnd(); return; }
+    field.value=""; typed.textContent=""; sync();
+    composer.classList.add("is-demo-typing");
+    var index=0;
+    chipTimer=setInterval(function(){
+      index+=1; field.value=text.slice(0,index); typed.textContent=field.value; sync();
+      if(index>=text.length){ cancelChipTyping(); focusFieldAtEnd(); }
+    },22);
+  }
+  document.querySelectorAll(".chip").forEach(function(chip){chip.setAttribute("aria-pressed","false");chip.addEventListener("click",function(){fillChip(chip);});});
+  // Drop the suppressed-ring state the moment the user takes over the field themselves.
+  field.addEventListener("keydown",function(){composer.classList.remove("is-pointer-focus");cancelChipTyping();});
+  field.addEventListener("pointerdown",function(){composer.classList.remove("is-pointer-focus");cancelChipTyping();clearChipSelection();});
+  field.addEventListener("blur",function(){composer.classList.remove("is-pointer-focus");});
+  function chooseTab(name,animate) {
+    ["summary","code"].forEach(function(key){var selected=key===name,tab=$("#"+key+"-tab");tab.setAttribute("aria-selected",String(selected));tab.tabIndex=selected?0:-1;$("#"+key+"-panel").hidden=!selected;});
+    if(animate)enter($("#"+name+"-panel"),0,180);
+    if(name==="code")revealCode();
+  }
+  ["summary","code"].forEach(function(name){var tab=$("#"+name+"-tab");tab.addEventListener("click",function(){chooseTab(name,true);});tab.addEventListener("keydown",function(e){if(["ArrowLeft","ArrowRight","Home","End"].includes(e.key)){e.preventDefault();var next=e.key==="Home"?"summary":e.key==="End"?"code":name==="code"?"summary":"code";chooseTab(next,true);$("#"+next+"-tab").focus();}});});
+  // Review feedback: one thumb at a time, reflecting the choice.
+  document.querySelectorAll(".feedback-btn").forEach(function(button){
+    button.addEventListener("click",function(){
+      var up=button.dataset.feedback==="up";
+      document.querySelectorAll(".feedback-btn").forEach(function(other){other.classList.remove("is-up","is-down");other.setAttribute("aria-pressed","false");});
+      button.classList.add(up?"is-up":"is-down"); button.setAttribute("aria-pressed","true");
+    });
+  });
+  // The action bar is illustrative: acknowledge the click rather than pretend to deploy.
+  document.querySelectorAll(".action-btn").forEach(function(button){
+    button.addEventListener("click",function(){ announce("Illustrative output — this action isn't connected in the preview."); });
+  });
+  $("#copy-code").addEventListener("click",async function(){
+    var version=++copyVersion;
+    try{await navigator.clipboard.writeText(codeText());if(version===copyVersion){this.textContent="Copied";announce("Example Dart source copied.");}}
+    catch(_){if(version===copyVersion){this.textContent="Select code";var selection=window.getSelection(),range=document.createRange();range.selectNodeContents($("#dart-source"));selection.removeAllRanges();selection.addRange(range);announce("Code selected. Use your keyboard to copy.");}}
+  });
+  document.addEventListener("visibilitychange",function(){if(document.hidden)pause();});
+  document.querySelectorAll(".account > button").forEach(function(button){button.addEventListener("click",pause);});
+  window.addEventListener("pagehide",stop);
+  window.addEventListener("pageshow",function(event){if(event.persisted){play.textContent="Play again";play.setAttribute("aria-label","Play walkthrough again");}});
+  reduce.addEventListener("change",function(){var value=field.value;reset();field.value=value;mode="manual";sync();play.textContent="Watch demo";announce("Motion preference updated. Walkthrough stopped.");});
+  window.addEventListener("resize",fit);fit();
+  $("#dart-source").innerHTML=highlightDart(DART_SAMPLE);
+  window.customCodeConnectDemo={anchors:anchors,seek:function(seconds){seekTo(seconds*1000);},state:function(){return{mode:mode,elapsed:Math.round(elapsed),active:active,paused:paused};}};
+  document.addEventListener("keydown",function(event){
+    if(reduce.matches || mode==="manual" || mode==="idle")return;
+    if(event.metaKey||event.ctrlKey||event.altKey||event.shiftKey)return;
+    if(event.key!=="ArrowRight"&&event.key!=="ArrowLeft")return;
+    var node=event.target;
+    if(node&&(node.tagName==="INPUT"||node.tagName==="TEXTAREA"||node.isContentEditable))return;
+    if(node&&node.closest&&node.closest("button,a,dialog"))return;
+    event.preventDefault();
+    var order=[anchors.prompt,anchors.architect,anchors.generator,anchors.review,anchors.results,anchors.end],target=null,i;
+    if(event.key==="ArrowRight"){for(i=0;i<order.length;i++){if(order[i]>elapsed+80){target=order[i];break;}}if(target===null)target=anchors.end;}
+    else{for(i=order.length-1;i>=0;i--){if(order[i]<elapsed-80){target=order[i];break;}}if(target===null)target=anchors.prompt;}
+    seekTo(target);
+  });
+  var params=null;
+  try { params=new URLSearchParams(location.search); } catch(_) {}
+  if(params&&params.has("t")) seekTo((Number(params.get("t"))||0)*1000); else startWalkthrough();
+})();
+</script>
+
+<script>
+/* Interactive field: a grid of the FlutterFlow mark across the stage — upright
+   at rest, tilted only by the parallax — each mark sized to its cell, with the
+   ones under the pointer swelling
+   dramatically and the smallest marks fading to fully transparent. The swell
+   is driven by a damped spring, so it trails the cursor and eases into place a
+   beat later. The field drifts with scroll for depth, and soft bg-coloured
+   halos keep it from reading under the chrome or the hero. Decorative only — it
+   never receives pointer events, falls back to the 2D canvas API when WebGL2 is
+   unavailable, and leaves the hero untouched when motion preference rules it
+   out. */
+(function () {
+  "use strict";
+  var reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+  var canvas = document.getElementById("fx-grid");
+  if (!canvas || reduced.matches) return;
+  // WebGL2 first; when the GPU stack is unavailable the same field is painted
+  // with the 2D canvas API rather than leaving the background blank.
+  var gl = canvas.getContext('webgl2', {
+    alpha: true, antialias: false, depth: false, stencil: false,
+    premultipliedAlpha: true, powerPreference: 'low-power'
+  });
+  var ctx2d = gl ? null : canvas.getContext('2d');
+  if (!gl && !ctx2d) return;
+
+  /* Official FlutterFlow mark (the icon glyph from flutterflow.io's
+     images/brand/PrimaryLogo.svg), isolated and embedded so the field is
+     self-contained and works offline. */
+  var ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 6.4 30 30.4" width="256" height="256"><path fill="rgb(255,255,255)" fill-rule="evenodd" clip-rule="evenodd" d="M25.5304 7.46631C26.3902 7.46631 27.186 7.92462 27.5892 8.66966C27.9755 9.38331 27.9591 10.2243 27.5464 10.9223L27.5323 10.9458L23.9146 16.9074C23.5055 17.5816 22.767 18.0023 21.9776 18.0113L21.9518 18.0115L17.8207 18.0114L19.5377 21.8838L19.5446 21.8952L19.5551 21.9135C19.9595 22.6335 19.9496 23.4895 19.5303 24.1987L19.5162 24.2223L15.8985 30.184C15.4893 30.8581 14.7508 31.2789 13.9615 31.2879L13.9357 31.288L8.86521 31.288L5.22012 35.0753L5.21322 35.0823C4.87021 35.4258 4.40676 35.6174 3.92356 35.6174C3.80277 35.6174 3.6819 35.6054 3.56233 35.5814C2.97291 35.4629 2.4832 35.0644 2.24747 34.5149L2.24082 34.4992L0.322582 30.1613L0.312492 30.1447L0.302011 30.1268C0.30027 30.1238 0.298499 30.1206 0.29665 30.1173C-0.10772 29.3974 -0.0979261 28.5414 0.321374 27.8321L0.335502 27.8085L3.8443 22.0263L1.25884 16.1955L1.30622 16.1717L1.3055 16.1682C1.19611 15.6318 1.28417 15.0725 1.56512 14.5826L1.58064 14.556L1.59498 14.532L5.2127 8.57029C5.62186 7.89619 6.36044 7.47543 7.14972 7.46631H7.17548H25.5304ZM6.53453 31.2427L2.69069 31.2426L3.81966 33.8153L3.82244 33.8221C3.84115 33.8682 3.87142 33.8934 3.91648 33.9026C3.95667 33.9107 3.98919 33.9023 4.01994 33.8747L4.02532 33.8696L6.53453 31.2427ZM17.5229 22.3978H5.90385C5.89102 22.3978 5.87819 22.3983 5.86538 22.3991L5.86186 22.3994L9.0477 29.5783H13.9351C14.136 29.5783 14.3296 29.4723 14.4396 29.3021L14.4483 29.2882L18.0713 23.3229C18.1794 23.1449 18.1913 22.9385 18.1057 22.7527C18.0069 22.5384 17.7777 22.3978 17.5229 22.3978ZM4.69605 23.872L1.82063 28.6463C1.70621 28.8363 1.69958 29.0588 1.80204 29.2547L1.81291 29.2746L1.8187 29.2844L1.8303 29.3031L1.8533 29.3367L1.87897 29.3696L1.90353 29.3973L1.90779 29.4018L1.9244 29.4183L1.93883 29.4319C2.02928 29.5127 2.14109 29.5621 2.26441 29.5748L2.29212 29.5771L2.30816 29.5779L2.32848 29.5783H7.20721L4.69605 23.872ZM3.93994 18.023L5.20279 20.8761L5.22739 20.8679C5.44548 20.796 5.6735 20.757 5.90401 20.7535L5.93861 20.7532L17.2012 20.7532L15.9928 18.023L3.93994 18.023ZM25.4983 9.13065H13.8378L17.0246 16.3111H21.9103C22.1116 16.3111 22.3053 16.2051 22.4154 16.0348L22.4241 16.0208L26.0473 10.0556C26.1553 9.87773 26.1673 9.67143 26.0817 9.4858C25.985 9.27595 25.7632 9.13667 25.5146 9.13084L25.4983 9.13065ZM12.0528 9.13065H7.19416C6.99436 9.13065 6.80166 9.23641 6.69203 9.40642L6.68333 9.42035L3.06968 15.3857C2.9618 15.5637 2.94987 15.7705 3.03542 15.9565C3.13178 16.1662 3.35237 16.3051 3.59952 16.3109L3.61568 16.3111H15.2312L12.0528 9.13065Z"/></svg>';
+
+  var VERT = "#version 300 es\nin vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }";
+
+  // One field definition; both renderers share these numbers.
+  function fragSource() {
+    return [
+      "#version 300 es",
+      "precision highp float;",
+      "out vec4 o;",
+      "uniform vec2 res;",
+      "uniform vec2 design;",
+      "uniform vec2 mouse;",
+      "uniform float energy;",
+      "uniform float parallax;",
+      "uniform float t;",
+      "uniform vec3 ink;",
+      "uniform sampler2D mark;",
+      // cos/sin of the mark rotation, nudged by the parallax each frame.
+      "uniform vec2 rot;",
+      // Radial warp strength: distance-based cell compression (see below).
+      "const float WARP_A = 0.0032;",
+      "void main(){",
+      "  vec2 px = gl_FragCoord.xy * (design / res);",
+      "  vec2 p = vec2(px.x, design.y - px.y);",
+      // Scroll parallax plus a very slow drift: the field trails the page
+      // instead of sitting on it like a sticker.
+      "  vec2 off = vec2(0.0, -parallax) + vec2(sin(t * 0.11), cos(t * 0.09)) * 7.0;",
+      "  vec2 g = p + off;",
+      "  vec2 gm = mouse + off;",
+      "  float base = min(design.x, design.y);",
+      "  float spacing = clamp(base / 10.0, 64.0, 118.0);",
+      // Radial warp R(rho) = rho + A*rho^2: cells shrink and pack closer the
+      // further they sit from the pointer, so the small marks come nearer together.
+      "  vec2 rel = g - gm;",
+      "  float rho = length(rel) + 1e-5;",
+      "  vec2 dir = rel / rho;",
+      "  vec2 pw = gm + dir * (rho + WARP_A * rho * rho);",
+      "  vec2 cell = floor(pw / spacing);",
+      "  vec2 cw = (cell + 0.5) * spacing - gm;",
+      "  float Rc = length(cw) + 1e-5;",
+      // Inverse warp for this cell, and the cell's real size at that radius.
+      "  float rhoC = (-1.0 + sqrt(1.0 + 4.0 * WARP_A * Rc)) / (2.0 * WARP_A);",
+      "  vec2 c = gm + (cw / Rc) * rhoC;",
+      "  float cellSize = spacing / (1.0 + 2.0 * WARP_A * rhoC);",
+      "  float sigma = spacing * 2.9;",
+      // Gaussian falloff: the pointer swells and darkens nearby marks while
+      // distance shrinks them back down.
+      "  float f = exp(-(rhoC * rhoC) / (2.0 * sigma * sigma));",
+      // A dramatic swell: tiny far marks, a much larger mark under the pointer.
+      "  float scale = mix(0.32, 1.42, f);",
+      // The smallest marks fade to fully transparent, so only the near cluster reads.
+      "  float weight = smoothstep(0.06, 0.80, f);",
+      // Mark tracks its (warped) cell size so the field reads as one texture.
+      "  float hs = cellSize * 0.26 * scale;",
+      "  vec2 uv = (g - c) / hs;",
+      // Sample in rotated space; the diamond that bounds the square keeps the
+      // lookup inside the texture. The angle follows the parallax.
+      "  vec2 ruv = mat2(rot.x, rot.y, -rot.y, rot.x) * uv;",
+      "  float cov = 0.0;",
+      "  if (abs(ruv.x) <= 1.0 && abs(ruv.y) <= 1.0) cov = texture(mark, ruv * 0.5 + 0.5).a;",
+      // Kept low so the field stays a whisper: even the mark under the pointer
+      // only reaches about a quarter opacity.
+      "  float s = cov * weight * energy * 0.26;",
+      "  o = vec4(ink * s, s);",
+      "}"
+    ].join("\n");
+  }
+
+  var prog = null, uRes, uDesign, uMouse, uEnergy, uParallax, uT, uInk, uMark, uRot;
+
+  function compile(type, src) {
+    var sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      if (window.console) console.warn("fx-grid shader: " + gl.getShaderInfoLog(sh));
+      return null;
+    }
+    return sh;
+  }
+
+  if (gl) {
+    var vs = compile(gl.VERTEX_SHADER, VERT);
+    var fs = compile(gl.FRAGMENT_SHADER, fragSource());
+    if (vs && fs) {
+      prog = gl.createProgram();
+      gl.attachShader(prog, vs);
+      gl.attachShader(prog, fs);
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        if (window.console) console.warn("fx-grid link: " + gl.getProgramInfoLog(prog));
+        prog = null;
+      }
+    }
+    if (prog) {
+      gl.useProgram(prog);
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      var aPos = gl.getAttribLocation(prog, "p");
+      gl.enableVertexAttribArray(aPos);
+      gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+      uRes = gl.getUniformLocation(prog, "res");
+      uDesign = gl.getUniformLocation(prog, "design");
+      uMouse = gl.getUniformLocation(prog, "mouse");
+      uEnergy = gl.getUniformLocation(prog, "energy");
+      uParallax = gl.getUniformLocation(prog, "parallax");
+      uT = gl.getUniformLocation(prog, "t");
+      uInk = gl.getUniformLocation(prog, "ink");
+      uMark = gl.getUniformLocation(prog, "mark");
+      uRot = gl.getUniformLocation(prog, "rot");
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      gl.clearColor(0, 0, 0, 0);
+    } else {
+      // A dead GPU path should not leave the background empty. A canvas that
+      // has held a WebGL context refuses to hand back a 2D one, so swap in a
+      // clean element before falling back.
+      gl = null;
+      var replacement = canvas.cloneNode(false);
+      canvas.parentNode.replaceChild(replacement, canvas);
+      canvas = replacement;
+      ctx2d = canvas.getContext("2d");
+      if (!ctx2d) return;
+    }
+  }
+
+  // Resolve any CSS colour (hex, rgb(), oklch()) to normalised RGB by letting
+  // the browser parse it through a 1x1 canvas; returns null if it can't.
+  function cssToRgb(value) {
+    if (!value) return null;
+    var hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value);
+    if (hex) {
+      var h = hex[1];
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      return [parseInt(h.slice(0, 2), 16) / 255, parseInt(h.slice(2, 4), 16) / 255, parseInt(h.slice(4, 6), 16) / 255];
+    }
+    try {
+      var probe = document.createElement("canvas");
+      probe.width = 1;
+      probe.height = 1;
+      var pctx = probe.getContext("2d");
+      pctx.fillStyle = "rgb(9, 8, 7)";
+      var sentinel = String(pctx.fillStyle);
+      pctx.fillStyle = value;
+      var out = String(pctx.fillStyle);
+      // Unchanged means the browser could not parse the colour at all.
+      if (out === sentinel) return null;
+      var asHex = /^#([0-9a-f]{6})$/i.exec(out);
+      if (asHex) {
+        var g = asHex[1];
+        return [parseInt(g.slice(0, 2), 16) / 255, parseInt(g.slice(2, 4), 16) / 255, parseInt(g.slice(4, 6), 16) / 255];
+      }
+      var rgb = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i.exec(out);
+      if (rgb) return [Number(rgb[1]) / 255, Number(rgb[2]) / 255, Number(rgb[3]) / 255];
+    } catch (_) {}
+    return null;
+  }
+
+  function readInk() {
+    var value = "";
+    try {
+      var root = getComputedStyle(document.documentElement);
+      value = (root.getPropertyValue("--fx-ink") || "").trim() || (root.getPropertyValue("--fg") || "").trim();
+    } catch (_) {}
+    return cssToRgb(value) || [0.56, 0.68, 0.88];
+  }
+  var ink = readInk();
+
+  // The field works at any size: the renderer reads the live canvas bounds, so
+  // the 16:9 stage and the fluid narrow layout both get a correctly scaled grid.
+  var cw = 1920, ch = 1080;
+  var mx = 960, my = 540, tx = 960, ty = 540;
+  var energy = 0.66, scrollShift = 0, lastMove = -1e9, seeded = false, ready = false, raf = 0, last = 0;
+  var sprite = null, texReady = false;
+  // Lightly damped spring for the pointer follow (see frame()).
+  var FOLLOW_STIFF = 64, FOLLOW_DAMP = 15.2;
+  var vx = 0, vy = 0;
+  // Radial cell-compression strength, matching WARP_A in the shader.
+  var WARP_A = 0.0032;
+  // Mark rotation: exactly upright with the pointer at the centre, then a
+  // two-sided but asymmetric lean — left/top lean gently, right/bottom turn
+  // strongly. Each constant is the radians reached at that edge, so corner
+  // angles are the sum of the two edge terms and no diagonal cancels out.
+  var BASE_ROT = 0;
+  var ROT_RIGHT = 0.56;
+  var ROT_LEFT = 0.26;
+  var ROT_DOWN = 0.32;
+  var ROT_UP = 0.16;
+  // Ceiling for the combined lean: 20° in radians. The additive axes could
+  // otherwise push the bottom-right corner to ~25°.
+  var MAX_ROT = 0.349;
+  var rotAngle = BASE_ROT;
+
+  function resize() {
+    var rect = canvas.getBoundingClientRect();
+    var w0 = canvas.clientWidth, h0 = canvas.clientHeight;
+    if (!rect.width || !w0 || !h0) return;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // Backing store matches the on-screen pixels (the stage is CSS-scaled).
+    var k = Math.max(0.2, Math.min(2, (rect.width / w0) * dpr));
+    var w = Math.max(2, Math.round(w0 * k));
+    var h = Math.max(2, Math.round(h0 * k));
+    if (w !== canvas.width || h !== canvas.height) {
+      canvas.width = w;
+      canvas.height = h;
+      if (gl) gl.viewport(0, 0, w, h);
+    }
+    cw = w0;
+    ch = h0;
+    if (!seeded) { mx = tx = cw / 2; my = ty = ch / 2; seeded = true; }
+  }
+
+  function renderGL(t) {
+    if (!prog || !texReady) return;
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+    gl.uniform2f(uDesign, cw, ch);
+    gl.uniform2f(uMouse, mx, my);
+    gl.uniform1f(uEnergy, energy);
+    gl.uniform1f(uParallax, scrollShift);
+    gl.uniform2f(uRot, Math.cos(rotAngle), Math.sin(rotAngle));
+    gl.uniform1f(uT, t);
+    gl.uniform3f(uInk, ink[0], ink[1], ink[2]);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  function smoothstep(a, b, x) {
+    var t = Math.max(0, Math.min(1, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  }
+
+  // Same field, painted with the 2D canvas API when WebGL2 is unavailable.
+  function render2D(t) {
+    if (!sprite || !ctx2d) return;
+    var ctx = ctx2d;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    var k = canvas.width / cw;
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.globalAlpha = 1;
+    var base = Math.min(cw, ch);
+    var spacing = Math.max(64, Math.min(118, base / 10));
+    var sigma = spacing * 2.9;
+    var twoSigmaSq = 2 * sigma * sigma;
+    var offX = Math.sin(t * 0.11) * 7;
+    var offY = Math.cos(t * 0.09) * 7 - scrollShift;
+    var gmX = mx + offX, gmY = my + offY;
+    // Only cells whose real radius can still carry visible alpha are visited,
+    // which keeps the 2D fallback cheap even though the warp needs more rows.
+    var cullRho = sigma * Math.sqrt(2 * Math.log(1 / 0.06));
+    var cullR = cullRho + WARP_A * cullRho * cullRho + spacing;
+    var gx0 = Math.floor((gmX - cullR) / spacing) - 1;
+    var gx1 = Math.ceil((gmX + cullR) / spacing) + 1;
+    var gy0 = Math.floor((gmY - cullR) / spacing) - 1;
+    var gy1 = Math.ceil((gmY + cullR) / spacing) + 1;
+    for (var gy = gy0; gy <= gy1; gy++) {
+      var cyw = (gy + 0.5) * spacing;
+      for (var gx = gx0; gx <= gx1; gx++) {
+        var cxw = (gx + 0.5) * spacing;
+        var dcx = cxw - gmX, dcy = cyw - gmY;
+        var Rc = Math.sqrt(dcx * dcx + dcy * dcy) + 1e-5;
+        if (Rc > cullR) continue;
+        // Inverse warp for this cell, then its real centre and cell size.
+        var rhoC = (-1 + Math.sqrt(1 + 4 * WARP_A * Rc)) / (2 * WARP_A);
+        var f = Math.exp(-(rhoC * rhoC) / twoSigmaSq);
+        var alpha = smoothstep(0.06, 0.80, f) * energy * 0.26;
+        if (alpha < 0.004) continue;
+        var hs = (spacing / (1 + 2 * WARP_A * rhoC)) * 0.26 * (0.32 + 1.10 * f);
+        var kk = rhoC / Rc;
+        var sx = gmX + dcx * kk, sy = gmY + dcy * kk;
+        if (sx < -hs * 1.6 || sx > cw + hs * 1.6 || sy < -hs * 1.6 || sy > ch + hs * 1.6) continue;
+        ctx.globalAlpha = alpha;
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(rotAngle);
+        ctx.drawImage(sprite, -hs, -hs, hs * 2, hs * 2);
+        ctx.restore();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function frame(now) {
+    var dt = last ? Math.min(0.05, (now - last) / 1000) : 0.016;
+    last = now;
+    var idle = now - lastMove > 2400;
+    var goal = idle ? 0.6 : 1;
+    energy += (goal - energy) * Math.min(1, dt * 3.2);
+    // Integrate the follow spring with a clamped step so a stalled frame can't
+    // blow it up. The lens accelerates toward the cursor and eases into place,
+    // so the marks swell and settle a beat behind the pointer.
+    var h = Math.min(0.05, dt);
+    vx += ((tx - mx) * FOLLOW_STIFF - vx * FOLLOW_DAMP) * h;
+    vy += ((ty - my) * FOLLOW_STIFF - vy * FOLLOW_DAMP) * h;
+    mx += vx * h;
+    my += vy * h;
+    scrollShift = (window.scrollY || window.pageYOffset || 0) * 0.55;
+    var tSec = now / 1000;
+    // Offset from the page centre drives the tilt, with the left/top leaning
+    // less than the right/bottom. The two axes are additive, so the lean is
+    // clamped to ±MAX_ROT — the bottom-right corner would otherwise overshoot
+    // to ~25°. No idle sway, so the exact centre stays 0; scrolling still
+    // carries the parallax tilt.
+    var nx = mx / (cw || 1) - 0.5;
+    var ny = my / (ch || 1) - 0.5;
+    var lean = nx * (nx >= 0 ? ROT_RIGHT : ROT_LEFT)
+      + ny * (ny >= 0 ? ROT_DOWN : ROT_UP);
+    if (lean > MAX_ROT) lean = MAX_ROT;
+    else if (lean < -MAX_ROT) lean = -MAX_ROT;
+    rotAngle = BASE_ROT + lean - scrollShift * 0.0006;
+    resize();
+    if (gl) renderGL(tSec); else render2D(tSec);
+    raf = requestAnimationFrame(frame);
+  }
+
+  function onMove(event) {
+    var rect = canvas.getBoundingClientRect();
+    if (!rect.width || !cw || !ch) return;
+    tx = ((event.clientX - rect.left) / rect.width) * cw;
+    ty = ((event.clientY - rect.top) / rect.height) * ch;
+    lastMove = performance.now();
+  }
+
+  window.addEventListener("pointermove", onMove, { passive: true, capture: true });
+  window.addEventListener("resize", resize);
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) { cancelAnimationFrame(raf); raf = 0; }
+    else if (ready && !raf) { last = 0; raf = requestAnimationFrame(frame); }
+  });
+
+  // Rasterise the mark straight from its vector path with Path2D. Going through
+  // an <img> SVG left a hairline of faint alpha along the texture edge, which
+  // read as a box around every mark, so the shape is painted directly instead.
+  function buildMark() {
+    var d = (ICON_SVG.match(/\sd="([^"]+)"/) || [])[1];
+    var surface = document.createElement("canvas");
+    surface.width = 256;
+    surface.height = 256;
+    var sctx = surface.getContext("2d");
+    if (d && window.Path2D) {
+      // Map the icon viewBox (-1 6.4 30 30.4) into the square, meet + centred.
+      var s = Math.min(256 / 30, 256 / 30.4);
+      sctx.setTransform(s, 0, 0, s, s + (256 - 30 * s) / 2, -6.4 * s);
+      sctx.fillStyle = "rgb(255,255,255)";
+      sctx.fill(new Path2D(d), "evenodd");
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    // Drop any hairline of near-zero alpha, then guarantee the outermost texels
+    // are clear, so no box can appear at the mark's edge. A threshold failure
+    // is not fatal: the mark still renders, just without the cleanup.
+    try {
+      var img = sctx.getImageData(0, 0, 256, 256);
+      var px = img.data;
+      for (var i = 3; i < px.length; i += 4) { if (px[i] < 8) px[i] = 0; }
+      sctx.putImageData(img, 0, 0);
+    } catch (_) {}
+    sctx.clearRect(0, 0, 256, 2);
+    sctx.clearRect(0, 254, 256, 2);
+    sctx.clearRect(0, 0, 2, 256);
+    sctx.clearRect(254, 0, 2, 256);
+    if (gl) {
+      gl.activeTexture(gl.TEXTURE0);
+      var tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, surface);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      // Cap the mip chain so heavy minification can't average the tile into a box.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 4);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.uniform1i(uMark, 0);
+      texReady = true;
+    } else if (ctx2d) {
+      // Tint the raster to the ink token so the 2D path matches the shader.
+      sctx.globalCompositeOperation = "source-in";
+      sctx.fillStyle = "rgb(" + Math.round(ink[0] * 255) + "," + Math.round(ink[1] * 255) + "," + Math.round(ink[2] * 255) + ")";
+      sctx.fillRect(0, 0, 256, 256);
+      ctx2d.imageSmoothingEnabled = true;
+      if ("imageSmoothingQuality" in ctx2d) ctx2d.imageSmoothingQuality = "high";
+      sprite = surface;
+    }
+    ready = true;
+    resize();
+    canvas.classList.add("is-ready");
+    last = 0;
+    raf = requestAnimationFrame(frame);
+  }
+  try {
+    buildMark();
+  } catch (err) {
+    if (window.console) console.warn("fx-grid: mark could not be rasterised.");
+  }
+})();
+</script>
+
+
+<script>
+// The pipeline mark runs the 120-second, twelve-beat logo loop from
+// custom-code-connect-logo-loop-120s.html, re-authored for a wide strip: this arena is far
+// flatter than that file's 16:9 stage, so the travel is horizontal-dominant and the vertical
+// beats are damped. Beat 12 lands exactly on beat 1, so the 120 s seam is invisible. Only
+// transform and opacity are animated, the clock pauses off-screen, and reduced motion holds
+// the mark at its rest pose.
+(function () {
+  "use strict";
+  var arena = document.querySelector(".pipeline-glyph.logo-loop");
+  if (!arena) return;
+  var mark = arena.querySelector(".loop-mark");
+  var pieceA = arena.querySelector(".loop-piece-a");
+  var pieceB = arena.querySelector(".loop-piece-b");
+  var halo = arena.querySelector(".loop-halo");
+  var shadow = arena.querySelector(".loop-shadow");
+  if (!mark || !pieceA || !pieceB || !halo || !shadow) return;
+
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  var DUR = 120, MARK = 34, TRAVEL = 0, YMAX = 0;
+
+  function measure() {
+    MARK = mark.offsetWidth || 34;
+    // One-sided travel: 0 is the left edge (where the mark rests, aligned with the copy),
+    // and the 4px right margin leaves the halo room so it never clips against the strip.
+    TRAVEL = Math.max(0, arena.offsetWidth - MARK - 4);
+    YMAX = Math.max(0, (arena.offsetHeight - MARK) / 2 - 2);
+    arena.style.setProperty("--mark-c", (MARK / 2) + "px");
+  }
+
+  /* ---- easing ------------------------------------------------------------- */
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+  function prog(t, a, b) { return clamp((t - a) / (b - a), 0, 1); }
+  function io(x) { return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2; }
+  function out(x) { return 1 - Math.pow(1 - x, 3); }
+  function back(x, s) { s = s === undefined ? 1.7 : s; return 1 + (s + 1) * Math.pow(x - 1, 3) + s * Math.pow(x - 1, 2); }
+  function spring(x) { return 1 - Math.pow(2, -9 * x) * Math.cos(x * 15); }
+  /* Keyframes on local time — [{t, v, e}], where the ease belongs to the segment ending there. */
+  function track(t, keys) {
+    if (t <= keys[0].t) return keys[0].v;
+    for (var i = 1; i < keys.length; i++) {
+      if (t <= keys[i].t) {
+        var a = keys[i - 1], b = keys[i];
+        return a.v + (b.v - a.v) * (b.e || io)(prog(t, a.t, b.t));
+      }
+    }
+    return keys[keys.length - 1].v;
+  }
+
+  /* ---- the twelve beats --------------------------------------------------- */
+  function pose(t) {
+    /* Defaults are the rest pose, which beat 12 must land on exactly. */
+    var x = 0, y = 0, rot = 0, scale = 1;
+    var ax = 0, ay = 0, ar = 0, asc = 1, afade = 1;
+    var bx = 0, by = 0, br = 0, bsc = 1, bfade = 1;
+    var hfade = 1, hsc = 1, shd = 0;
+
+    if (t < 9) {
+      /* 01 · Wake up — a swell, a look around, two blinks. */
+      scale = track(t, [{ t: 0, v: 1 }, { t: 1.2, v: 1.062, e: back }, { t: 2.9, v: 1 }]);
+      x = track(t, [{ t: 0, v: 0 }, { t: 2.6, v: 0.18 }, { t: 3.2, v: 0.03 }, { t: 4.8, v: 0, e: back }]);
+      y = track(t, [{ t: 0, v: 0 }, { t: 2.6, v: -0.2 }, { t: 3.2, v: 0.14 }, { t: 4.8, v: 0, e: back }]);
+      rot = track(t, [{ t: 0, v: 0 }, { t: 2.6, v: 3.4 }, { t: 3.2, v: -3.8 }, { t: 4.8, v: 0, e: back }]);
+      if (Math.abs(t - 4.0) < 0.11 || Math.abs(t - 4.45) < 0.12) { afade = 0.32; bfade = 0.32; }
+      hfade = track(t, [{ t: 0, v: 1 }, { t: 4.5, v: 1.9 }, { t: 8.9, v: 1 }]);
+      hsc = track(t, [{ t: 0, v: 1 }, { t: 4.5, v: 1.16 }, { t: 8.9, v: 1 }]);
+    } else if (t < 19) {
+      /* 02 · Glide — two full-width skims across the arena, then a settle run home. */
+      var g = t - 9;
+      x = track(g, [{ t: 0, v: 0 }, { t: 3.6, v: 1 }, { t: 7.4, v: 0.12 }, { t: 10, v: 0 }]);
+      y = track(g, [{ t: 0, v: 0 }, { t: 1.8, v: -0.5 }, { t: 3.6, v: 0 }, { t: 5.5, v: -0.45 }, { t: 7.4, v: 0 }, { t: 8.4, v: -0.18 }, { t: 10, v: 0 }]);
+      rot = track(g, [{ t: 0, v: 0 }, { t: 1, v: 7 }, { t: 2.4, v: 0 }, { t: 4.8, v: -7 }, { t: 6.2, v: 0 }, { t: 8.4, v: 3 }, { t: 10, v: 0 }]);
+      shd = prog(g, 0, 0.4) * (1 - prog(g, 9.4, 10));
+    } else if (t < 23) {
+      /* 03 · Rewind — one fast pass right to left, then a snap home. */
+      var r = t - 19;
+      x = track(r, [{ t: 0, v: 0, e: out }, { t: 1.4, v: 1 }, { t: 2.6, v: 0.08 }, { t: 4, v: 0, e: back }]);
+      y = track(r, [{ t: 0, v: 0 }, { t: 1.4, v: -0.35 }, { t: 2.6, v: -0.3 }, { t: 4, v: 0, e: back }]);
+      rot = track(r, [{ t: 0, v: 0, e: out }, { t: 1.2, v: -9 }, { t: 2.6, v: 11 }, { t: 4, v: 0, e: back }]);
+      shd = prog(r, 0, 0.3) * (1 - prog(r, 3.6, 4));
+    } else if (t < 32) {
+      /* 04 · Magnet — flung wide each way, then a snap and a recoil. */
+      var m = t - 23;
+      var fling = track(m, [{ t: 0, v: 0 }, { t: 1.6, v: 0.72 }, { t: 2.2, v: 0.66 }, { t: 3.4, v: 0, e: back }, { t: 4.1, v: -0.07 }, { t: 5.1, v: 0 }]);
+      ax = fling; bx = -fling; ar = fling * 26; br = -fling * 26;
+      scale = track(m, [{ t: 0, v: 1 }, { t: 1.6, v: 0.94 }, { t: 3.4, v: 1.04, e: back }, { t: 5.1, v: 1 }]);
+      hfade = track(m, [{ t: 0, v: 1 }, { t: 1.6, v: 1.8 }, { t: 5.1, v: 1 }]);
+      shd = prog(m, 0, 0.3) * (1 - prog(m, 8, 9));
+    } else if (t < 42) {
+      /* 05 · Breathe — a slow pulse and one small hiccup. */
+      var b = t - 32;
+      var swell = Math.sin(prog(b, 0, 8) * Math.PI);
+      scale = 1 + 0.055 * swell;
+      y = -0.12 * swell;
+      hfade = 1 + 0.5 * swell;
+      if (b > 8.2 && b < 9.4) scale *= 1 - 0.07 * Math.sin(prog(b, 8.2, 9.4) * Math.PI);
+    } else if (t < 53) {
+      /* 06 · Peek-a-boo — the second C hides, peeks, then ducks back. */
+      var k = t - 42;
+      bfade = track(k, [{ t: 0, v: 1 }, { t: 2, v: 0 }, { t: 4.2, v: 0 }, { t: 4.6, v: 1 }, { t: 6.8, v: 1 }, { t: 7.4, v: 0 }, { t: 9.4, v: 0 }, { t: 10.6, v: 1 }]);
+      bsc = track(k, [{ t: 0, v: 1 }, { t: 2, v: 0.3 }, { t: 4.6, v: 1, e: back }]);
+      bx = track(k, [{ t: 0, v: 0 }, { t: 2, v: 0.3 }, { t: 4.6, v: 0.16, e: back }, { t: 10.6, v: 0 }]);
+      br = track(k, [{ t: 0, v: 0 }, { t: 2, v: -40 }, { t: 4.6, v: 0, e: back }]);
+      ax = track(k, [{ t: 0, v: 0 }, { t: 4.6, v: -0.12 }, { t: 10.6, v: 0 }]);
+    } else if (t < 60) {
+      /* 07 · Insert coin — both Cs drop in onto the mark. Each fades out first, so the jump
+         up to the drop height happens while it is invisible rather than as a visible pop. */
+      var c = t - 53;
+      afade = track(c, [{ t: 0, v: 1 }, { t: 0.35, v: 0 }, { t: 0.45, v: 0 }, { t: 0.7, v: 1 }]);
+      var dropA = prog(c, 0.45, 2.2);
+      ay = dropA > 0 ? -2.6 * (1 - spring(dropA)) : 0;
+      bfade = track(c, [{ t: 0, v: 1 }, { t: 0.57, v: 0 }, { t: 0.67, v: 0 }, { t: 0.92, v: 1 }]);
+      var dropB = prog(c, 0.67, 2.42);
+      by = dropB > 0 ? -2.6 * (1 - spring(dropB)) : 0;
+      scale = 1 - 0.05 * (Math.sin(prog(c, 1.9, 2.5) * Math.PI) + Math.sin(prog(c, 2.5, 3.1) * Math.PI));
+    } else if (t < 74) {
+      /* 08 · Pac-chase — a full lap of the arena; the second piece trails the first. */
+      var p = t - 60;
+      function lap(u) {
+        return [
+          track(u, [{ t: 0, v: 0 }, { t: 0.25, v: 1 }, { t: 0.5, v: 1 }, { t: 0.72, v: 0.14 }, { t: 0.82, v: 0.14 }, { t: 1, v: 0 }]),
+          track(u, [{ t: 0, v: 0 }, { t: 0.08, v: -0.62 }, { t: 0.25, v: -0.62 }, { t: 0.33, v: 0.62 }, { t: 0.7, v: 0.62 }, { t: 0.82, v: -0.62 }, { t: 1, v: -0.62 }])
+        ];
+      }
+      var settle = 1 - prog(p, 12, 14);
+      var head = lap(prog(p, 0, 12));
+      var tail = lap(prog(p - 0.5, 0, 12));
+      x = head[0] * settle;
+      y = (head[1] + 0.05 * Math.sin(p * 7)) * settle;
+      ax = (tail[0] - head[0]) * 0.6 * settle;
+      ay = (tail[1] - head[1]) * 0.6 * settle;
+      br = (tail[0] - head[0]) * 30 * settle;
+      shd = prog(p, 0, 0.4) * settle;
+    } else if (t < 85.4) {
+      /* 09 · Leaning — standing apart, they lean in until one slips. */
+      var l = t - 74;
+      var apart = track(l, [{ t: 0, v: 0 }, { t: 4, v: 1 }, { t: 8, v: 0.24 }, { t: 9.6, v: 1, e: back }, { t: 11.4, v: 0 }]);
+      ax = apart * 0.5; bx = -apart * 0.5;
+      ar = track(l, [{ t: 0, v: 0 }, { t: 4, v: 6 }, { t: 8, v: 20 }, { t: 9.6, v: 38, e: back }, { t: 11.4, v: 0 }]);
+      br = -ar * 0.7;
+      ay = track(l, [{ t: 0, v: 0 }, { t: 8, v: 0 }, { t: 9.6, v: 0.4 }, { t: 11.4, v: 0 }]);
+    } else if (t < 96.4) {
+      /* 10 · Orbit & clap — one full orbit, then a high five. */
+      var o = t - 85.4;
+      var orbit = prog(o, 0, 5.6);
+      var ret = prog(o, 5.6, 7.6);
+      var radius = 0.72 * Math.min(1, o / 0.6) * (1 - ret);
+      bx = Math.cos(orbit * Math.PI * 2) * radius;
+      by = Math.sin(orbit * Math.PI * 2) * radius * 0.55;
+      br = orbit * 360 * (1 - ret);
+      var clap = track(o, [{ t: 0, v: 0 }, { t: 7.6, v: 0 }, { t: 8.2, v: 1, e: out }, { t: 8.6, v: 0.55 }, { t: 9.4, v: 0 }]);
+      ax = -0.16 * clap;
+      bx += 0.16 * clap;
+      ar = -6 * clap;
+      br += 6 * clap;
+      scale = 1 + 0.05 * clap;
+      hfade = 1 + 0.9 * clap;
+    } else if (t < 108.6) {
+      /* 11 · Jelly beans — the mark runs the arena, nibbling as it goes. */
+      var j = t - 96.4;
+      var settle2 = prog(j, 9.6, 12.2);
+      x = track(j, [{ t: 0, v: 0 }, { t: 2.1, v: 1 }, { t: 4.8, v: 0.08 }, { t: 7.5, v: 1 }, { t: 9.6, v: 0 }]) * (1 - settle2);
+      y = -0.35 * Math.abs(Math.sin(prog(j, 0, 9.6) * Math.PI * 3)) * (1 - settle2);
+      var nibble = Math.sin(j * 6.2) * (1 - settle2);
+      asc = 1 + 0.12 * nibble; bsc = 1 - 0.12 * nibble;
+      ar = nibble * 8; br = -nibble * 8;
+      ax = 0.06 * nibble; bx = -0.06 * nibble;
+      shd = prog(j, 0, 0.4) * (1 - settle2);
+    } else {
+      /* 12 · Goodnight — settle, breathe, drift off. Frame 120 lands on frame 0. */
+      var d = t - 108.6;
+      var slow = Math.sin(prog(d, 0, 8) * Math.PI);
+      var fade = 1 - prog(d, 8, 11.4);
+      scale = 1 + 0.04 * slow * fade;
+      y = -0.1 * slow * fade;
+      rot = 2 * slow * fade;
+      hfade = 1 + 0.5 * Math.sin(prog(d, 0, 6) * Math.PI);
+      hsc = 1 + 0.1 * Math.sin(prog(d, 0, 6) * Math.PI);
+    }
+
+    return { x: x, y: y, rot: rot, scale: scale, ax: ax, ay: ay, ar: ar, asc: asc, afade: afade, bx: bx, by: by, br: br, bsc: bsc, bfade: bfade, hfade: hfade, hsc: hsc, shd: shd };
+  }
+
+  function paint(p) {
+    // Clamp to the strip: the settle easings overshoot a hair past the left edge.
+    var px = Math.min(1, Math.max(0, p.x)) * TRAVEL, py = p.y * YMAX;
+    mark.style.transform = "translate3d(" + px.toFixed(2) + "px," + py.toFixed(2) + "px,0) rotate(" + p.rot.toFixed(2) + "deg) scale(" + p.scale.toFixed(3) + ")";
+    pieceA.style.transform = "translate3d(" + (p.ax * MARK).toFixed(2) + "px," + (p.ay * MARK).toFixed(2) + "px,0) rotate(" + p.ar.toFixed(2) + "deg) scale(" + p.asc.toFixed(3) + ")";
+    pieceA.style.opacity = p.afade.toFixed(3);
+    pieceB.style.transform = "translate3d(" + (p.bx * MARK).toFixed(2) + "px," + (p.by * MARK).toFixed(2) + "px,0) rotate(" + p.br.toFixed(2) + "deg) scale(" + p.bsc.toFixed(3) + ")";
+    pieceB.style.opacity = p.bfade.toFixed(3);
+    halo.style.transform = "scale(" + p.hsc.toFixed(3) + ")";
+    halo.style.opacity = (0.09 * p.hfade).toFixed(3);
+    shadow.style.transform = "translateX(" + px.toFixed(2) + "px) scaleX(" + (0.75 + 0.4 * Math.abs(p.x)).toFixed(3) + ")";
+    shadow.style.opacity = (p.shd * 0.5).toFixed(3);
+  }
+
+  var elapsed = 0, last = 0, raf = 0, running = false;
+  function frame(now) {
+    if (!running) return;
+    raf = requestAnimationFrame(frame);
+    var dt = last ? (now - last) / 1000 : 0;
+    last = now;
+    // The clock only advances while the arena is actually on screen.
+    if (document.hidden || !arena.offsetParent) return;
+    elapsed = (elapsed + Math.min(dt, 0.1)) % DUR;
+    paint(pose(elapsed));
+  }
+  function play() {
+    if (reduce.matches) { paint(pose(0)); return; }
+    if (running) return;
+    measure(); running = true; last = 0; raf = requestAnimationFrame(frame);
+  }
+  function stop() { running = false; if (raf) cancelAnimationFrame(raf); raf = 0; }
+
+  window.addEventListener("resize", function () { measure(); paint(pose(elapsed)); });
+  if (reduce.addEventListener) reduce.addEventListener("change", function () { if (reduce.matches) { stop(); paint(pose(0)); } else play(); });
+  document.addEventListener("visibilitychange", function () { last = 0; });
+  measure();
+  paint(pose(0));
+  play();
+})();
+</script>
+</body></html>
