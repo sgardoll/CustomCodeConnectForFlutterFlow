@@ -205,6 +205,39 @@ changes will deploy nothing:
    GitHub does not expose organisation secrets to private repositories on the
    free plan.
 
+#### Runner CLI/SDK compatibility
+
+The image pins FlutterFlow CLI **0.0.43** and workspace init explicitly selects
+`--interface sdk`: this runner executes Dart DSL, not the CLI's newer `fft`
+workspace format. CLI and SDK version numbers are independent. The signed SDK
+manifest's `min_router_version`, not the SDK's own version, sets the CLI floor.
+
+CI now builds the actual runner image, starts its health route, fetches the
+current signed production SDK, and compiles representative deployment DSL.
+This catches image/toolchain failures, a raised SDK minimum, and changed SDK
+APIs before review. It uses no credentials and does not deploy or access a
+project. It does **not** prove authenticated `ai init` or project validation;
+those still need the canary below.
+
+For future upgrades:
+
+1. Keep an exact CLI pin, not `latest`. Review the CLI release notes and signed
+   SDK manifest when upgrading or investigating a compatibility alert.
+2. Update `FLUTTERFLOW_CLI_VERSION` in the Dockerfile and `minCliVersion` in
+   `bin/server.dart` together in one PR. Tests reject version drift and require
+   explicit SDK initialization. Keep the compile-smoke fixture aligned with
+   the generated deployment DSL if its API calls change.
+3. Require green CI, then validate authenticated initialization and a dry-run
+   against an approved non-production runner/project before rollout. The daily
+   canary continues to catch upstream changes between repository commits.
+4. After an approved rollout, check `/runnerHealth` for the expected SHA and
+   CLI version, and check the canary result.
+
+The production SDK remains a moving upstream dependency: an exact CLI pin alone
+does not freeze it. A new incompatible snapshot needs a reviewed upgrade, not
+an automatic CLI update. Deployment triggers are unchanged: merging runner
+changes to `main` still deploys production; a PR's image smoke never does.
+
 #### Runner canary (scheduled)
 
 The workflow `.github/workflows/canary.yml` runs daily (07:21 UTC) and on demand
