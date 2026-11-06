@@ -41,14 +41,32 @@ test("Cloud Run pins a snapshot-compatible FlutterFlow CLI", () => {
 
   assert.ok(version, "Dockerfile must explicitly pin FLUTTERFLOW_CLI_VERSION");
   assert.ok(
-    compareVersions(version, "0.0.39") >= 0,
-    `FlutterFlow CLI ${version} is older than the snapshot minimum 0.0.39`,
+    compareVersions(version, "0.0.43") >= 0,
+    `FlutterFlow CLI ${version} is older than the snapshot minimum 0.0.43`,
   );
   assert.match(
     dockerfile,
     /dart pub global list \| grep -F "flutterflow_cli \$FLUTTERFLOW_CLI_VERSION"/,
     "Docker build must verify the installed CLI version",
   );
+});
+
+test("Cloud Run explicitly initializes an SDK workspace", () => {
+  assert.match(
+    runnerSource,
+    /\['ai', 'init', workspaceName, '--yes', '--interface', 'sdk'\]/,
+    "the CLI default can change; Dart DSL deploys require the SDK interface",
+  );
+});
+
+test("CI builds and smokes the real runner image without project credentials", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const smoke = readFileSync(new URL("../cloud-run/ffai-runner/tool/smoke.dart", import.meta.url), "utf8");
+  assert.match(ci, /docker build --tag ccc-ffai-runner:ci cloud-run\/ffai-runner/);
+  assert.match(ci, /ccc-ffai-runner:ci \/smoke\/smoke\.dart/);
+  assert.match(smoke, /\['ai', 'fetch-sdk', '--env', 'prod'\]/);
+  assert.match(smoke, /\['compile', 'kernel', 'smoke\.dart'/);
+  assert.match(smoke, /http:\/\/127\.0\.0\.1:8080\/runnerHealth/);
 });
 
 test("Cloud Run upserts custom classes in one authoritative write", () => {
@@ -174,8 +192,8 @@ test("Cloud Run deployment reserves enough memory and serializes provisioning", 
   assert.match(deployScript, /--concurrency "\$CONCURRENCY"/);
 });
 
-// The image is only exercised at deploy time and nothing builds it in CI, so a
-// missing COPY is invisible until a real deploy fails. It already happened once:
+// Keep a fast contract guard alongside the real image smoke in CI. A missing
+// COPY already caused a production failure once:
 // request validation moved to lib/, the Dockerfile still copied only bin/, and
 // the container could not start at all.
 test("the image copies every directory the entrypoint imports", () => {

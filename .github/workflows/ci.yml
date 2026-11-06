@@ -58,10 +58,11 @@ jobs:
   # The runner's request validation is the code that rejected
   # flutter_web_plugins and failed every deploy for months, and its tests only
   # ran on a developer's machine - so nothing stopped that regression returning.
-  # The image is built only at deploy time, so this is also the only place the
-  # runner is compiled before it ships.
+  # Also build and smoke the actual image: source-only tests cannot detect
+  # CLI/signed SDK incompatibility, missing image files, or Dart toolchain drift.
   runner:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -81,3 +82,12 @@ jobs:
       - name: Test the runner
         working-directory: cloud-run/ffai-runner
         run: dart test
+
+      - name: Build runner image
+        run: docker build --tag ccc-ffai-runner:ci cloud-run/ffai-runner
+
+      - name: Smoke runner image and current SDK (no credentials)
+        run: |
+          docker run --rm --entrypoint dart \
+            --volume "$PWD/cloud-run/ffai-runner/tool:/smoke:ro" \
+            ccc-ffai-runner:ci /smoke/smoke.dart
