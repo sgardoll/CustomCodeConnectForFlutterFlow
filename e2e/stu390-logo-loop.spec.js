@@ -3,7 +3,7 @@ import {
   applyDefaultRoutes,
   ENDPOINTS,
   freeSubscription,
-  guestIdentity,
+
   oneArtifact,
   quotaExhausted,
   reviewPassed,
@@ -65,7 +65,7 @@ async function openHome(page, overrides = {}) {
     localStorage.setItem("hasSeenWalkthrough", "true");
   });
   await applyDefaultRoutes(page, {
-    [ENDPOINTS.identity]: guestIdentity(),
+
     [ENDPOINTS.getSubscription]: freeSubscription(),
     ...overrides,
   });

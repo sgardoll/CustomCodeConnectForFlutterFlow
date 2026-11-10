@@ -66,6 +66,52 @@ def resolve_password():
         )
 
 
+def staging_config():
+    """Resolve staging only from explicit environment; never consult Keychain."""
+    keys = ('HOSTNAME', 'PORT', 'USERNAME', 'PASSWORD', 'HOME_PATH')
+    values = {key: os.environ.get('STAGING_FTP_' + key, '') for key in keys}
+    if any(not value.strip() for value in values.values()):
+        sys.exit('Staging requires all STAGING_FTP_* settings, including HOME_PATH.')
+    root = values['HOME_PATH']
+    parts = root.split('/')[1:]
+    if (not root.startswith('/') or not parts or
+            any(not part or part in ('.', '..') for part in parts) or
+            any(c in root for c in ('\\', '\r', '\n', '\x00')) or
+            root.lower() in ('/public_html', '/www', '/htdocs')):
+        sys.exit('Staging requires an explicit non-root isolated absolute HOME_PATH.')
+    if values['USERNAME'].casefold() == USER.casefold():
+        sys.exit('Staging must use a separate FTP account.')
+    if any(c in values['HOSTNAME'] + values['USERNAME'] for c in ('\r', '\n', '\x00')):
+        sys.exit('Invalid staging connection settings.')
+    try:
+        port = int(values['PORT'])
+        if not 1 <= port <= 65535:
+            raise ValueError()
+    except ValueError:
+        sys.exit('Invalid STAGING_FTP_PORT.')
+    return values['HOSTNAME'], port, values['USERNAME'], values['PASSWORD'], root
+
+
+def enter_staging_root(ftp, root, local_dirs):
+    """Fail closed on aliases/symlinked managed directories before any writes."""
+    ftp.cwd(root)
+    if ftp.pwd() != root:
+        sys.exit('Staging root does not resolve to the configured absolute path.')
+    for rel in sorted(local_dirs - {''}):
+        path = root + '/' + rel
+        try:
+            ftp.cwd(path)
+        except ftplib.error_perm as error:
+            if not str(error).startswith('550'):
+                raise
+            sys.exit('Staging managed directories must exist and be verifiable before deployment.')
+        if ftp.pwd() != path:
+            sys.exit('Staging managed directory resolves outside its expected path.')
+    ftp.cwd(root)
+    for rel in sorted(local_dirs):
+        list_remote_dir(ftp, rel, strict=True)
+
+
 def local_files_and_dirs(root):
     """Returns (relative file paths, relative dir paths including "") under root."""
     files = set()
@@ -101,7 +147,8 @@ def upload_all(ftp, local_files, dry_run):
     failed = []
 
     for rel in sorted(local_files):
-        ensure_remote_dir(ftp, os.path.dirname(rel), made_dirs)
+        if not dry_run:
+            ensure_remote_dir(ftp, os.path.dirname(rel), made_dirs)
         local_path = DIST / rel
         size = local_path.stat().st_size
 
@@ -121,28 +168,39 @@ def upload_all(ftp, local_files, dry_run):
     return uploaded, failed
 
 
-def list_remote_dir(ftp, rel_dir):
+def list_remote_dir(ftp, rel_dir, strict=False):
     """Returns [(name, is_dir), ...] for one directory, or [] if it doesn't exist."""
     entries = []
     lines = []
     try:
         ftp.retrlines(f"LIST {rel_dir}" if rel_dir else "LIST", lines.append)
     except ftplib.all_errors:
+        if strict:
+            sys.exit("Cannot inspect staging directory; refusing deployment.")
         return entries
 
     for line in lines:
         parts = line.split(None, 8)
         if len(parts) < 9:
+            if strict:
+                sys.exit("Unrecognized staging directory listing; refusing deployment.")
             continue
         name = parts[8]
         if name in (".", ".."):
+            continue
+        if '/' in name or "\\" in name or any(ord(c) < 32 for c in name):
+            sys.exit('Unsafe remote listing entry; refusing to prune.')
+        # Never follow or delete symlinks advertised by LIST.
+        if parts[0].startswith('l'):
+            if strict:
+                sys.exit('Staging managed directory contains a symlink.')
             continue
         entries.append((name, parts[0].startswith("d")))
 
     return entries
 
 
-def prune_stale_files(ftp, local_files, local_dirs, dry_run):
+def prune_stale_files(ftp, local_files, local_dirs, dry_run, strict=False):
     """Deletes remote files not present locally, scoped to directories dist
     manages. A remote directory with no local counterpart is never listed, so
     it is never touched."""
@@ -150,7 +208,7 @@ def prune_stale_files(ftp, local_files, local_dirs, dry_run):
     failed = []
 
     for rel_dir in sorted(local_dirs):
-        for name, is_dir in list_remote_dir(ftp, rel_dir):
+        for name, is_dir in list_remote_dir(ftp, rel_dir, strict=strict):
             if is_dir:
                 continue  # only prune files; subdirectories are handled by their own entry in local_dirs
             rel = f"{rel_dir}/{name}" if rel_dir else name
@@ -298,7 +356,9 @@ def main():
         "--allow-dirty", action="store_true",
         help="Allow deploying an uncommitted dist/ (not recommended)",
     )
+    parser.add_argument("--target", choices=("production", "staging"), default="production")
     args = parser.parse_args()
+    staging = staging_config() if args.target == "staging" else None
 
     if not DIST.is_dir():
         sys.exit(f"{DIST} does not exist. Run `npm run build` first.")
@@ -310,18 +370,27 @@ def main():
     if not local_files:
         sys.exit(f"{DIST} has no files to deploy.")
 
-    password = resolve_password()
+    if staging:
+        host, port, user, password, root = staging
+        if any('\\' in rel or any(ord(c) < 32 for c in rel) for rel in local_files | local_dirs):
+            sys.exit('Unsafe staging artifact path.')
+        if any(path.is_symlink() for path in DIST.rglob('*')):
+            sys.exit('Staging dist must not contain symlinks.')
+    else:
+        host, port, user, password = HOST, PORT, USER, resolve_password()
 
     ftp = ftplib.FTP()
-    ftp.connect(HOST, PORT, timeout=120)
-    ftp.login(USER, password)
-    print(f"connected to {HOST} as {USER}" + (" (dry run)" if args.dry_run else ""))
+    ftp.connect(host, port, timeout=120)
+    ftp.login(user, password)
+    if staging:
+        enter_staging_root(ftp, root, local_dirs)
+    print(f"connected to {args.target}" + (" (dry run)" if args.dry_run else ""))
 
     print("\n-- upload --")
     uploaded, upload_failed = upload_all(ftp, local_files, args.dry_run)
 
     print("\n-- prune stale files --")
-    removed, prune_failed = prune_stale_files(ftp, local_files, local_dirs, args.dry_run)
+    removed, prune_failed = prune_stale_files(ftp, local_files, local_dirs, args.dry_run, strict=bool(staging))
 
     ftp.quit()
 

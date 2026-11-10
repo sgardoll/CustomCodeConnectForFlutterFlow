@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   signedInSession,
@@ -29,7 +29,7 @@ test.describe("Magic-link sign-in", () => {
   test("rejects an invalid email inline without calling the backend", async ({ page }) => {
     let sendCalled = false;
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.route(ENDPOINTS.authSendMagicLink, async (route) => {
@@ -54,7 +54,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("sends a link, then leaves the submit control usable to resend", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
       [ENDPOINTS.authSendMagicLink]: magicLinkSent(),
     });
@@ -85,7 +85,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("shows an inline alias-policy error and keeps normal addresses working", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
       [ENDPOINTS.authSendMagicLink]: magicLinkAliasRejected("user+tag@gmail.com"),
     });
@@ -108,7 +108,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("an HTTP-success response with an unexpected error code is surfaced as an error", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
       // HTTP 200, but the body carries an error code that is not the
       // specifically handled plus-alias rejection: the send did not happen.
@@ -139,7 +139,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("an HTTP-success response that declares success:false is surfaced as an error", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
       // HTTP 200 with an explicit failure and no code: this must never read as
       // "Sent!" or clear the address.
@@ -166,7 +166,7 @@ test.describe("Magic-link sign-in", () => {
   test("recovers from a failed send, and retry succeeds", async ({ page }) => {
     let attempt = 0;
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.route(ENDPOINTS.authSendMagicLink, async (route) => {
@@ -194,7 +194,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("an expired or invalid token surfaces an inline retry in the sign-in modal", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
       [ENDPOINTS.authVerifyMagicLink]: magicLinkVerifyFailure(),
     });
@@ -211,7 +211,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("a successful token verification refreshes the session and subscription", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.authVerifyMagicLink]: signedInSession(),
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
@@ -228,7 +228,7 @@ test.describe("Magic-link sign-in", () => {
 
   test("signing in from the Plans surface returns to Plans after verification", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
 
@@ -242,7 +242,7 @@ test.describe("Magic-link sign-in", () => {
     // The magic-link round trip is a fresh navigation with no memory of the
     // DOM — the return surface must survive via storage, not page state.
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.authVerifyMagicLink]: signedInSession(),
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });

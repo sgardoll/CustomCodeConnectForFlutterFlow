@@ -47,7 +47,7 @@ The handoff shows several demo-only concepts. Production must not fabricate them
 | Purchases inside the hero modal | Pricing modal links to Stripe checkout / portal via existing `startCheckout` / `openCustomerPortal`. |
 | Connection success animations | Show real connection status; use loading, error, and retry states. |
 | Usage breakdown by day/category | Show only the data the backend returns (`used / limit` and current period). |
-| Generation history table | Do not add a history table unless the backend endpoint exists and is enabled. |
+| Generation history table | Owner-scoped history is implemented under STU-930–933; runtime availability requires the configured authenticated endpoint. See [acceptance boundaries](../generation-history-acceptance.md). |
 | Account deletion flow | Do not add account deletion; if unavailable, omit the control or show a disabled / support message. |
 
 ## 5. Other production rules
@@ -55,3 +55,9 @@ The handoff shows several demo-only concepts. Production must not fabricate them
 - Keep the brand logomark inline (SVG), not as an external image request.
 - Preserve the real copy and labels from the export, but replace any static placeholders with live data equivalents listed above.
 - Do not add OpenDesign chrome, preview labels, or design-process annotations to the production UI.
+
+## Generation history (STU-933)
+
+List existing records, including incomplete ones, without new retention or tier restrictions. Empty pages may have continuation cursors. Open restores available artifacts into Results without generation, billing or deployment; Deploy remains a separate explicit action with existing safety gates. Prefer complete generator output, otherwise validated nontruncated review-input generatedBundle. Missing review remains unavailable; generator code never implies reviewer approval. Stored fixedCode merges by artifact identity. Preserve safe raw text for partial records.
+
+Logout/account changes invalidate pending requests and clear history; opening history prevents late generation responses replacing the selection. Delete removes generation content, retaining only an internal owner-bound anti-resurrection marker. Foreign, absent and deleted records share 404. Source acceptance does not establish live endpoint availability.

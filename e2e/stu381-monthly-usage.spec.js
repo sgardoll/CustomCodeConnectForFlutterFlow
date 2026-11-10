@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   powerSubscription,
@@ -293,7 +293,7 @@ test.describe("STU-381 monthly usage metering", () => {
   test("a signed-out guest's Manage Subscription follows the sign-in path", async ({ page }) => {
     let calls = 0;
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.createPortal]: () => {
         calls += 1;
         return portalSession();

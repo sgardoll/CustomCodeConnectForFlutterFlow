@@ -1,3 +1,6 @@
+import { createGenerationSessionClient } from './src/generationSession.js';
+import { createGenerationHistoryClient, recoverGenerationHistory } from './src/generationHistory.js';
+import { resolveGenerationHistoryEndpoint } from './src/generationHistoryConfig.js';
 import posthog from "posthog-js";
 import {
   closeModal,
@@ -171,19 +174,57 @@ let subscriptionState = createSubscriptionState({ isResolved: true })
 let sessionReadiness = Promise.resolve()
 
 // --- PIPELINE ---
-const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}/service/runpipeline`
+const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}${import.meta.env.VITE_HISTORY_TARGET === 'staging' ? '/staging' : ''}/service/runpipeline`
 
 // --- IDENTITY RESOLUTION ---
 const IDENTITY_COOKIE_KEY = 'bs_identity'
 const IDENTITY_SESSION_KEY = 'bs_user_id'
 const IDENTITY_TOKEN_KEY = 'bs_identity_token'
-const IDENTITY_ENDPOINT = `${BUILDSHIP_BASE_URL}/authUserCheck`
+const IDENTITY_ENDPOINT = `${BUILDSHIP_BASE_URL}${import.meta.env.VITE_HISTORY_TARGET === 'staging' ? '/staging' : ''}/authUserCheck`
 
 let identityState = {
   userId: null,
   token: null,
   status: null, // 'recognized' | 'new' | null
   resolved: false,
+}
+
+let identityEpoch = 0;
+// Obtain a fresh anonymous proof; persisted tokens may have expired or been claimed.
+let legacyIdentityToken = null;
+const generationSessionClient = createGenerationSessionClient({
+  endpoint: IDENTITY_ENDPOINT,
+  getSession: () => ({ token: authState.sessionToken, key: authState.isVerified ? authState.email : null }),
+  getLegacyToken: async () => {
+    if (!legacyIdentityToken) {
+      let timer;
+      try { await Promise.race([resolveIdentity(), new Promise(resolve => { timer = setTimeout(resolve, 5000); })]); }
+      finally { clearTimeout(timer); }
+    }
+    return legacyIdentityToken;
+  },
+});
+function resetGenerationIdentity() {
+  identityEpoch++;
+  legacyIdentityToken = null;
+  generationSessionClient.invalidate();
+  identityResolvePromise = null;
+  identityState = { userId: null, token: null, status: null, resolved: false };
+}
+async function ensureAccountGenerationIdentity({ reconcileUsage = true } = {}) {
+  const epoch = identityEpoch;
+  const token = authState.sessionToken;
+  const result = await generationSessionClient.ensure();
+  if (epoch !== identityEpoch || token !== authState.sessionToken || !authState.isVerified) {
+    throw new DOMException('Account session changed', 'AbortError');
+  }
+  identityState = { userId: result.userId, token: result.token, status: 'account', resolved: true };
+  if (reconcileUsage && result.usageCount !== undefined) {
+    const month = getCurrentYearMonth();
+    const count = !result.usageMonth || result.usageMonth === month ? result.usageCount : 0;
+    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify({ count, month }));
+    updateUsageDisplay();
+  }
 }
 
 // --- TIER LIMITS ---
@@ -2199,6 +2240,7 @@ let pipelineState = {
 };
 
 function resetPipelineResults() {
+  document.getElementById("history-review-notice")?.remove();
   pipelineState.step1Result = null;
   pipelineState.step2Result = null;
   pipelineState.step3Result = null;
@@ -4906,6 +4948,7 @@ async function runPromptArchitect(userInput, images = []) {
 }
 
 async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId) {
+  const generationRunId = runId ?? pipelineState.runId;
   const prompt = buildGeneratorPrompt(masterPrompt)
   const context = createBuildShipContext("generator", pipelineState.bundleSpec)
   try {
@@ -4920,6 +4963,10 @@ async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId)
     // A cancelled request is a stale run, not a model problem: it must not
     // trigger a second request on the fallback model.
     if (primaryError.isPipelineCancel) throw primaryError
+    if (!isCurrentPipelineRun(generationRunId)) {
+      primaryError.isPipelineCancel = true;
+      throw primaryError;
+    }
     if (selectedModel !== FALLBACK_MODEL) {
       console.warn(`Code Generator failed with ${selectedModel}, retrying with fallback model:`, primaryError.message)
       // The fallback is a real service event, so the run says so while it
@@ -6083,6 +6130,14 @@ async function refreshSession(sessionToken) {
 }
 
 function saveSession(email, sessionToken) {
+  resetHistory();
+  if (authState.isVerified && authState.email !== email) {
+    invalidatePipelineRun();
+    abortPipelineRequests();
+    pipelineState.isRunning = false;
+    setRunPipelineButtonBusy(false);
+  }
+  resetGenerationIdentity();
   const storedSession = getStoredSession()
   const sessionChanged = (authState.email || storedSession.email) !== email
   authState.email = email
@@ -6091,9 +6146,16 @@ function saveSession(email, sessionToken) {
   subscriptionState = createSubscriptionState({ isLoading: true })
   localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify({ email, sessionToken }))
   if (sessionChanged) clearSubscriptionCache()
+  void ensureAccountGenerationIdentity().catch(() => {});
 }
 
 function clearSession() {
+  resetHistory();
+  resetGenerationIdentity();
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
   authState.email = null
   authState.sessionToken = null
   authState.isVerified = false
@@ -6258,6 +6320,12 @@ async function handleMagicLinkRequest() {
 }
 
 function handleSignOut() {
+  resetHistory();
+  resetGenerationIdentity();
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
   // Reset in-memory auth/subscription state first so the immediate re-render
   // below reflects a signed-out identity/plan.
   authState.email = null
@@ -6368,6 +6436,7 @@ function getOrCreateCookieId() {
 }
 
 async function resolveIdentity() {
+  const epoch = identityEpoch;
   try {
     if (typeof FingerprintJS === 'undefined') {
       console.warn('resolveIdentity: FingerprintJS not loaded, skipping')
@@ -6389,6 +6458,9 @@ async function resolveIdentity() {
     }
 
     const data = await response.json()
+    if (epoch !== identityEpoch) return;
+    legacyIdentityToken = data.identity_token || null;
+    if (authState.isVerified) return;
     identityState.userId = data.user_id
     identityState.token = data.identity_token || null
     identityState.status = data.status
@@ -6415,6 +6487,7 @@ async function resolveIdentity() {
 let identityResolvePromise = null
 
 function ensureIdentityReady(maxWaitMs = 5000) {
+  if (authState.isVerified) return ensureAccountGenerationIdentity();
   if (identityState.resolved) return Promise.resolve()
   if (!identityResolvePromise) {
     identityResolvePromise = resolveIdentity().catch((err) => {
@@ -7067,6 +7140,8 @@ function abortPipelineRequests() {
 }
 
 async function callBuildShip(step, model, prompt, context = {}, images = []) {
+  const requestRunId = pipelineState.runId;
+  const requestIdentityEpoch = identityEpoch;
   const BUILDSHIP_TIMEOUT_MS = 120000
   const controller = new AbortController()
   activeBuildShipControllers.add(controller)
@@ -7077,15 +7152,21 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
   }, BUILDSHIP_TIMEOUT_MS)
 
   try {
+    // Stage token renewal must not overwrite the newer generator metering result.
+    if (authState.isVerified) await ensureAccountGenerationIdentity({ reconcileUsage: false });
+    if (!isCurrentPipelineRun(requestRunId) || requestIdentityEpoch !== identityEpoch || controller.signal.aborted) {
+      throw new DOMException("Pipeline session changed", "AbortError");
+    }
     const res = await fetch(PIPELINE_ENDPOINT, {
       method: 'POST',
+      credentials: 'omit',
       headers: {
         'Content-Type': 'application/json',
-        ...(identityState.token ? { Authorization: `Bearer ${identityState.token}` } : {}),
       },
       signal: controller.signal,
       body: JSON.stringify({
         user_id: identityState.userId,
+        sessionToken: identityState.token,
         request_id: pipelineState.requestId,
         step,
         model,
@@ -7099,6 +7180,10 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     // instead of a JSON body. Parse defensively so we surface the raw body in
     // the error rather than crashing on JSON.parse.
     const rawText = await res.text()
+    // Abort may lose a race with response delivery; stale accounts cannot meter usage.
+    if (!isCurrentPipelineRun(requestRunId) || requestIdentityEpoch !== identityEpoch || controller.signal.aborted) {
+      throw new DOMException("Pipeline session changed", "AbortError");
+    }
     let data = {}
     try {
       data = rawText ? JSON.parse(rawText) : {}
@@ -9489,6 +9574,10 @@ function showResultsView(codeContent, auditContent) {
   const panel = document.getElementById("main-stage-container");
   const from = currentSurfaceRect(panel);
   const wasResults = document.body.classList.contains("results-fullscreen");
+  panel?.classList.add("visible");
+  document.getElementById("ready-state")?.classList.add("hidden");
+  const promptEl = document.getElementById("pipeline-submitted-prompt");
+  if (promptEl) promptEl.textContent = pipelineState.submittedPrompt || "";
   cancelPipelineHideTimer();
   document.getElementById("pipeline-progress")?.classList.remove("visible");
   setGenerationStageVisible(true);
@@ -10106,3 +10195,144 @@ window.editPipelinePrompt = editPipelinePrompt;
 window.retryPipelineRun = retryPipelineRun;
 window.openCreditsModal = openCreditsModal;
 window.closeCreditsModal = closeCreditsModal;
+
+// History requests use the application session, never a caller-supplied owner.
+const historyClient = createGenerationHistoryClient({
+  endpoint: resolveGenerationHistoryEndpoint({
+    target: import.meta.env.VITE_HISTORY_TARGET || 'production',
+    productionEndpoint: `${BUILDSHIP_BASE_URL}/service/generation-history`,
+    stagingEndpoint: `${BUILDSHIP_BASE_URL}/staging/service/generation-history`,
+  }),
+  getSession: () => ({ token: authState.sessionToken, key: authState.isVerified ? authState.email : null }),
+});
+let historyCursor = null;
+let historyEpoch = 0;
+let historyRecovery = null;
+let historyResultsBundle = null;
+const historyEl = id => document.getElementById(`history-${id}`);
+function resetHistory() {
+  if (historyResultsBundle && pipelineState.artifactBundle === historyResultsBundle) {
+    resetPipelineResults();
+    pipelineState.submittedPrompt = "";
+    document.getElementById("results-view")?.classList.remove("visible");
+    document.body.classList.remove("results-fullscreen", "results-with-sidebar");
+    document.getElementById("main-stage-container")?.classList.remove("visible");
+    const promptEl = document.getElementById("pipeline-submitted-prompt");
+    if (promptEl) promptEl.textContent = "";
+    setGenerationStageVisible(false);
+  }
+  historyResultsBundle = null;
+  historyEpoch++;
+  historyClient.invalidate();
+  historyCursor = null;
+  historyRecovery = null;
+  if (historyEl('panel')) historyEl('panel').setAttribute('aria-busy', 'false');
+  historyEl('list')?.replaceChildren();
+  historyEl('detail')?.replaceChildren();
+  if (historyEl('status')) historyEl('status').textContent = 'Refresh to load your saved generations.';
+  if (historyEl('next')) historyEl('next').disabled = true;
+}
+function historyButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'btn-action ghost sm';
+  button.textContent = label; button.addEventListener('click', action);
+  return button;
+}
+async function historyTask(action) {
+  const epoch = ++historyEpoch;
+  historyClient.invalidate();
+  historyEl('status').textContent = 'Loading history…';
+  historyEl('panel').setAttribute('aria-busy', 'true');
+  try {
+    await ensureAccountGenerationIdentity();
+    if (epoch !== historyEpoch) return;
+    await action(() => epoch === historyEpoch);
+  }
+  catch (error) {
+    if (epoch === historyEpoch && error.name !== 'AbortError') historyEl('status').textContent =
+      error.status === 401 ? 'Session expired. Sign in again, then refresh.' :
+      error.status === 404 ? 'This entry is no longer available. Refresh the list.' : 'History could not be loaded or changed. Try again.';
+  } finally { if (epoch === historyEpoch) historyEl('panel').setAttribute('aria-busy', 'false'); }
+}
+function loadHistory(next = false) {
+  historyRecovery = null;
+  const cursor = next ? historyCursor : null;
+  return historyTask(async current => {
+    const page = await historyClient.list(cursor ? { cursor } : {});
+    if (!current()) return;
+    historyCursor = page.nextCursor;
+    historyEl('list').replaceChildren(); historyEl('detail').replaceChildren();
+    historyEl('next').disabled = !historyCursor;
+    historyEl('status').textContent = page.items.length ? 'Saved generations' :
+      historyCursor ? 'No entries on this page. Continue to the next page.' : 'No saved generations on this page.';
+    for (const item of page.items) {
+      if (!item || typeof item.id !== 'string' || !item.id || item.id.includes('/')) continue;
+      const row = document.createElement('li');
+      row.append(historyButton(item.id, () => openHistory(item.id)));
+      const status = document.createElement('span');
+      status.textContent = ` — ${typeof item.status === 'string' ? item.status : 'Status unknown'}`;
+      row.append(status); historyEl('list').append(row);
+    }
+  });
+}
+function openHistory(id) {
+  if (pipelineState.isRunning) { historyEl('status').textContent = 'Wait for generation to finish before opening history.'; return; }
+  historyRecovery = null;
+  historyEl('detail').replaceChildren();
+  return historyTask(async current => {
+    const detail = await historyClient.detail(id);
+    if (!current()) return;
+    if (detail.generation.id !== id) throw new Error('Mismatched history detail');
+    const recovered = recoverGenerationHistory(detail);
+    historyRecovery = recovered;
+    const panel = historyEl('detail'); panel.replaceChildren();
+    const message = document.createElement('p');
+    message.textContent = recovered.artifactBundle ?
+      recovered.reviewAvailable ? 'Stored artifacts and review available.' : 'Review unavailable. Recovered code has not acquired review approval.' :
+      'Replay unavailable: this record is incomplete or cannot be validated. Available text is shown below.';
+    panel.append(message);
+    for (const [name, stage] of Object.entries(recovered.stages)) {
+      for (const field of ['input_text', 'output_text']) {
+        if (typeof stage?.[field] !== 'string') continue;
+        const section = document.createElement('details'); const title = document.createElement('summary');
+        title.textContent = `${name} ${field}`; const pre = document.createElement('pre');
+        pre.style.whiteSpace = 'pre-wrap'; pre.textContent = stage[field]; section.append(title, pre); panel.append(section);
+      }
+    }
+    if (recovered.artifactBundle) panel.append(historyButton('Open in Results', () => {
+      if (pipelineState.isRunning) { historyEl('status').textContent = 'Wait for generation to finish before opening history.'; return; }
+      if (historyRecovery !== recovered || !authState.isVerified) return;
+      resetPipelineResults();
+      Object.assign(pipelineState, { artifactBundle: recovered.artifactBundle, bundleSpec: recovered.bundleSpec,
+        step1Result: recovered.bundleSpec ? JSON.stringify(recovered.bundleSpec) : null,
+        step2Result: JSON.stringify(recovered.artifactBundle), step3Result: recovered.review ? JSON.stringify(recovered.review) : null,
+        bundleReview: recovered.bundleReview, submittedPrompt: recovered.originalPrompt || '', submittedImages: [],
+        selectedArtifactId: recovered.artifactBundle.artifacts[0].id, requestId: id });
+      historyResultsBundle = recovered.artifactBundle;
+      // The adapter merges stored review by validated artifact ID and preserves original code.
+      switchView('home');
+      showResultsView(getSelectedArtifactCode(), recovered.reviewAvailable ? renderMarkdownAudit(pipelineState.step3Result) : '<p>Review unavailable for this saved generation.</p>');
+      if (!recovered.reviewAvailable) {
+        const notice = document.createElement('p'); notice.id = 'history-review-notice'; notice.setAttribute('role', 'status');
+        notice.textContent = 'Review unavailable for this saved generation. Existing deployment checks still apply.';
+        document.getElementById('results-view')?.prepend(notice);
+      }
+    }));
+    panel.append(historyButton('Delete this generation', () => {
+      const confirm = document.createElement('div'); confirm.setAttribute('role', 'group'); confirm.setAttribute('aria-label', 'Confirm deletion');
+      const warning = document.createElement('p'); warning.textContent = 'Delete this generation permanently? Generation content will be removed; an internal marker prevents late writes from restoring it.';
+      confirm.append(warning, historyButton('Cancel', () => confirm.remove()), historyButton('Confirm delete', () => historyTask(async current => {
+        await historyClient.delete(id); if (!current()) return;
+        historyRecovery = null; panel.replaceChildren(); historyEl('status').textContent = 'Generation deleted. Refresh to update the list.';
+      })));
+      panel.append(confirm);
+    }));
+    historyEl('status').textContent = 'Generation details loaded.';
+  });
+}
+historyEl('refresh').addEventListener('click', () => loadHistory());
+historyEl('next').addEventListener('click', () => loadHistory(true));
+
+if (import.meta.env.DEV) {
+ window.__CCC_HISTORY_TEST__ = { session: saveSession, pending: value => { pipelineState.isRunning = value; }, state: () => pipelineState };
+}

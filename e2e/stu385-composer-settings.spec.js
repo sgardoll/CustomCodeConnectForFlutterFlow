@@ -3,7 +3,7 @@ import {
   applyDefaultRoutes,
   ENDPOINTS,
   freeSubscription,
-  guestIdentity,
+
   oneArtifact,
   professionalSubscription,
   unresolvedSubscription,
@@ -82,7 +82,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("model availability by subscription tier", () => {
   test("free plan labels Pro models and offers a transparent upgrade", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.goto("/");
@@ -222,7 +222,7 @@ test.describe("the dialog stays wired to the generation request", () => {
     page,
   }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.goto("/");
@@ -241,7 +241,7 @@ test.describe("the dialog stays wired to the generation request", () => {
 test.describe("focus and walkthrough behaviour around the dialog", () => {
   test("closing the dialog returns focus to the composer", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.goto("/");
@@ -256,7 +256,7 @@ test.describe("focus and walkthrough behaviour around the dialog", () => {
 
   test("an ordinary close never reopens the walkthrough", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.goto("/");

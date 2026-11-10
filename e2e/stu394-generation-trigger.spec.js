@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   ENDPOINTS,
 } from "./fixtures/apiFixtures.js";
@@ -48,7 +48,7 @@ test.describe("Generation trigger (STU-394)", () => {
       localStorage.setItem("hasSeenWalkthrough", "true");
     });
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.goto("/");

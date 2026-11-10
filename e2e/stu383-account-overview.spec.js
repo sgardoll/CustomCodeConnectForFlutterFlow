@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   powerSubscription,
@@ -157,26 +157,21 @@ test.describe("STU-383 account overview", () => {
     );
   });
 
-  test("the no-history state is truthful and points to the generation workspace", async ({ page }) => {
+  test("empty saved history is truthful and does not fabricate rows", async ({ page }) => {
     await seedSession(page);
     await applyDefaultRoutes(page, {
       ...refreshOverride(),
       [ENDPOINTS.identity]: identityWithUsage({ email: undefined, count: 3 }),
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
+    await page.route('**/service/generation-history', route => route.fulfill({json:{items:[],nextCursor:null}}));
     await page.goto("/");
     await openAccount(page);
-
-    await expect(page.locator("#acct-no-history")).toContainText("Saved history isn't available yet.");
-    await expect(page.locator("#acct-no-history")).toContainText("generation workspace");
-    // No illustrative breakdown/history rows are fabricated.
-    const text = await page.locator("#acct-history").innerText();
-    expect(text).not.toMatch(/Custom Widget 9|Committed/);
-
-    // The empty state keeps current results reachable via the generation workspace.
-    await page.locator("#acct-no-history a").click();
-    await expect(page.locator("#home-view")).toBeVisible();
-    await expect(page.locator("#home-view")).toHaveClass(/is-active/);
+    await page.locator('#history-refresh').click();
+    await expect(page.locator('#history-status')).toContainText('No saved generations');
+    await expect(page.locator('#history-list')).toBeEmpty();
+    await expect(page.locator('#history-next')).toBeDisabled();
+    expect(await page.locator('#acct-history').innerText()).not.toMatch(/Custom Widget 9|Committed/);
   });
 
   test("account reflects a usage refresh without stale private information", async ({ page }) => {
@@ -219,7 +214,7 @@ test.describe("STU-383 account overview", () => {
 
   test("a guest sees the anonymous Free allowance, never a signed-in overview", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
     });
     await page.goto("/");
     await openAccount(page);

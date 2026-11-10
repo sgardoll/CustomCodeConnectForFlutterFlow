@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   unresolvedSubscription,
@@ -311,7 +311,7 @@ test.describe("STU-382 plans surface and paywall states", () => {
   test("C4/C1: keyboard-reachable sign-in, upgrade and Manage actions render correctly", async ({ page }) => {
     // Guest account view: Sign In and Upgrade are keyboard-focusable on mobile.
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
     await page.setViewportSize({ width: 360, height: 800 });
