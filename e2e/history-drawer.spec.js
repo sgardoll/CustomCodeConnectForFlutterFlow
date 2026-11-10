@@ -1,0 +1,31 @@
+import { test, expect } from '@playwright/test';
+import { applyDefaultRoutes, ENDPOINTS } from './fixtures/apiFixtures.js';
+test.use({hasTouch:true});
+for (const width of [360,1440]) test(`history drawer and account scrolling ${width}`,async({page})=>{
+ await page.setViewportSize({width,height:700});
+ await page.addInitScript(()=>{localStorage.setItem('hasSeenWalkthrough','true');localStorage.setItem('ccc_auth_session',JSON.stringify({email:'test@example.com',sessionToken:'synthetic'}));});
+ await applyDefaultRoutes(page,{[ENDPOINTS.authRefreshSession]:{status:200,contentType:'application/json',body:JSON.stringify({email:'test@example.com',sessionToken:'synthetic'})}});
+ await page.route('**/service/generation-history',r=>r.fulfill({json:{items:[{id:'saved-one',status:'success'}],nextCursor:null}}));
+ await page.goto('/#account');await expect(page.locator('#topbar-avatar')).toContainText('T');
+ const account=page.locator('#account-view');
+ await expect(account).toHaveCSS('overflow-y','auto');
+ await account.evaluate(el=>{el.scrollTop=el.scrollHeight;});
+ expect(await account.evaluate(el=>el.scrollTop)).toBeGreaterThan(0);
+ await expect(page.locator('#history-drawer')).toBeHidden();
+ const logo=page.locator('.topbar .brand');
+ if(width===1440) await logo.hover();else await logo.tap();
+ await expect(page.locator('#history-drawer')).toBeVisible();
+ await expect(page.locator('#history-drawer')).toContainText('saved-one');
+ if(width===1440){await logo.dispatchEvent('pointerleave',{pointerType:'mouse'});await logo.dispatchEvent('pointerenter',{pointerType:'mouse'});await page.waitForTimeout(250);await expect(page.locator('#history-drawer')).toBeVisible();await page.mouse.move(1000,500);await expect(page.locator('#history-drawer')).toBeHidden();await logo.hover();await expect(page.locator('#history-drawer')).toBeVisible();}
+ await page.keyboard.press('Escape');await expect(page.locator('#history-drawer')).toBeHidden();
+ await expect(logo).toBeFocused();
+ await page.keyboard.press('ArrowDown');await expect(page.locator('#history-drawer')).toBeVisible();
+ await page.locator('#history-drawer .history-drawer-actions a').click();
+ await expect(page.locator('#history-drawer')).toBeHidden();
+ await expect(page.locator('#home-view')).toBeVisible();
+ await logo.focus();await page.keyboard.press('ArrowDown');
+ await expect(page.locator('#history-drawer')).toBeVisible();
+ await page.evaluate(()=>window.__CCC_HISTORY_TEST__.session('other@example.com','other-token'));
+ await expect(page.locator('#history-drawer')).toBeHidden();
+ await expect(page.locator('#history-list')).toBeEmpty();
+});

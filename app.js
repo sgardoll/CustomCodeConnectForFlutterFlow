@@ -10211,6 +10211,7 @@ let historyRecovery = null;
 let historyResultsBundle = null;
 const historyEl = id => document.getElementById(`history-${id}`);
 function resetHistory() {
+  closeHistoryDrawer();
   if (historyResultsBundle && pipelineState.artifactBundle === historyResultsBundle) {
     resetPipelineResults();
     pipelineState.submittedPrompt = "";
@@ -10309,6 +10310,7 @@ function openHistory(id) {
         bundleReview: recovered.bundleReview, submittedPrompt: recovered.originalPrompt || '', submittedImages: [],
         selectedArtifactId: recovered.artifactBundle.artifacts[0].id, requestId: id });
       historyResultsBundle = recovered.artifactBundle;
+      closeHistoryDrawer();
       // The adapter merges stored review by validated artifact ID and preserves original code.
       switchView('home');
       showResultsView(getSelectedArtifactCode(), recovered.reviewAvailable ? renderMarkdownAudit(pipelineState.step3Result) : '<p>Review unavailable for this saved generation.</p>');
@@ -10336,3 +10338,59 @@ historyEl('next').addEventListener('click', () => loadHistory(true));
 if (import.meta.env.DEV) {
  window.__CCC_HISTORY_TEST__ = { session: saveSession, pending: value => { pipelineState.isRunning = value; }, state: () => pipelineState };
 }
+
+// A single history surface moves into the drawer; account/session logic stays shared.
+function closeHistoryDrawer(returnFocus = false) {
+  const drawer = document.getElementById('history-drawer');
+  if (!drawer || drawer.hidden) return;
+  const panel = document.getElementById('acct-history');
+  document.getElementById('history-account-slot').after(panel);
+  drawer.hidden = true; drawer.inert = true;
+  const trigger = document.querySelector('.topbar .brand');
+  trigger.setAttribute('aria-expanded', 'false');
+  if (returnFocus) trigger.focus();
+}
+function openHistoryDrawer() {
+  const drawer = document.getElementById('history-drawer');
+  if (!drawer.hidden) return;
+  drawer.style.top = `${document.querySelector('.topbar').getBoundingClientRect().bottom}px`;
+  drawer.hidden = false; drawer.inert = false;
+  document.querySelector('.topbar .brand').setAttribute('aria-expanded', 'true');
+  document.getElementById('history-drawer-signin').hidden = authState.isVerified;
+  if (authState.isVerified) {
+    document.getElementById('history-drawer-content').append(document.getElementById('acct-history'));
+    loadHistory();
+  }
+}
+const historyTrigger = document.querySelector('.topbar .brand');
+historyTrigger.setAttribute('aria-controls', 'history-drawer');
+historyTrigger.setAttribute('aria-expanded', 'false');
+historyTrigger.setAttribute('aria-label', 'Custom Code Connect — Home; Arrow Down opens history');
+historyTrigger.setAttribute('aria-keyshortcuts', 'ArrowDown');
+historyTrigger.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') openHistoryDrawer(); });
+historyTrigger.addEventListener('click', event => {
+  if (event.pointerType === 'touch') { event.preventDefault(); openHistoryDrawer(); }
+  else closeHistoryDrawer();
+});
+historyTrigger.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown') { event.preventDefault(); openHistoryDrawer(); document.getElementById('history-drawer-close').focus(); }
+});
+document.getElementById('history-drawer-close').addEventListener('click', () => closeHistoryDrawer(true));
+document.getElementById('history-drawer').addEventListener('pointerleave', event => { if (event.pointerType === 'mouse' && !event.currentTarget.contains(document.activeElement)) closeHistoryDrawer(); });
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.getElementById('history-drawer').hidden) { closeHistoryDrawer(true); } });
+document.addEventListener('pointerdown', event => { if (!event.target.closest('#history-drawer, .topbar .brand')) closeHistoryDrawer(); });
+
+let historyHoverCloseTimer;
+historyTrigger.addEventListener('pointerleave', event => {
+  if (event.pointerType !== 'mouse') return;
+  clearTimeout(historyHoverCloseTimer);
+  historyHoverCloseTimer = setTimeout(() => {
+    const drawer = document.getElementById('history-drawer');
+    if (!historyTrigger.matches(':hover') && !drawer.matches(':hover') && !drawer.contains(document.activeElement)) closeHistoryDrawer();
+  }, 200);
+});
+document.getElementById('history-drawer').addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));
+
+historyTrigger.addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));
+
+document.querySelector('#history-drawer .history-drawer-actions a').addEventListener('click', () => closeHistoryDrawer());

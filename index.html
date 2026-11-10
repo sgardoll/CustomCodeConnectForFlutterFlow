@@ -3278,8 +3278,14 @@
       }
     </style>
     <link rel="stylesheet" href="/src/htmlFidelity.css" />
+    <link rel="stylesheet" href="/src/historyDrawer.css" />
   </head>
   <body>
+  <aside id="history-drawer" aria-label="Generation history" hidden inert>
+    <div class="history-drawer-actions"><a href="#home">Home</a><button type="button" id="history-drawer-close" aria-label="Close generation history">Close</button></div>
+    <p id="history-drawer-signin" hidden>Sign in from Account to see your saved generations.</p>
+    <div id="history-drawer-content"></div>
+  </aside>
   <div class="shell-frame"><div class="shell-stage" id="shell-stage">
   <header class="topbar" role="banner">
     <a class="brand" href="#home" aria-label="Custom Code Connect — Home">
@@ -3669,6 +3675,7 @@
             </div>
           </div>
 
+          <div id="history-account-slot"></div>
           <div class="acct-card acct-history" id="acct-history">
             <div class="acct-card-head">
               <h2>Generation history</h2>
