@@ -10379,7 +10379,9 @@ historyTrigger.addEventListener('pointerleave', event => {
   clearTimeout(historyHoverCloseTimer);
   historyHoverCloseTimer = setTimeout(() => {
     const drawer = document.getElementById('history-drawer');
-    if (!drawer.matches(':hover') && !drawer.contains(document.activeElement)) closeHistoryDrawer();
+    if (!historyTrigger.matches(':hover') && !drawer.matches(':hover') && !drawer.contains(document.activeElement)) closeHistoryDrawer();
   }, 200);
 });
 document.getElementById('history-drawer').addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));
+
+historyTrigger.addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));

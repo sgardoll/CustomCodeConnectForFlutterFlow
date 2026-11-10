@@ -15,7 +15,7 @@ for (const width of [360,1440]) test(`history drawer and account scrolling ${wid
  if(width===1440) await logo.hover();else await logo.click();
  await expect(page.locator('#history-drawer')).toBeVisible();
  await expect(page.locator('#history-drawer')).toContainText('saved-one');
- if(width===1440){await page.mouse.move(1000,500);await expect(page.locator('#history-drawer')).toBeHidden();await logo.hover();await expect(page.locator('#history-drawer')).toBeVisible();}
+ if(width===1440){await logo.dispatchEvent('pointerleave',{pointerType:'mouse'});await logo.dispatchEvent('pointerenter',{pointerType:'mouse'});await page.waitForTimeout(250);await expect(page.locator('#history-drawer')).toBeVisible();await page.mouse.move(1000,500);await expect(page.locator('#history-drawer')).toBeHidden();await logo.hover();await expect(page.locator('#history-drawer')).toBeVisible();}
  await page.keyboard.press('Escape');await expect(page.locator('#history-drawer')).toBeHidden();
  await expect(logo).toBeFocused();
  await page.keyboard.press('Enter');await expect(page.locator('#history-drawer')).toBeVisible();
