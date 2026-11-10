@@ -9495,6 +9495,10 @@ function showResultsView(codeContent, auditContent) {
   const panel = document.getElementById("main-stage-container");
   const from = currentSurfaceRect(panel);
   const wasResults = document.body.classList.contains("results-fullscreen");
+  panel?.classList.add("visible");
+  document.getElementById("ready-state")?.classList.add("hidden");
+  const promptEl = document.getElementById("pipeline-submitted-prompt");
+  if (promptEl) promptEl.textContent = pipelineState.submittedPrompt || "";
   cancelPipelineHideTimer();
   document.getElementById("pipeline-progress")?.classList.remove("visible");
   setGenerationStageVisible(true);
@@ -10133,6 +10137,10 @@ function resetHistory() {
     pipelineState.submittedPrompt = "";
     document.getElementById("results-view")?.classList.remove("visible");
     document.body.classList.remove("results-fullscreen", "results-with-sidebar");
+    document.getElementById("main-stage-container")?.classList.remove("visible");
+    const promptEl = document.getElementById("pipeline-submitted-prompt");
+    if (promptEl) promptEl.textContent = "";
+    setGenerationStageVisible(false);
   }
   historyResultsBundle = null;
   historyEpoch++;

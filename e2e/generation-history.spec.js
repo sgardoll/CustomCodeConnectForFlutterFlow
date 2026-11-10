@@ -49,6 +49,12 @@ for (const reviewed of [true,false]) test(`recover multi-artifact results review
  await expect(page.locator('#history-status')).toContainText('Wait for generation');
  await page.evaluate(()=>window.__CCC_HISTORY_TEST__.pending(false));
  await page.getByRole('button',{name:'Open in Results',exact:true}).click();
+ await expect(page.locator('#main-stage-container')).toHaveClass(/visible/);
+ await expect(page.locator('#main-stage-container')).toBeVisible();
+ await expect(page.locator('#main-stage-container')).toHaveCSS('opacity','1');
+ await expect(page.locator('#main-stage-container')).toHaveCSS('pointer-events','auto');
+ await page.locator('#artifact-tabs button').first().click();
+ await expect(page.locator('#pipeline-submitted-prompt')).toHaveText('Synthetic prompt');
  const state=await page.evaluate(()=>window.__CCC_HISTORY_TEST__.state());
  expect(state.artifactBundle.artifacts).toHaveLength(2); expect(state.submittedPrompt).toBe('Synthetic prompt');
  if(reviewed) expect(state.bundleReview.artifacts[0].fixedCode).toContain('int x'); else expect(state.step3Result).toBeNull();
@@ -179,3 +185,16 @@ for(const valid of [true,false]) test(`restored code passes through configured d
  await expect(page.locator('#api-keys-modal')).toBeHidden();
  expect(forbidden).toEqual([]);
 });
+
+ test('sign out after opening saved results restores the home composer', async ({page}) => {
+  await historySetup(page);
+  await page.evaluate(()=>document.getElementById('pipeline-submitted-prompt').textContent='Earlier private prompt');
+  await page.getByRole('button',{name:'saved',exact:true}).click();
+  await page.getByRole('button',{name:'Open in Results',exact:true}).click();
+  await expect(page.locator('#pipeline-submitted-prompt')).toHaveText('');
+  await page.evaluate(()=>window.handleSignOut());
+  await expect(page.locator('#generation-stage')).toBeHidden();
+  await expect(page.locator('#hero')).toBeVisible();
+  await expect(page.locator('#composer')).toBeVisible();
+  await expect(page.locator('#main-stage-container')).not.toHaveClass(/visible/);
+ });
