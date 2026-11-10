@@ -74,6 +74,14 @@ class StagingTests(unittest.TestCase):
         ftp.retrlines.side_effect=lambda cmd,cb: cb("unrecognized listing")
         with self.assertRaises(SystemExit): d.enter_staging_root(ftp,"/staging",{""})
         ftp.storbinary.assert_not_called()
+    def test_listing_failure_after_preflight_fails_main(self):
+        ftp=Mock(); ftp.pwd.return_value='/staging'
+        ftp.retrlines.side_effect=[None,d.ftplib.error_perm('550 listing denied')]
+        with patch.dict(os.environ,ENV,clear=True), patch('sys.argv',['deploy','--target','staging']), patch.object(d,'ensure_dist_self_consistent'), patch.object(d,'ensure_dist_committed'), patch.object(d,'local_files_and_dirs',return_value=({'index.html'},{''})), patch.object(d.ftplib,'FTP',return_value=ftp), patch.object(d,'upload_all',return_value=([],[])):
+            with self.assertRaisesRegex(SystemExit,'Cannot inspect staging directory'):
+                d.main()
+            self.assertEqual(ftp.retrlines.call_count,2)
+            ftp.delete.assert_not_called()
     def test_hostile_listing_cannot_escape(self):
         ftp=Mock(); ftp.retrlines.side_effect=lambda cmd,cb: cb('-rw-r--r-- 1 u g 1 Jan 1 00:00 ../outside')
         with self.assertRaises(SystemExit): d.prune_stale_files(ftp,set(),{''},False)

@@ -200,7 +200,7 @@ def list_remote_dir(ftp, rel_dir, strict=False):
     return entries
 
 
-def prune_stale_files(ftp, local_files, local_dirs, dry_run):
+def prune_stale_files(ftp, local_files, local_dirs, dry_run, strict=False):
     """Deletes remote files not present locally, scoped to directories dist
     manages. A remote directory with no local counterpart is never listed, so
     it is never touched."""
@@ -208,7 +208,7 @@ def prune_stale_files(ftp, local_files, local_dirs, dry_run):
     failed = []
 
     for rel_dir in sorted(local_dirs):
-        for name, is_dir in list_remote_dir(ftp, rel_dir):
+        for name, is_dir in list_remote_dir(ftp, rel_dir, strict=strict):
             if is_dir:
                 continue  # only prune files; subdirectories are handled by their own entry in local_dirs
             rel = f"{rel_dir}/{name}" if rel_dir else name
@@ -390,7 +390,7 @@ def main():
     uploaded, upload_failed = upload_all(ftp, local_files, args.dry_run)
 
     print("\n-- prune stale files --")
-    removed, prune_failed = prune_stale_files(ftp, local_files, local_dirs, args.dry_run)
+    removed, prune_failed = prune_stale_files(ftp, local_files, local_dirs, args.dry_run, strict=bool(staging))
 
     ftp.quit()
 
