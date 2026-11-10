@@ -7179,6 +7179,10 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     // instead of a JSON body. Parse defensively so we surface the raw body in
     // the error rather than crashing on JSON.parse.
     const rawText = await res.text()
+    // Abort may lose a race with response delivery; stale accounts cannot meter usage.
+    if (!isCurrentPipelineRun(requestRunId) || requestIdentityEpoch !== identityEpoch || controller.signal.aborted) {
+      throw new DOMException("Pipeline session changed", "AbortError");
+    }
     let data = {}
     try {
       data = rawText ? JSON.parse(rawText) : {}
