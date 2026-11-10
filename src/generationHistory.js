@@ -108,7 +108,9 @@ export function recoverGenerationHistory(detail) {
   const summary = rawReview.bundleReview;
   if (!object(summary) || !['pass', 'warn', 'fail'].includes(summary.status) || !Number.isInteger(summary.score) || summary.score < 0 || summary.score > 100 || !text(summary.summary)) return result;
   if (rawReview.artifacts.some(a => !object(a) || !text(a.id) || !['pass', 'warn', 'fail'].includes(a.review?.status))) return result;
-  const normalized = normalizeArtifactBundle(rawReview);
+  const normalized = normalizeArtifactBundle({ ...bundle, artifacts: rawReview.artifacts.map(a => ({
+    ...bundle.artifacts.find(original => original.id === a.id), id: a.id, review: a.review,
+  })) });
   const reviews = new Map(normalized.artifacts.map(a => [a.id, a.review]));
   if (reviews.size !== bundle.artifacts.length || normalized.artifacts.length !== reviews.size || bundle.artifacts.some(a => !object(reviews.get(a.id)))) return result;
   result.review = rawReview;

@@ -80,3 +80,13 @@ test('nonstring and malformed stored paths are unavailable without throwing', ()
   assert.equal(recover(detail({generator:output(raw)})).availability,'unavailable',JSON.stringify(deployPath));
  }
 });
+
+test('reviewer artifact metadata cannot override validated generator metadata or crash recovery', () => {
+ for (const extra of [{fileName:42},{artifactName:{}},{deployPath:42},{code:{}},{artifactType:[]}]) {
+  const review = reviewer(); Object.assign(review.artifacts[0], extra);
+  const value = recover(detail({generator:output(bundle()),review:output(review)}));
+  assert.equal(value.availability,'reviewed');
+  assert.equal(value.bundleReview.artifacts[0].fileName,'one.dart');
+  assert.equal(value.bundleReview.artifacts[0].code,'class One {}');
+ }
+});
