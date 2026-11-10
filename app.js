@@ -10365,9 +10365,16 @@ function openHistoryDrawer() {
 const historyTrigger = document.querySelector('.topbar .brand');
 historyTrigger.setAttribute('aria-controls', 'history-drawer');
 historyTrigger.setAttribute('aria-expanded', 'false');
-historyTrigger.setAttribute('aria-label', 'Open generation history');
+historyTrigger.setAttribute('aria-label', 'Custom Code Connect — Home; Arrow Down opens history');
+historyTrigger.setAttribute('aria-keyshortcuts', 'ArrowDown');
 historyTrigger.addEventListener('pointerenter', event => { if (event.pointerType === 'mouse') openHistoryDrawer(); });
-historyTrigger.addEventListener('click', event => { event.preventDefault(); openHistoryDrawer(); document.getElementById('history-drawer-close').focus(); });
+historyTrigger.addEventListener('click', event => {
+  if (event.pointerType === 'touch') { event.preventDefault(); openHistoryDrawer(); }
+  else closeHistoryDrawer();
+});
+historyTrigger.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown') { event.preventDefault(); openHistoryDrawer(); document.getElementById('history-drawer-close').focus(); }
+});
 document.getElementById('history-drawer-close').addEventListener('click', () => closeHistoryDrawer(true));
 document.getElementById('history-drawer').addEventListener('pointerleave', event => { if (event.pointerType === 'mouse' && !event.currentTarget.contains(document.activeElement)) closeHistoryDrawer(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.getElementById('history-drawer').hidden) { closeHistoryDrawer(true); } });
