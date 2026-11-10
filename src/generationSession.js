@@ -37,7 +37,11 @@ export function createGenerationSessionClient({ endpoint, getSession, getLegacyT
         if (typeof data?.user_id !== 'string' || !data.user_id || typeof data.identity_token !== 'string' || !data.identity_token) {
           throw new Error('Invalid account generation session.');
         }
-        return { userId: data.user_id, token: data.identity_token };
+        return {
+          userId: data.user_id, token: data.identity_token,
+          ...(Number.isInteger(data.usage_count) && data.usage_count >= 0 ? { usageCount: data.usage_count } : {}),
+          ...(typeof data.usage_month === 'string' && /^\d{4}-\d{2}$/.test(data.usage_month) ? { usageMonth: data.usage_month } : {}),
+        };
       } finally {
         clearTimeout(timer);
         if (pending === task) pending = null;

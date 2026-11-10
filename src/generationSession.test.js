@@ -42,3 +42,10 @@ test('bridge errors and malformed credentials fail closed and allow retry', asyn
   await assert.rejects(client.ensure(), /Invalid/);
   assert.equal((await client.ensure()).userId, 'account-a');
 });
+test('returns validated account usage without accepting malformed counters', async () => {
+  let data = { user_id: 'account-a', identity_token: 'signed', usage_count: 31, usage_month: '2026-11' };
+  const client = createGenerationSessionClient({ endpoint: '/authUserCheck', getSession: () => session, getLegacyToken: async () => null, fetchImpl: async () => ({ ok: true, json: async () => data }) });
+  assert.deepEqual(await client.ensure(), { userId: 'account-a', token: 'signed', usageCount: 31, usageMonth: '2026-11' });
+  data = { ...data, usage_count: -1, usage_month: {} };
+  assert.deepEqual(await client.ensure(), { userId: 'account-a', token: 'signed' });
+});

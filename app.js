@@ -211,14 +211,20 @@ function resetGenerationIdentity() {
   identityResolvePromise = null;
   identityState = { userId: null, token: null, status: null, resolved: false };
 }
-async function ensureAccountGenerationIdentity() {
+async function ensureAccountGenerationIdentity({ reconcileUsage = true } = {}) {
   const epoch = identityEpoch;
   const token = authState.sessionToken;
   const result = await generationSessionClient.ensure();
   if (epoch !== identityEpoch || token !== authState.sessionToken || !authState.isVerified) {
     throw new DOMException('Account session changed', 'AbortError');
   }
-  identityState = { ...result, status: 'account', resolved: true };
+  identityState = { userId: result.userId, token: result.token, status: 'account', resolved: true };
+  if (reconcileUsage && result.usageCount !== undefined) {
+    const month = getCurrentYearMonth();
+    const count = !result.usageMonth || result.usageMonth === month ? result.usageCount : 0;
+    localStorage.setItem(USAGE_STORAGE_KEY, JSON.stringify({ count, month }));
+    updateUsageDisplay();
+  }
 }
 
 // --- TIER LIMITS ---
@@ -7146,7 +7152,8 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
   }, BUILDSHIP_TIMEOUT_MS)
 
   try {
-    if (authState.isVerified) await ensureAccountGenerationIdentity();
+    // Stage token renewal must not overwrite the newer generator metering result.
+    if (authState.isVerified) await ensureAccountGenerationIdentity({ reconcileUsage: false });
     if (!isCurrentPipelineRun(requestRunId) || requestIdentityEpoch !== identityEpoch || controller.signal.aborted) {
       throw new DOMException("Pipeline session changed", "AbortError");
     }
