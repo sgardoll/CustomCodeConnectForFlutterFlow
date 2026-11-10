@@ -81,3 +81,101 @@ test('malformed list reports error and refresh retries one page', async ({page})
  await page.locator('#history-refresh').click(); await expect(page.locator('#history-status')).toContainText('No saved generations');
  expect(count).toBe(2); await expect(page.locator('#history-next')).toBeDisabled();
 });
+
+async function historySetup(page, code = 'class Saved {}') {
+ await page.addInitScript(() => {
+  localStorage.setItem('hasSeenWalkthrough','true');
+  localStorage.setItem('ccc_auth_session',JSON.stringify({email:'a@example.com',sessionToken:'synthetic'}));
+ });
+ await applyDefaultRoutes(page,{[ENDPOINTS.authRefreshSession]:{status:200,json:{email:'a@example.com',sessionToken:'synthetic'}}});
+ const detail={generation:{id:'saved',request_id:'saved',stages:{generator:stage({schemaVersion:'artifact-bundle/v1',artifacts:[{id:'saved',artifactType:'CodeFile',artifactName:'Saved',fileName:'saved.dart',code}]})}}};
+ await page.route('**/service/generation-history',r=>r.fulfill({json:r.request().postDataJSON().action==='list'?{items:[{id:'saved',status:'success'}],nextCursor:null}:detail}));
+ await page.goto('/#account');
+ await expect(page.locator('#topbar-avatar')).toContainText('A');
+ await page.locator('#history-refresh').click();
+ await expect(page.getByRole('button',{name:'saved',exact:true})).toBeVisible();
+ return detail;
+}
+
+for (const action of ['detail','delete']) for (const transition of ['refresh','logout','account']) {
+ test(`late ${action} cannot overwrite ${transition}`,async({page})=>{
+  const detail=await historySetup(page);
+  if(action==='delete') {
+   await page.getByRole('button',{name:'saved',exact:true}).click();
+   await page.getByRole('button',{name:'Delete this generation',exact:true}).click();
+  }
+  let release;
+  let completed;
+  const settled=new Promise(resolve=>completed=resolve);
+  await page.route('**/service/generation-history',async r=>{
+   if(r.request().postDataJSON().action!==action) return r.fallback();
+   await new Promise(resolve=>release=resolve);
+   try { await r.fulfill({json:action==='detail'?detail:{deleted:true,id:'saved'}}); } catch {} finally { completed(); }
+  });
+  await page.getByRole('button',{name:action==='detail'?'saved':'Confirm delete',exact:true}).click();
+  await expect.poll(()=>!!release).toBe(true);
+  if(transition==='refresh') await page.locator('#history-refresh').click();
+  else if(transition==='logout') await page.evaluate(()=>window.handleSignOut());
+  else await page.evaluate(()=>window.__CCC_HISTORY_TEST__.session('b@example.com','other'));
+  await expect(page.locator('#history-panel')).toHaveAttribute('aria-busy','false');
+  const status=await page.locator('#history-status').textContent();
+  release(); await settled;
+  // Drain browser tasks after the held transport completes, including abort rejection handlers.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await expect(page.locator('#history-detail')).toBeEmpty();
+  await expect(page.locator('#history-status')).toHaveText(status);
+  await expect(page.locator('#history-list li')).toHaveCount(transition==='refresh'?1:0);
+  expect((await page.evaluate(()=>window.__CCC_HISTORY_TEST__.state())).artifactBundle).toBeNull();
+ });
+}
+
+for(const width of [360,1440]) test(`populated history keyboard and layout at ${width}`,async({page})=>{
+ await page.setViewportSize({width,height:900}); await historySetup(page);
+ const row=page.getByRole('button',{name:'saved',exact:true});
+ await page.locator('#history-refresh').focus();
+ await page.keyboard.press('Tab');
+ await expect(row).toBeFocused(); await page.keyboard.press('Enter');
+ await expect(page.locator('#history-detail')).toContainText('Review unavailable');
+ const summary=page.locator('#history-detail summary').first();
+ await summary.focus(); await page.keyboard.press('Enter');
+ await expect(page.locator('#history-detail details').first()).toHaveAttribute('open','');
+ await expect(page.locator('#history-status')).toHaveAttribute('role','status');
+ for(const selector of ['#history-panel','#history-list','#history-detail']) {
+  const bounds=await page.locator(selector).boundingBox();
+  expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x+bounds.width).toBeLessThanOrEqual(width+1);
+ }
+ await page.getByRole('button',{name:'Delete this generation',exact:true}).focus();
+ await page.keyboard.press('Enter');
+ await expect(page.getByRole('group',{name:'Confirm deletion'})).toBeVisible();
+ await page.getByRole('button',{name:'Cancel',exact:true}).focus(); await page.keyboard.press('Enter');
+ await expect(page.getByRole('group',{name:'Confirm deletion'})).toHaveCount(0);
+});
+
+for(const valid of [true,false]) test(`restored code passes through configured deployment gate valid=${valid}`,async({page})=>{
+ await historySetup(page,valid?'class Saved {}':'class Saved {');
+ await page.locator('.acct-connection button',{hasText:'Configure'}).first().click();
+ await page.locator('#flutterflow-api-key-input').fill('synthetic-history-key');
+ await page.locator('#flutterflow-api-key-input').blur();
+ await expect(page.locator('#flutterflow-projects-select option[value="proj-abc-123"]')).toHaveCount(1);
+ await page.locator('#flutterflow-projects-select').selectOption('proj-abc-123');
+ await page.locator('#api-keys-modal .bg-blue-500').click();
+ await expect(page.locator('#api-keys-modal')).toBeHidden();
+ const forbidden=[];
+ page.on('request',request=>{
+  if(/runpipeline|stripe|checkout|billing|deployCustom|syncCustomCode|exportCode|ffai-runner/.test(request.url())) forbidden.push(request.url());
+ });
+ await page.getByRole('button',{name:'saved',exact:true}).click();
+ await page.getByRole('button',{name:'Open in Results',exact:true}).click();
+ await expect(page.locator('#results-view')).toBeVisible();
+ expect(forbidden).toEqual([]);
+ await page.evaluate(()=>window.initiateCommitToFlutterFlow());
+ if(valid) {
+  await expect(page.locator('#commit-confirm-modal')).toBeVisible();
+  await expect(page.locator('#confirm-project-select option[value="proj-abc-123"]')).toHaveCount(1);
+ } else {
+  await expect(page.getByText(/Pre-commit checks failed:.*FlutterFlow cannot format/)).toBeVisible();
+  await expect(page.locator('#commit-confirm-modal')).toBeHidden();
+ }
+ await expect(page.locator('#api-keys-modal')).toBeHidden();
+ expect(forbidden).toEqual([]);
+});
