@@ -6449,6 +6449,7 @@ async function resolveIdentity() {
 
     const response = await fetch(IDENTITY_ENDPOINT, {
       method: 'POST',
+      credentials: 'omit',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fingerprint: result.visitorId, cookie_id: cookieId }),
     })
@@ -7159,13 +7160,14 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
     }
     const res = await fetch(PIPELINE_ENDPOINT, {
       method: 'POST',
+      credentials: 'omit',
       headers: {
         'Content-Type': 'application/json',
-        ...(identityState.token ? { Authorization: `Bearer ${identityState.token}` } : {}),
       },
       signal: controller.signal,
       body: JSON.stringify({
         user_id: identityState.userId,
+        sessionToken: identityState.token,
         request_id: pipelineState.requestId,
         step,
         model,

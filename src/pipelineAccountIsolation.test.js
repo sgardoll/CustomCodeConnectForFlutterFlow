@@ -16,7 +16,7 @@ function harness(status = 200) {
     isCurrentPipelineRun: id => id === env.pipelineState.runId,
     activeBuildShipControllers: new Set(), AbortController, DOMException, setTimeout, clearTimeout,
     PIPELINE_ENDPOINT: 'https://example.test/pipeline', USAGE_STORAGE_KEY: 'usage',
-    fetch: async () => ({ status, ok: status === 200, text: async () => { started(); return body; } }),
+    fetch: async (_, init) => { assert.equal(init.credentials, 'omit'); assert.deepEqual(init.headers, { 'Content-Type': 'application/json' }); assert.equal(JSON.parse(init.body).sessionToken, env.identityState.token); return ({ status, ok: status === 200, text: async () => { started(); return body; } }); },
     localStorage: { setItem: (...args) => writes.push(args) },
     updateUsageDisplay: () => {}, getCurrentYearMonth: () => '2026-11', incrementUsage: () => writes.push('increment'),
     createModelArmorError: () => null, console: { log() {} },
@@ -42,4 +42,9 @@ test('current account generator response still reconciles usage', async () => {
   h.release(JSON.stringify({ output: 'code', usage_status: 'success', usage_count: 31, usage_month: '2026-11' }));
   assert.equal(await pending, 'code');
   assert.deepEqual(h.writes, [['usage', JSON.stringify({ count: 31, month: '2026-11' })]]);
+});
+
+test("anonymous pipeline retains its identity token in the body", async () => {
+ const h = harness(); h.env.authState.isVerified = false; h.env.identityState.token = "anonymous-proof";
+ const pending = h.call("architect", "model", "prompt"); await h.bodyStarted; h.release(JSON.stringify({ output: "plan" })); assert.equal(await pending, "plan");
 });

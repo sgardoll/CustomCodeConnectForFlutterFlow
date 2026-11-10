@@ -19,8 +19,8 @@ test('missing, unsupported, truncated, duplicate and mismatched data cannot repl
 });
 test('bounded page allows empty continuation and sends no owner fields', async () => {
  let body;
- const c = client({endpoint:'https://example.test/service/generation-history',getSession:()=>({token:'synthetic',key:'a'}),fetchImpl:async (_,opts)=>{body=JSON.parse(opts.body);return {ok:true,json:async()=>({items:[],nextCursor:'next'})};}});
- assert.equal((await c.list({user_id:'forged'})).nextCursor,'next'); assert.deepEqual(body,{action:'list'});
+ const c = client({endpoint:'https://example.test/service/generation-history',getSession:()=>({token:'synthetic',key:'a'}),fetchImpl:async (_,opts)=>{assert.equal(opts.credentials,'omit'); assert.deepEqual(opts.headers,{'Content-Type':'application/json'}); body=JSON.parse(opts.body);return {ok:true,json:async()=>({items:[],nextCursor:'next'})};}});
+ assert.equal((await c.list({user_id:'forged'})).nextCursor,'next'); assert.deepEqual(body,{action:'list',sessionToken:'synthetic'});
  await assert.rejects(c.list({cursor:'next'}),/Invalid history page/);
 });
 test('session changes and invalidation suppress late responses even if fetch ignores abort', async () => {

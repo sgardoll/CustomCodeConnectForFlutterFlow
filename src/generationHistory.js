@@ -30,7 +30,7 @@ export function createGenerationHistoryClient({ endpoint, getSession, fetchImpl 
     };
     try {
       check();
-      const response = await fetchImpl(url.href, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+      const response = await fetchImpl(url.href, { method: 'POST', credentials: 'omit', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, sessionToken: token }), signal: controller.signal });
       const data = await response.json();
       check();
       if (!response.ok) {

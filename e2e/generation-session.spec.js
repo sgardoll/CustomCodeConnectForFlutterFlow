@@ -15,8 +15,8 @@ test('email session bootstraps account identity; history keeps email token and p
   expect(r.request().postDataJSON()).toEqual({sessionToken:token,identityToken:'signed-legacy-proof'});
   return r.fulfill({json:{user_id:'account-owner',identity_token:'signed-account-proof'}});
  });
- await page.route('**/service/generation-history',r=>{historyCalls++;expect(r.request().headers().authorization).toBe(`Bearer ${token}`);return r.fulfill({json:{items:[],nextCursor:null}});});
- await page.route(ENDPOINTS.pipeline,r=>{pipelineCalls++;expect(r.request().headers().authorization).toBe('Bearer signed-account-proof');expect(r.request().postDataJSON().user_id).toBe('account-owner');return r.fulfill({status:503,json:{error:'Synthetic stop'}});});
+ await page.route('**/service/generation-history',r=>{historyCalls++;expect(r.request().headers().authorization).toBeUndefined();expect(r.request().postDataJSON().sessionToken).toBe(token);return r.fulfill({json:{items:[],nextCursor:null}});});
+ await page.route(ENDPOINTS.pipeline,r=>{pipelineCalls++;expect(r.request().headers().authorization).toBeUndefined();expect(r.request().postDataJSON().sessionToken).toBe('signed-account-proof');expect(r.request().postDataJSON().user_id).toBe('account-owner');return r.fulfill({status:503,json:{error:'Synthetic stop'}});});
  await page.goto('/#account');await expect(page.locator('#topbar-avatar')).toContainText('A');
  await page.locator('#history-refresh').click();await expect(page.locator('#history-status')).toContainText('No saved');expect(historyCalls).toBe(1);
  await page.evaluate(()=>window.switchView('home'));await page.locator('#pipeline-input').fill('Build a calendar');await page.locator('#hero-send').click();
@@ -29,8 +29,8 @@ test('delayed account A bridge cannot replace account B credentials',async({page
   if(r.request().postDataJSON().sessionToken===a) { await new Promise(resolve=>release=resolve);await r.fulfill({json:{user_id:'owner-a',identity_token:'scope-a'}}).catch(()=>{}); }
   else { expect(r.request().postDataJSON().sessionToken).toBe(b);await r.fulfill({json:{user_id:'owner-b',identity_token:'scope-b'}}); }
  });
- await page.route('**/service/generation-history',r=>{historyCalls++;expect(r.request().headers().authorization).toBe(`Bearer ${b}`);return r.fulfill({json:{items:[],nextCursor:null}});});
- await page.route(ENDPOINTS.pipeline,r=>{expect(r.request().headers().authorization).toBe('Bearer scope-b');expect(r.request().postDataJSON().user_id).toBe('owner-b');return r.fulfill({status:503,json:{error:'Synthetic stop'}});});
+ await page.route('**/service/generation-history',r=>{historyCalls++;expect(r.request().headers().authorization).toBeUndefined();expect(r.request().postDataJSON().sessionToken).toBe(b);return r.fulfill({json:{items:[],nextCursor:null}});});
+ await page.route(ENDPOINTS.pipeline,r=>{expect(r.request().headers().authorization).toBeUndefined();expect(r.request().postDataJSON().sessionToken).toBe('scope-b');expect(r.request().postDataJSON().user_id).toBe('owner-b');return r.fulfill({status:503,json:{error:'Synthetic stop'}});});
  await page.goto('/#account');await expect.poll(()=>!!release).toBe(true);
  await page.evaluate(token=>window.__CCC_HISTORY_TEST__.session('b@example.com',token),b);
  release();await page.locator('#history-refresh').click();await expect(page.locator('#history-status')).toContainText('No saved');expect(historyCalls).toBe(1);
@@ -57,7 +57,7 @@ test('switch during generator bootstrap cancels without fallback under the new a
   } else await r.fulfill({json:{user_id:body.sessionToken===a?'owner-a':'owner-b',identity_token:body.sessionToken===a?'scope-a':'scope-b'}});
  });
  await page.route(ENDPOINTS.pipeline,r=>{
-  const body=r.request().postDataJSON();calls.push({step:body.step,token:r.request().headers().authorization});
+  const body=r.request().postDataJSON();calls.push({step:body.step,token:body.sessionToken});
   architectDone=true;return r.fulfill({json:{output:JSON.stringify({schemaVersion:'artifact-bundle/v1',artifacts:[{id:'widget',artifactType:'CodeFile',artifactName:'Widget',fileName:'widget.dart',code:'class Widget {}'}]})}});
  });
  await page.goto('/');await expect(page.locator('#topbar-avatar')).toContainText('A');
@@ -72,5 +72,5 @@ test('switch during generator bootstrap cancels without fallback under the new a
  await expect.poll(()=>page.evaluate(()=>window.__CCC_HISTORY_TEST__.state().isRunning)).toBe(false);
  // Await the actual abandoned run, not the flag cleared immediately by sign-out.
  await page.evaluate(()=>window.__accountSwitchRun);
- expect(calls).toEqual([{step:'architect',token:'Bearer scope-a'}]);
+ expect(calls).toEqual([{step:'architect',token:'scope-a'}]);
 });

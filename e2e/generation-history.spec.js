@@ -9,7 +9,7 @@ test('history bounded pagination, safe detail and selected deletion', async ({ p
   const calls=[]; let deleteFailed = false;
   await page.route('**/service/generation-history', route => {
     const body=route.request().postDataJSON(); calls.push(body);
-    expect(route.request().headers().authorization).toBe('Bearer synthetic');
+    expect(route.request().headers().authorization).toBeUndefined();expect(route.request().postDataJSON().sessionToken).toBe('synthetic');
     expect(body.user_id).toBeUndefined();
     if (body.action === 'delete' && !deleteFailed) { deleteFailed = true; return route.fulfill({status:500,json:{error:{code:'INTERNAL_ERROR'}}}); }
     const data=body.action==='list' ? body.cursor ? {items:[{id:'entry',status:'<img src=x onerror=alert(1)>'}],nextCursor:null} : {items:[],nextCursor:'continue'} : body.action==='detail' ? {generation:{id:'entry',request_id:'entry',stages:{generator:{output_text:'<script>alert(1)</script>'}}}} : {deleted:true,id:'entry'};

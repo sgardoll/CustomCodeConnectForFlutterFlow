@@ -26,7 +26,7 @@ export function createGenerationSessionClient({ endpoint, getSession, getLegacyT
         const identityToken = await getLegacyToken();
         if (!current()) throw stale();
         const response = await fetchImpl(endpoint, {
-          method: 'POST', signal: controller.signal,
+          method: 'POST', credentials: 'omit', signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sessionToken: session.token, ...(identityToken ? { identityToken } : {}) }),
         });
