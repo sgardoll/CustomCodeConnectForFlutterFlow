@@ -135,6 +135,10 @@ test.describe("Generation progress binds to real stage events", () => {
     // The control that started the run is usable again.
     await expect(page.locator("#hero-send")).toBeEnabled();
 
+    const requestId = pipeline.bodies[0].request_id;
+    expect(requestId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(pipeline.bodies.every((body) => body.request_id === requestId)).toBe(true);
+
     // Each stage really ran, in order.
     expect(pipeline.bodies.map((body) => body.step)).toEqual([
       "architect",
@@ -326,6 +330,8 @@ test.describe("Recoverable failure states", () => {
 
     await expect(page.locator("#results-view")).toHaveClass(/visible/);
     await expect(failure(page)).toBeHidden();
+    expect(retry.bodies[0].request_id).not.toBe(firstAttempt.bodies[0].request_id);
+    expect(retry.bodies.every((body) => body.request_id === retry.bodies[0].request_id)).toBe(true);
     expect(retry.bodies[0].prompt).toContain(prompt);
     await expect(page.locator("#pipeline-input")).toHaveValue(prompt);
   });

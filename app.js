@@ -2191,6 +2191,7 @@ let pipelineState = {
   // run's UI state (e.g. a slow first request resolving after the user
   // already retried).
   runId: 0,
+  requestId: null,
   // The prompt and images as submitted, so a retry re-runs exactly what the
   // user sent and an edit returns them to the composer unchanged.
   submittedPrompt: "",
@@ -7085,6 +7086,7 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
       signal: controller.signal,
       body: JSON.stringify({
         user_id: identityState.userId,
+        request_id: pipelineState.requestId,
         step,
         model,
         prompt,
@@ -8541,6 +8543,7 @@ const PIPELINE_STAGE_DONE_TITLES = {
 };
 
 function startPipelineRun() {
+  pipelineState.requestId = crypto.randomUUID();
   pipelineState.runId += 1;
   return pipelineState.runId;
 }
