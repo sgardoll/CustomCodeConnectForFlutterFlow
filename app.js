@@ -1,3 +1,5 @@
+import { createGenerationHistoryClient, recoverGenerationHistory } from './src/generationHistory.js';
+import { resolveGenerationHistoryEndpoint } from './src/generationHistoryConfig.js';
 import posthog from "posthog-js";
 import {
   closeModal,
@@ -2199,6 +2201,7 @@ let pipelineState = {
 };
 
 function resetPipelineResults() {
+  document.getElementById("history-review-notice")?.remove();
   pipelineState.step1Result = null;
   pipelineState.step2Result = null;
   pipelineState.step3Result = null;
@@ -6083,6 +6086,7 @@ async function refreshSession(sessionToken) {
 }
 
 function saveSession(email, sessionToken) {
+  resetHistory();
   const storedSession = getStoredSession()
   const sessionChanged = (authState.email || storedSession.email) !== email
   authState.email = email
@@ -6094,6 +6098,7 @@ function saveSession(email, sessionToken) {
 }
 
 function clearSession() {
+  resetHistory();
   authState.email = null
   authState.sessionToken = null
   authState.isVerified = false
@@ -6258,6 +6263,7 @@ async function handleMagicLinkRequest() {
 }
 
 function handleSignOut() {
+  resetHistory();
   // Reset in-memory auth/subscription state first so the immediate re-render
   // below reflects a signed-out identity/plan.
   authState.email = null
@@ -10106,3 +10112,136 @@ window.editPipelinePrompt = editPipelinePrompt;
 window.retryPipelineRun = retryPipelineRun;
 window.openCreditsModal = openCreditsModal;
 window.closeCreditsModal = closeCreditsModal;
+
+// History requests use the application session, never a caller-supplied owner.
+const historyClient = createGenerationHistoryClient({
+  endpoint: resolveGenerationHistoryEndpoint({
+    target: import.meta.env.VITE_HISTORY_TARGET || 'production',
+    productionEndpoint: `${BUILDSHIP_BASE_URL}/service/generation-history`,
+    stagingEndpoint: `${BUILDSHIP_BASE_URL}/staging/service/generation-history`,
+  }),
+  getSession: () => ({ token: authState.sessionToken, key: authState.isVerified ? authState.email : null }),
+});
+let historyCursor = null;
+let historyEpoch = 0;
+let historyRecovery = null;
+let historyResultsBundle = null;
+const historyEl = id => document.getElementById(`history-${id}`);
+function resetHistory() {
+  if (historyResultsBundle && pipelineState.artifactBundle === historyResultsBundle) {
+    resetPipelineResults();
+    pipelineState.submittedPrompt = "";
+    document.getElementById("results-view")?.classList.remove("visible");
+    document.body.classList.remove("results-fullscreen", "results-with-sidebar");
+  }
+  historyResultsBundle = null;
+  historyEpoch++;
+  historyClient.invalidate();
+  historyCursor = null;
+  historyRecovery = null;
+  if (historyEl('panel')) historyEl('panel').setAttribute('aria-busy', 'false');
+  historyEl('list')?.replaceChildren();
+  historyEl('detail')?.replaceChildren();
+  if (historyEl('status')) historyEl('status').textContent = 'Refresh to load your saved generations.';
+  if (historyEl('next')) historyEl('next').disabled = true;
+}
+function historyButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'btn-action ghost sm';
+  button.textContent = label; button.addEventListener('click', action);
+  return button;
+}
+async function historyTask(action) {
+  const epoch = ++historyEpoch;
+  historyClient.invalidate();
+  historyEl('status').textContent = 'Loading history…';
+  historyEl('panel').setAttribute('aria-busy', 'true');
+  try { await action(() => epoch === historyEpoch); }
+  catch (error) {
+    if (epoch === historyEpoch && error.name !== 'AbortError') historyEl('status').textContent =
+      error.status === 401 ? 'Session expired. Sign in again, then refresh.' :
+      error.status === 404 ? 'This entry is no longer available. Refresh the list.' : 'History could not be loaded or changed. Try again.';
+  } finally { if (epoch === historyEpoch) historyEl('panel').setAttribute('aria-busy', 'false'); }
+}
+function loadHistory(next = false) {
+  historyRecovery = null;
+  const cursor = next ? historyCursor : null;
+  return historyTask(async current => {
+    const page = await historyClient.list(cursor ? { cursor } : {});
+    if (!current()) return;
+    historyCursor = page.nextCursor;
+    historyEl('list').replaceChildren(); historyEl('detail').replaceChildren();
+    historyEl('next').disabled = !historyCursor;
+    historyEl('status').textContent = page.items.length ? 'Saved generations' :
+      historyCursor ? 'No entries on this page. Continue to the next page.' : 'No saved generations on this page.';
+    for (const item of page.items) {
+      if (!item || typeof item.id !== 'string' || !item.id || item.id.includes('/')) continue;
+      const row = document.createElement('li');
+      row.append(historyButton(item.id, () => openHistory(item.id)));
+      const status = document.createElement('span');
+      status.textContent = ` — ${typeof item.status === 'string' ? item.status : 'Status unknown'}`;
+      row.append(status); historyEl('list').append(row);
+    }
+  });
+}
+function openHistory(id) {
+  if (pipelineState.isRunning) { historyEl('status').textContent = 'Wait for generation to finish before opening history.'; return; }
+  historyRecovery = null;
+  historyEl('detail').replaceChildren();
+  return historyTask(async current => {
+    const detail = await historyClient.detail(id);
+    if (!current()) return;
+    if (detail.generation.id !== id) throw new Error('Mismatched history detail');
+    const recovered = recoverGenerationHistory(detail);
+    historyRecovery = recovered;
+    const panel = historyEl('detail'); panel.replaceChildren();
+    const message = document.createElement('p');
+    message.textContent = recovered.artifactBundle ?
+      recovered.reviewAvailable ? 'Stored artifacts and review available.' : 'Review unavailable. Recovered code has not acquired review approval.' :
+      'Replay unavailable: this record is incomplete or cannot be validated. Available text is shown below.';
+    panel.append(message);
+    for (const [name, stage] of Object.entries(recovered.stages)) {
+      for (const field of ['input_text', 'output_text']) {
+        if (typeof stage?.[field] !== 'string') continue;
+        const section = document.createElement('details'); const title = document.createElement('summary');
+        title.textContent = `${name} ${field}`; const pre = document.createElement('pre');
+        pre.style.whiteSpace = 'pre-wrap'; pre.textContent = stage[field]; section.append(title, pre); panel.append(section);
+      }
+    }
+    if (recovered.artifactBundle) panel.append(historyButton('Open in Results', () => {
+      if (pipelineState.isRunning) { historyEl('status').textContent = 'Wait for generation to finish before opening history.'; return; }
+      if (historyRecovery !== recovered || !authState.isVerified) return;
+      resetPipelineResults();
+      Object.assign(pipelineState, { artifactBundle: recovered.artifactBundle, bundleSpec: recovered.bundleSpec,
+        step1Result: recovered.bundleSpec ? JSON.stringify(recovered.bundleSpec) : null,
+        step2Result: JSON.stringify(recovered.artifactBundle), step3Result: recovered.review ? JSON.stringify(recovered.review) : null,
+        bundleReview: recovered.bundleReview, submittedPrompt: recovered.originalPrompt || '', submittedImages: [],
+        selectedArtifactId: recovered.artifactBundle.artifacts[0].id, requestId: id });
+      historyResultsBundle = recovered.artifactBundle;
+      // The adapter merges stored review by validated artifact ID and preserves original code.
+      switchView('home');
+      showResultsView(getSelectedArtifactCode(), recovered.reviewAvailable ? renderMarkdownAudit(pipelineState.step3Result) : '<p>Review unavailable for this saved generation.</p>');
+      if (!recovered.reviewAvailable) {
+        const notice = document.createElement('p'); notice.id = 'history-review-notice'; notice.setAttribute('role', 'status');
+        notice.textContent = 'Review unavailable for this saved generation. Existing deployment checks still apply.';
+        document.getElementById('results-view')?.prepend(notice);
+      }
+    }));
+    panel.append(historyButton('Delete this generation', () => {
+      const confirm = document.createElement('div'); confirm.setAttribute('role', 'group'); confirm.setAttribute('aria-label', 'Confirm deletion');
+      const warning = document.createElement('p'); warning.textContent = 'Delete this generation permanently? Generation content will be removed; an internal marker prevents late writes from restoring it.';
+      confirm.append(warning, historyButton('Cancel', () => confirm.remove()), historyButton('Confirm delete', () => historyTask(async current => {
+        await historyClient.delete(id); if (!current()) return;
+        historyRecovery = null; panel.replaceChildren(); historyEl('status').textContent = 'Generation deleted. Refresh to update the list.';
+      })));
+      panel.append(confirm);
+    }));
+    historyEl('status').textContent = 'Generation details loaded.';
+  });
+}
+historyEl('refresh').addEventListener('click', () => loadHistory());
+historyEl('next').addEventListener('click', () => loadHistory(true));
+
+if (import.meta.env.DEV) {
+ window.__CCC_HISTORY_TEST__ = { session: saveSession, pending: value => { pipelineState.isRunning = value; }, state: () => pipelineState };
+}

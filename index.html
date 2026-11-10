@@ -3672,11 +3672,14 @@
           <div class="acct-card acct-history" id="acct-history">
             <div class="acct-card-head">
               <h2>Generation history</h2>
-              <span class="acct-meta">not saved</span>
+              <span class="acct-meta">Saved generations</span>
             </div>
-            <div class="acct-empty" id="acct-no-history">
-              <p>Saved history isn't available yet.</p>
-              <p>Per-run records aren't persisted, so there is no past list to show. Your current result stays open in the <a href="#home" onclick="switchView('home'); return false;">generation workspace</a>.</p>
+            <div id="history-panel" aria-busy="false">
+              <p id="history-status" role="status" aria-live="polite">Refresh to load your saved generations.</p>
+              <button type="button" class="btn-action ghost sm" id="history-refresh">Refresh history</button>
+              <ul id="history-list"></ul>
+              <button type="button" class="btn-action ghost sm" id="history-next" disabled>Next history page</button>
+              <div id="history-detail"></div>
             </div>
           </div>
 
