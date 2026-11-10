@@ -6,6 +6,10 @@ Backend source evidence is historical and separate from live readiness. [PR 194]
 
 The independent frontend review checked the API source at `4989e9c2` against `00d89bad` and found compatible request/response envelopes. This does not verify the manually edited hosted workflow. Hosted editor, HTTP/CORS and two-account staging acceptance remain unproven under STU-934. Expected response mappings are handler.body and HTTP status handler.status; the canonical frontend origin is https://customcode.connectio.com.au.
 
+## Account authentication correction
+
+The earlier compatibility review missed that real sign-in sessions contain email rather than user_id. Its authentication conclusion is withdrawn. See [account identity repair](generation-history-account-auth.md) for the coordinated `/authUserCheck` bootstrap and session lifecycle. Backend repair and current-head acceptance are required before readiness; historical tests below do not prove live account ownership.
+
 ## Contract checked against accepted source
 
 Read-only source: `/Users/home/Projects/buildship/workflows/service-generation-history-Hst1/nodes/history-api/main.ts`, plus workflow `triggers.json`. The worker compared these API files at the earlier accepted source. Subsequent backend fallback/schema changes require final controller pairing verification; the endpoint envelope is reported unchanged. Compared with `src/generationHistory.js`, its synthetic unit fixtures, and `e2e/generation-history.spec.js`.

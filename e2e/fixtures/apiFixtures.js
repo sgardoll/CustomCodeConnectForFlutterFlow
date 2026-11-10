@@ -496,7 +496,9 @@ const VENDORED_SRI_ASSETS = [
  */
 export async function applyDefaultRoutes(page, overrides = {}) {
   const routes = {
-    [ENDPOINTS.identity]: guestIdentity(),
+    [ENDPOINTS.identity]: request => request.postDataJSON()?.sessionToken
+      ? ok({user_id:"account-test-0001",identity_token:"synthetic-account-generation-token",status:"recognized"})
+      : guestIdentity(),
     [ENDPOINTS.authSendMagicLink]: magicLinkSent(),
     [ENDPOINTS.authVerifyMagicLink]: signedInSession(),
     [ENDPOINTS.authRefreshSession]: signedInSession(),

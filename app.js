@@ -1,3 +1,4 @@
+import { createGenerationSessionClient } from './src/generationSession.js';
 import { createGenerationHistoryClient, recoverGenerationHistory } from './src/generationHistory.js';
 import { resolveGenerationHistoryEndpoint } from './src/generationHistoryConfig.js';
 import posthog from "posthog-js";
@@ -173,19 +174,51 @@ let subscriptionState = createSubscriptionState({ isResolved: true })
 let sessionReadiness = Promise.resolve()
 
 // --- PIPELINE ---
-const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}/service/runpipeline`
+const PIPELINE_ENDPOINT = `${BUILDSHIP_BASE_URL}${import.meta.env.VITE_HISTORY_TARGET === 'staging' ? '/staging' : ''}/service/runpipeline`
 
 // --- IDENTITY RESOLUTION ---
 const IDENTITY_COOKIE_KEY = 'bs_identity'
 const IDENTITY_SESSION_KEY = 'bs_user_id'
 const IDENTITY_TOKEN_KEY = 'bs_identity_token'
-const IDENTITY_ENDPOINT = `${BUILDSHIP_BASE_URL}/authUserCheck`
+const IDENTITY_ENDPOINT = `${BUILDSHIP_BASE_URL}${import.meta.env.VITE_HISTORY_TARGET === 'staging' ? '/staging' : ''}/authUserCheck`
 
 let identityState = {
   userId: null,
   token: null,
   status: null, // 'recognized' | 'new' | null
   resolved: false,
+}
+
+let identityEpoch = 0;
+// Obtain a fresh anonymous proof; persisted tokens may have expired or been claimed.
+let legacyIdentityToken = null;
+const generationSessionClient = createGenerationSessionClient({
+  endpoint: IDENTITY_ENDPOINT,
+  getSession: () => ({ token: authState.sessionToken, key: authState.isVerified ? authState.email : null }),
+  getLegacyToken: async () => {
+    if (!legacyIdentityToken) {
+      let timer;
+      try { await Promise.race([resolveIdentity(), new Promise(resolve => { timer = setTimeout(resolve, 5000); })]); }
+      finally { clearTimeout(timer); }
+    }
+    return legacyIdentityToken;
+  },
+});
+function resetGenerationIdentity() {
+  identityEpoch++;
+  legacyIdentityToken = null;
+  generationSessionClient.invalidate();
+  identityResolvePromise = null;
+  identityState = { userId: null, token: null, status: null, resolved: false };
+}
+async function ensureAccountGenerationIdentity() {
+  const epoch = identityEpoch;
+  const token = authState.sessionToken;
+  const result = await generationSessionClient.ensure();
+  if (epoch !== identityEpoch || token !== authState.sessionToken || !authState.isVerified) {
+    throw new DOMException('Account session changed', 'AbortError');
+  }
+  identityState = { ...result, status: 'account', resolved: true };
 }
 
 // --- TIER LIMITS ---
@@ -6087,6 +6120,13 @@ async function refreshSession(sessionToken) {
 
 function saveSession(email, sessionToken) {
   resetHistory();
+  if (authState.isVerified && authState.email !== email) {
+    invalidatePipelineRun();
+    abortPipelineRequests();
+    pipelineState.isRunning = false;
+    setRunPipelineButtonBusy(false);
+  }
+  resetGenerationIdentity();
   const storedSession = getStoredSession()
   const sessionChanged = (authState.email || storedSession.email) !== email
   authState.email = email
@@ -6095,10 +6135,16 @@ function saveSession(email, sessionToken) {
   subscriptionState = createSubscriptionState({ isLoading: true })
   localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify({ email, sessionToken }))
   if (sessionChanged) clearSubscriptionCache()
+  void ensureAccountGenerationIdentity().catch(() => {});
 }
 
 function clearSession() {
   resetHistory();
+  resetGenerationIdentity();
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
   authState.email = null
   authState.sessionToken = null
   authState.isVerified = false
@@ -6264,6 +6310,11 @@ async function handleMagicLinkRequest() {
 
 function handleSignOut() {
   resetHistory();
+  resetGenerationIdentity();
+  invalidatePipelineRun();
+  abortPipelineRequests();
+  pipelineState.isRunning = false;
+  setRunPipelineButtonBusy(false);
   // Reset in-memory auth/subscription state first so the immediate re-render
   // below reflects a signed-out identity/plan.
   authState.email = null
@@ -6374,6 +6425,7 @@ function getOrCreateCookieId() {
 }
 
 async function resolveIdentity() {
+  const epoch = identityEpoch;
   try {
     if (typeof FingerprintJS === 'undefined') {
       console.warn('resolveIdentity: FingerprintJS not loaded, skipping')
@@ -6395,6 +6447,9 @@ async function resolveIdentity() {
     }
 
     const data = await response.json()
+    if (epoch !== identityEpoch) return;
+    legacyIdentityToken = data.identity_token || null;
+    if (authState.isVerified) return;
     identityState.userId = data.user_id
     identityState.token = data.identity_token || null
     identityState.status = data.status
@@ -6421,6 +6476,7 @@ async function resolveIdentity() {
 let identityResolvePromise = null
 
 function ensureIdentityReady(maxWaitMs = 5000) {
+  if (authState.isVerified) return ensureAccountGenerationIdentity();
   if (identityState.resolved) return Promise.resolve()
   if (!identityResolvePromise) {
     identityResolvePromise = resolveIdentity().catch((err) => {
@@ -7073,6 +7129,7 @@ function abortPipelineRequests() {
 }
 
 async function callBuildShip(step, model, prompt, context = {}, images = []) {
+  if (authState.isVerified) await ensureAccountGenerationIdentity();
   const BUILDSHIP_TIMEOUT_MS = 120000
   const controller = new AbortController()
   activeBuildShipControllers.add(controller)
@@ -10164,7 +10221,11 @@ async function historyTask(action) {
   historyClient.invalidate();
   historyEl('status').textContent = 'Loading history…';
   historyEl('panel').setAttribute('aria-busy', 'true');
-  try { await action(() => epoch === historyEpoch); }
+  try {
+    await ensureAccountGenerationIdentity();
+    if (epoch !== historyEpoch) return;
+    await action(() => epoch === historyEpoch);
+  }
   catch (error) {
     if (epoch === historyEpoch && error.name !== 'AbortError') historyEl('status').textContent =
       error.status === 401 ? 'Session expired. Sign in again, then refresh.' :
