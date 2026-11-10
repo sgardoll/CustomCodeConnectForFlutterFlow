@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   powerSubscription,
@@ -46,7 +46,7 @@ test.describe("Redesigned hero landing and composer", () => {
     // itself is verified in the STU-445 composer suite.
     await page.emulateMedia({ reducedMotion: "reduce" });
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
 
@@ -80,7 +80,7 @@ test.describe("Redesigned hero landing and composer", () => {
 
   test("composer accepts input and reflects typed state", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
 
@@ -99,7 +99,7 @@ test.describe("Redesigned hero landing and composer", () => {
 
   test("guest usage badge shows the intercepted free allowance", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: freeSubscription(),
     });
 
@@ -113,7 +113,7 @@ test.describe("Redesigned hero landing and composer", () => {
 
   test("signed-in Professional badge is rendered from fixture", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: professionalSubscription(),
     });
 
@@ -137,7 +137,7 @@ test.describe("Redesigned hero landing and composer", () => {
 
   test("signed-in Power badge is rendered from fixture", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: powerSubscription(),
     });
 
@@ -160,7 +160,7 @@ test.describe("Redesigned hero landing and composer", () => {
 
   test("unresolved subscription surfaces the unavailable plan state", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
       [ENDPOINTS.getSubscription]: unresolvedSubscription(),
     });
 

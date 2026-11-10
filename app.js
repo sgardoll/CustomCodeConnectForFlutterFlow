@@ -4942,6 +4942,7 @@ async function runPromptArchitect(userInput, images = []) {
 }
 
 async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId) {
+  const generationRunId = runId ?? pipelineState.runId;
   const prompt = buildGeneratorPrompt(masterPrompt)
   const context = createBuildShipContext("generator", pipelineState.bundleSpec)
   try {
@@ -4956,6 +4957,10 @@ async function runCodeGenerator(masterPrompt, selectedModel, images = [], runId)
     // A cancelled request is a stale run, not a model problem: it must not
     // trigger a second request on the fallback model.
     if (primaryError.isPipelineCancel) throw primaryError
+    if (!isCurrentPipelineRun(generationRunId)) {
+      primaryError.isPipelineCancel = true;
+      throw primaryError;
+    }
     if (selectedModel !== FALLBACK_MODEL) {
       console.warn(`Code Generator failed with ${selectedModel}, retrying with fallback model:`, primaryError.message)
       // The fallback is a real service event, so the run says so while it
@@ -7129,7 +7134,8 @@ function abortPipelineRequests() {
 }
 
 async function callBuildShip(step, model, prompt, context = {}, images = []) {
-  if (authState.isVerified) await ensureAccountGenerationIdentity();
+  const requestRunId = pipelineState.runId;
+  const requestIdentityEpoch = identityEpoch;
   const BUILDSHIP_TIMEOUT_MS = 120000
   const controller = new AbortController()
   activeBuildShipControllers.add(controller)
@@ -7140,6 +7146,10 @@ async function callBuildShip(step, model, prompt, context = {}, images = []) {
   }, BUILDSHIP_TIMEOUT_MS)
 
   try {
+    if (authState.isVerified) await ensureAccountGenerationIdentity();
+    if (!isCurrentPipelineRun(requestRunId) || requestIdentityEpoch !== identityEpoch || controller.signal.aborted) {
+      throw new DOMException("Pipeline session changed", "AbortError");
+    }
     const res = await fetch(PIPELINE_ENDPOINT, {
       method: 'POST',
       headers: {

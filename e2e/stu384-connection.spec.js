@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   signedInSession,
   freeSubscription,
   ok,
@@ -1171,7 +1171,7 @@ test.describe("STU-384 account connection", () => {
   test("signed-out entry can still save the key without a connection card", async ({ page }) => {
     // No session seeded: the account view shows the signed-out prompt.
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
     });
     await page.goto("/");
 

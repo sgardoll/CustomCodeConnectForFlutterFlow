@@ -1,5 +1,5 @@
 import {test, expect} from '@playwright/test';
-import {applyDefaultRoutes, ENDPOINTS, ok} from './fixtures/apiFixtures.js';
+import {applyDefaultRoutes, ENDPOINTS, ok, professionalSubscription} from './fixtures/apiFixtures.js';
 const emailJwt = email => `${Buffer.from('{"alg":"HS256"}').toString('base64url')}.${Buffer.from(JSON.stringify({email,iat:1,exp:9999999999})).toString('base64url')}.synthetic-signature`;
 async function setup(page) {
  const token=emailJwt('a@example.com');
@@ -44,4 +44,33 @@ test('failed bridge blocks history and generation rather than using legacy ident
  await page.goto('/#account');await expect(page.locator('#topbar-avatar')).toContainText('A');await page.locator('#history-refresh').click();await expect(page.locator('#history-status')).toContainText('Try again');
  await page.evaluate(()=>window.switchView('home'));await page.locator('#pipeline-input').fill('Must not run');await page.locator('#hero-send').click();
  await expect.poll(()=>page.evaluate(()=>window.__CCC_HISTORY_TEST__.state().isRunning)).toBe(false);expect(forbidden).toBe(0);
+});
+test('switch during generator bootstrap cancels without fallback under the new account',async({page})=>{
+ const a=await setup(page),b=emailJwt('b@example.com');let release;let architectDone=false;const calls=[];
+ await page.route(ENDPOINTS.getSubscription,r=>r.fulfill(professionalSubscription()));
+ await page.route(ENDPOINTS.identity,async r=>{
+  const body=r.request().postDataJSON();
+  if(!body.sessionToken) return r.fallback();
+  if(body.sessionToken===a && architectDone) {
+   await new Promise(resolve=>release=resolve);
+   await r.fulfill({json:{user_id:'owner-a',identity_token:'scope-a'}}).catch(()=>{});
+  } else await r.fulfill({json:{user_id:body.sessionToken===a?'owner-a':'owner-b',identity_token:body.sessionToken===a?'scope-a':'scope-b'}});
+ });
+ await page.route(ENDPOINTS.pipeline,r=>{
+  const body=r.request().postDataJSON();calls.push({step:body.step,token:r.request().headers().authorization});
+  architectDone=true;return r.fulfill({json:{output:JSON.stringify({schemaVersion:'artifact-bundle/v1',artifacts:[{id:'widget',artifactType:'CodeFile',artifactName:'Widget',fileName:'widget.dart',code:'class Widget {}'}]})}});
+ });
+ await page.goto('/');await expect(page.locator('#topbar-avatar')).toContainText('A');
+ await page.getByRole('button',{name:'Generation settings',exact:true}).click();
+ await page.locator('#composer-settings-model').selectOption('anthropic/claude-opus-5');
+ await page.locator('#composer-settings-modal').getByRole('button',{name:'Done',exact:true}).click();
+ await page.locator('#pipeline-input').fill('Account A private prompt');
+ await page.evaluate(()=>{window.__accountSwitchRun = window.runThinkingPipeline();});
+ await expect.poll(()=>!!release).toBe(true);
+ await page.evaluate(token=>window.__CCC_HISTORY_TEST__.session('b@example.com',token),b);
+ release();
+ await expect.poll(()=>page.evaluate(()=>window.__CCC_HISTORY_TEST__.state().isRunning)).toBe(false);
+ // Await the actual abandoned run, not the flag cleared immediately by sign-out.
+ await page.evaluate(()=>window.__accountSwitchRun);
+ expect(calls).toEqual([{step:'architect',token:'Bearer scope-a'}]);
 });

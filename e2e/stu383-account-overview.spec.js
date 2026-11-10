@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   professionalSubscription,
   powerSubscription,
@@ -214,7 +214,7 @@ test.describe("STU-383 account overview", () => {
 
   test("a guest sees the anonymous Free allowance, never a signed-in overview", async ({ page }) => {
     await applyDefaultRoutes(page, {
-      [ENDPOINTS.identity]: guestIdentity(),
+
     });
     await page.goto("/");
     await openAccount(page);

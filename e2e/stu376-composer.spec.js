@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import {
   applyDefaultRoutes,
-  guestIdentity,
+
   freeSubscription,
   oneArtifact,
   rejectedGeneration,
@@ -79,7 +79,7 @@ test.beforeEach(async ({ page }) => {
     }
   });
   await applyDefaultRoutes(page, {
-    [ENDPOINTS.identity]: guestIdentity(),
+
     [ENDPOINTS.getSubscription]: freeSubscription(),
   });
 });
