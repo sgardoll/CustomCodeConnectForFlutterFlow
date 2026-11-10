@@ -21,7 +21,9 @@
 | No fabricated purchases | Hero plan/billing dialogs | Stripe checkout/portal only | Use existing `startCheckout` / `openCustomerPortal`. |
 | No fabricated connection success | Journey / account connection card | Real connection states only | |
 | No usage breakdown | Account usage card | Show `used / limit` only | |
-| No generation history | Account history table | Omit unless backend endpoint exists | |
+| Owner-scoped generation history (STU-930–933) | Approved generation-history plan | Account list/detail/delete and Results hydration | [Source and delivery boundaries](../generation-history-acceptance.md). |
 | No account deletion | Account security section | Omit or show support message | |
 | Nine handoff viewports with reflow expectations | `DESIGN-HANDOFF.md` + manifest | Responsive tests | See [RESPONSIVE.md](./RESPONSIVE.md). |
 | Fixed 1920×1080 fit scaling is presentation-only | `custom-code-connect-hero.html` `.stage` | Real fluid layout | See [RESPONSIVE.md](./RESPONSIVE.md). |
+| Staging FTP isolation (STU-933) | Approved exact ownership amendment | scripts/deploy_ftp.py --target staging | Local mocked guard proof only. |
+| Actual staging acceptance (STU-934) | Post-PR delivery gate | Provider routes, auth/CORS, indexes, two-account isolation, FlutterFlow redeploy | Outstanding; requires actual isolated infrastructure. |

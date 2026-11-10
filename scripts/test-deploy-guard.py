@@ -50,6 +50,11 @@ def expected_absent_bundles(deploy, html):
 
 def main():
     deploy = load_deploy_module()
+    # Production password precedence remains unchanged; no Keychain access.
+    from unittest.mock import patch
+    with patch.dict(deploy.os.environ, {'FTP_PASSWORD': 'synthetic-production'}), patch.object(deploy.subprocess, 'run', side_effect=AssertionError('unexpected Keychain')):
+        assert deploy.resolve_password() == 'synthetic-production'
+
     built_html = (deploy.DIST / "index.html").read_text(encoding="utf-8")
     absent_html = built_html.replace("assets/index-", "assets/index-absent-")
 
