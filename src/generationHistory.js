@@ -58,14 +58,18 @@ export function createGenerationHistoryClient({ endpoint, getSession, fetchImpl 
 
 function completeStage(stage, field) {
   const value = stage?.[`${field}_text`];
-  return text(value) && stage[`${field}_truncated`] !== true && stage.status !== 'error' && stage.status !== 'failed'
-    && !['length', 'max_tokens', 'content_filter'].includes(stage.finish_reason)
-    && !(Number.isFinite(stage[`${field}_chars`]) && stage[`${field}_chars`] > value.length);
+  return text(value) && stage[`${field}_truncated`] === false && stage.status === 'success'
+    && (field === 'input' || ['stop', 'end_turn'].includes(stage.finish_reason))
+    && Number.isInteger(stage[`${field}_chars`]) && stage[`${field}_chars`] === value.length;
 }
 function validatedBundle(raw) {
   if (!object(raw) || !['artifact-bundle/v1'].includes(raw.schemaVersion) || !Array.isArray(raw.artifacts) || !raw.artifacts.length) return null;
   const types = ['CustomAction', 'CustomWidget', 'CustomFunction', 'CustomClass', 'CodeFile'];
-  if (raw.artifacts.some(a => !object(a) || !text(a.id) || !types.includes(a.artifactType) || !text(a.artifactName) || !/^[\w-]+\.dart$/.test(a.fileName) || !text(a.code) || (a.deployPath && (a.deployPath.includes('..') || !a.deployPath.startsWith('lib/'))))) return null;
+  if (raw.artifacts.some(a => !object(a) || !text(a.id) || !types.includes(a.artifactType) || !text(a.artifactName) || (typeof a.fileName !== 'string' || !/^[\w-]+\.dart$/.test(a.fileName)) || !text(a.code) || (a.deployPath !== undefined && (typeof a.deployPath !== 'string' || !/^lib\/(?:[\w-]+\/)*[\w-]+\.dart$/.test(a.deployPath))))) return null;
+  if (Object.hasOwn(raw, 'deployOrder') && (!Array.isArray(raw.deployOrder)
+    || raw.deployOrder.length !== raw.artifacts.length
+    || new Set(raw.deployOrder).size !== raw.artifacts.length
+    || raw.deployOrder.some(id => typeof id !== 'string' || !raw.artifacts.some(a => a.id === id)))) return null;
   const bundle = normalizeArtifactBundle(raw);
   if (new Set(bundle.artifacts.map(a => a.id)).size !== bundle.artifacts.length) return null;
   if (bundle.deployOrder.length !== bundle.artifacts.length || new Set(bundle.deployOrder).size !== bundle.artifacts.length || bundle.deployOrder.some(id => !bundle.artifacts.some(a => a.id === id))) return null;
@@ -74,8 +78,7 @@ function validatedBundle(raw) {
   const files = plan.fileEntries;
   // Validate actual deploy targets as well as supplied paths.
   if (files && new Set(files.map(f => f.path)).size !== files.length) return null;
-  const paths = bundle.artifacts.map(a => a.deployPath || `${a.codeType}/${a.fileName}`);
-  if (new Set(paths).size !== paths.length) return null;
+
   return bundle;
 }
 
@@ -101,7 +104,7 @@ export function recoverGenerationHistory(detail) {
   result.artifactBundle = bundle;
   result.availability = 'pre-review';
   const rawReview = completeStage(review, 'output') ? parseJsonLike(review.output_text) : null;
-  if (!object(rawReview) || !['artifact-bundle/v1'].includes(rawReview.schemaVersion) || !Array.isArray(rawReview.artifacts)) return result;
+  if (!object(rawReview) || (rawReview.schemaVersion !== undefined && rawReview.schemaVersion !== 'artifact-bundle/v1') || !Array.isArray(rawReview.artifacts)) return result;
   const summary = rawReview.bundleReview;
   if (!object(summary) || !['pass', 'warn', 'fail'].includes(summary.status) || !Number.isInteger(summary.score) || summary.score < 0 || summary.score > 100 || !text(summary.summary)) return result;
   if (rawReview.artifacts.some(a => !object(a) || !text(a.id) || !['pass', 'warn', 'fail'].includes(a.review?.status))) return result;
