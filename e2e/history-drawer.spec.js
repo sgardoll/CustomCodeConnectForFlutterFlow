@@ -20,6 +20,11 @@ for (const width of [360,1440]) test(`history drawer and account scrolling ${wid
  await page.keyboard.press('Escape');await expect(page.locator('#history-drawer')).toBeHidden();
  await expect(logo).toBeFocused();
  await page.keyboard.press('ArrowDown');await expect(page.locator('#history-drawer')).toBeVisible();
+ await page.locator('#history-drawer .history-drawer-actions a').click();
+ await expect(page.locator('#history-drawer')).toBeHidden();
+ await expect(page.locator('#home-view')).toBeVisible();
+ await logo.focus();await page.keyboard.press('ArrowDown');
+ await expect(page.locator('#history-drawer')).toBeVisible();
  await page.evaluate(()=>window.__CCC_HISTORY_TEST__.session('other@example.com','other-token'));
  await expect(page.locator('#history-drawer')).toBeHidden();
  await expect(page.locator('#history-list')).toBeEmpty();

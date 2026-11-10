@@ -10392,3 +10392,5 @@ historyTrigger.addEventListener('pointerleave', event => {
 document.getElementById('history-drawer').addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));
 
 historyTrigger.addEventListener('pointerenter', () => clearTimeout(historyHoverCloseTimer));
+
+document.querySelector('#history-drawer .history-drawer-actions a').addEventListener('click', () => closeHistoryDrawer());
