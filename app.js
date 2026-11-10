@@ -6449,7 +6449,6 @@ async function resolveIdentity() {
 
     const response = await fetch(IDENTITY_ENDPOINT, {
       method: 'POST',
-      credentials: 'omit',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fingerprint: result.visitorId, cookie_id: cookieId }),
     })

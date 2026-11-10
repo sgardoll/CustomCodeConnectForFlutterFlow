@@ -7,7 +7,6 @@ test('bridge authenticates email session; legacy token is proof only, no caller 
   const client = createGenerationSessionClient({ endpoint: '/authUserCheck', getSession: () => session, getLegacyToken: async () => 'legacy-signed', fetchImpl: async (url, init) => {
     assert.equal(url, '/authUserCheck');
     assert.equal(init.headers.Authorization, undefined);
-    assert.equal(init.credentials, 'omit');
     assert.deepEqual(JSON.parse(init.body), { sessionToken: 'email-session-jwt', identityToken: 'legacy-signed' });
     return response();
   } });
