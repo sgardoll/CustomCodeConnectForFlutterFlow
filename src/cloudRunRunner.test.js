@@ -41,8 +41,8 @@ test("Cloud Run pins a snapshot-compatible FlutterFlow CLI", () => {
 
   assert.ok(version, "Dockerfile must explicitly pin FLUTTERFLOW_CLI_VERSION");
   assert.ok(
-    compareVersions(version, "0.0.43") >= 0,
-    `FlutterFlow CLI ${version} is older than the snapshot minimum 0.0.43`,
+    compareVersions(version, "0.0.44") >= 0,
+    `FlutterFlow CLI ${version} is older than the snapshot minimum 0.0.44`,
   );
   assert.match(
     dockerfile,

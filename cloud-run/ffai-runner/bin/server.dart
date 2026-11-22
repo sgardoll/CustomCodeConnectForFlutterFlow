@@ -9,7 +9,7 @@ import 'package:ccc_ffai_runner/sha256.dart';
 // The lowest flutterflow_cli the vendored FlutterFlow AI snapshot accepts. The
 // image pins FLUTTERFLOW_CLI_VERSION to this (see Dockerfile); it must be kept
 // in lockstep there, and it is what the health route reports as the required minimum.
-const minCliVersion = '0.0.43';
+const minCliVersion = '0.0.44';
 
 /// The liveness/version route the container actually serves. Must not be a
 /// path Google's front end reserves ('/healthz'), or Cloud Run answers it and
