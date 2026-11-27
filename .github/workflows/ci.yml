@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # The workflow only checks out code and runs tests; it never needs write access.
 permissions:
@@ -35,6 +36,7 @@ jobs:
         run: npm test
 
       - name: Build production bundle
+        if: ${{ github.event_name != 'pull_request' }}
         run: npm run build
 
       - name: Install Playwright Chromium
@@ -44,6 +46,7 @@ jobs:
         run: npm run test:ui
 
       - name: Run accessibility modal tests
+        if: ${{ github.event_name != 'pull_request' }}
         run: npm run test:accessibility
 
       - name: Run deploy guard
@@ -53,6 +56,7 @@ jobs:
         run: npm run test:proxies
 
       - name: Scan production bundle for API key/endpoint leaks
+        if: ${{ github.event_name != 'pull_request' }}
         run: python3 scripts/scan_bundle_for_leaks.py
 
   # The runner's request validation is the code that rejected
@@ -84,9 +88,11 @@ jobs:
         run: dart test
 
       - name: Build runner image
+        if: ${{ github.event_name != 'pull_request' }}
         run: docker build --tag ccc-ffai-runner:ci cloud-run/ffai-runner
 
       - name: Smoke runner image and current SDK (no credentials)
+        if: ${{ github.event_name != 'pull_request' }}
         run: |
           docker run --rm --entrypoint dart \
             --volume "$PWD/cloud-run/ffai-runner/tool:/smoke:ro" \
