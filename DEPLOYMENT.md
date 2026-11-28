@@ -207,7 +207,7 @@ changes will deploy nothing:
 
 #### Runner CLI/SDK compatibility
 
-The image pins FlutterFlow CLI **0.0.44** and workspace init explicitly selects
+The image pins FlutterFlow CLI **0.0.45** and workspace init explicitly selects
 `--interface sdk`: this runner executes Dart DSL, not the CLI's newer `fft`
 workspace format. CLI and SDK version numbers are independent. The signed SDK
 manifest's `min_router_version`, not the SDK's own version, sets the CLI floor.
